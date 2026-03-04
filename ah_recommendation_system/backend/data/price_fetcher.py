@@ -1,0 +1,297 @@
+# 股价和汇率数据获取
+# ===================
+
+from __future__ import annotations
+
+import re
+import time
+from datetime import datetime, timedelta
+from typing import Dict, Optional
+
+import akshare as ak
+import numpy as np
+import pandas as pd
+import requests
+from loguru import logger
+
+
+_A_SHARE_SUFFIXES = (".SH", ".SZ")
+_H_SHARE_SUFFIX = ".HK"
+
+
+def _normalize_a_share_symbol(symbol: str) -> str:
+	"""Normalize A-share symbol for AKShare.
+
+	AKShare stock_zh_a_hist usually expects a 6-digit code like "600519".
+	We accept: "600519", "sh600519", "sz000001", "600519.SH", "000001.SZ".
+	"""
+	s = (symbol or "").strip()
+	if not s:
+		return ""
+
+	s_up = s.upper()
+	for suf in _A_SHARE_SUFFIXES:
+		if s_up.endswith(suf):
+			s_up = s_up[: -len(suf)]
+			break
+
+	s_up = s_up.strip()
+	if s_up.startswith("SH") or s_up.startswith("SZ"):
+		s_up = s_up[2:]
+
+	m = re.search(r"(\d{6})", s_up)
+	return m.group(1) if m else ""
+
+
+def _normalize_h_share_symbol(symbol: str) -> str:
+	"""Normalize H-share symbol for AKShare.
+
+	AKShare stock_hk_hist expects a numeric HK code like "0939".
+	We accept: "0939", "0939.HK", "hk0939".
+	"""
+	s = (symbol or "").strip()
+	if not s:
+		return ""
+
+	s_up = s.upper()
+	if s_up.endswith(_H_SHARE_SUFFIX):
+		s_up = s_up[: -len(_H_SHARE_SUFFIX)]
+
+	if s_up.startswith("HK"):
+		s_up = s_up[2:]
+
+	m = re.search(r"(\d{1,5})", s_up)
+	if not m:
+		return ""
+
+	code = m.group(1)
+	if len(code) < 4:
+		code = code.zfill(4)
+	return code
+
+
+class PriceFetcher:
+	"""价格数据获取器"""
+
+	def __init__(self):
+		self.cache: Dict[str, tuple[datetime, pd.DataFrame]] = {}
+		self.cache_duration = 300
+		self.use_mock_data = False
+
+		self._fx_cache: Optional[tuple[datetime, float]] = None
+		self._fx_cache_ttl_seconds = 3600
+
+	def _get_mock_price_data(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+		"""生成模拟价格数据"""
+		if start_date and len(start_date) == 8:
+			start = datetime.strptime(start_date, "%Y%m%d")
+		else:
+			start = datetime.now() - timedelta(days=100)
+
+		if end_date and len(end_date) == 8:
+			end = datetime.strptime(end_date, "%Y%m%d")
+		else:
+			end = datetime.now()
+
+		days = (end - start).days
+		if days < 1:
+			days = 100
+			start = end - timedelta(days=100)
+
+		np.random.seed(hash(symbol) % 2**32)
+		base_price = 10 + np.random.random() * 90
+
+		dates = pd.date_range(start=start, periods=days, freq="B")
+		prices = base_price * (1 + np.cumsum(np.random.randn(len(dates)) * 0.02))
+
+		return pd.DataFrame(
+			{
+				"date": dates,
+				"open": prices * (1 + np.random.randn(len(dates)) * 0.01),
+				"close": prices,
+				"high": prices * (1 + np.abs(np.random.randn(len(dates)) * 0.02)),
+				"low": prices * (1 - np.abs(np.random.randn(len(dates)) * 0.02)),
+				"volume": np.random.randint(1000000, 10000000, len(dates)),
+			}
+		)
+
+	def get_a_share_price(self, symbol: str, start_date: str | None = None, end_date: str | None = None) -> pd.DataFrame:
+		"""获取A股历史价格"""
+		if self.use_mock_data:
+			return self._get_mock_price_data(symbol, start_date, end_date)
+
+		normalized = _normalize_a_share_symbol(symbol)
+		if not normalized:
+			logger.warning(f"A-share symbol cannot be parsed: {symbol}")
+			return pd.DataFrame()
+
+		cache_key = f"a_price_{normalized}_{start_date}_{end_date}"
+		cached = self.cache.get(cache_key)
+		if cached:
+			cached_time, cached_data = cached
+			if datetime.now() - cached_time < timedelta(seconds=self.cache_duration):
+				return cached_data
+
+		start = start_date or (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
+		end = end_date or datetime.now().strftime("%Y%m%d")
+
+		last_exc: Optional[Exception] = None
+		for attempt in range(3):
+			try:
+				df = ak.stock_zh_a_hist(
+					symbol=normalized,
+					period="daily",
+					start_date=start,
+					end_date=end,
+					adjust="qfq",
+				)
+				if df is None or df.empty:
+					return pd.DataFrame()
+
+				df = df.rename(
+					columns={
+						"日期": "date",
+						"开盘": "open",
+						"收盘": "close",
+						"最高": "high",
+						"最低": "low",
+						"成交量": "volume",
+						"成交额": "amount",
+						"振幅": "amplitude",
+						"涨跌幅": "change_pct",
+						"涨跌额": "change",
+					}
+				)
+				df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
+				self.cache[cache_key] = (datetime.now(), df)
+				return df
+			except Exception as e:
+				last_exc = e
+				time.sleep(0.6 * (attempt + 1))
+
+		logger.warning(f"Failed to fetch A-share price {symbol} (normalized={normalized}): {last_exc}")
+		return pd.DataFrame()
+
+	def get_h_share_price(self, symbol: str, start_date: str | None = None, end_date: str | None = None) -> pd.DataFrame:
+		"""获取港股历史价格"""
+		if self.use_mock_data:
+			return self._get_mock_price_data(symbol, start_date, end_date)
+
+		normalized = _normalize_h_share_symbol(symbol)
+		if not normalized:
+			logger.warning(f"H-share symbol cannot be parsed: {symbol}")
+			return pd.DataFrame()
+
+		cache_key = f"h_price_{normalized}_{start_date}_{end_date}"
+		cached = self.cache.get(cache_key)
+		if cached:
+			cached_time, cached_data = cached
+			if datetime.now() - cached_time < timedelta(seconds=self.cache_duration):
+				return cached_data
+
+		start = start_date or (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
+		end = end_date or datetime.now().strftime("%Y%m%d")
+
+		last_exc: Optional[Exception] = None
+		for attempt in range(3):
+			try:
+				df = ak.stock_hk_hist(
+					symbol=normalized,
+					period="daily",
+					start_date=start,
+					end_date=end,
+				)
+				if df is None or df.empty:
+					return pd.DataFrame()
+
+				df = df.rename(
+					columns={
+						"日期": "date",
+						"开盘": "open",
+						"收盘": "close",
+						"最高": "high",
+						"最低": "low",
+						"成交量": "volume",
+						"成交额": "amount",
+					}
+				)
+				df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
+				self.cache[cache_key] = (datetime.now(), df)
+				return df
+			except Exception as e:
+				last_exc = e
+				time.sleep(0.6 * (attempt + 1))
+
+		logger.warning(f"Failed to fetch H-share price {symbol} (normalized={normalized}): {last_exc}")
+		return pd.DataFrame()
+
+	def get_ah_premium(self, a_symbol: str, h_symbol: str, start_date: str | None = None, end_date: str | None = None) -> pd.DataFrame:
+		"""计算AH溢价率
+
+		A股: CNY
+		H股: HKD
+		溢价率 = A / (H * HKD_CNY) - 1
+		"""
+		a_df = self.get_a_share_price(a_symbol, start_date, end_date)
+		h_df = self.get_h_share_price(h_symbol, start_date, end_date)
+
+		if a_df.empty or h_df.empty:
+			return pd.DataFrame()
+
+		a_df = a_df[["date", "close"]].rename(columns={"close": "a_close"})
+		h_df = h_df[["date", "close"]].rename(columns={"close": "h_close"})
+
+		merged = pd.merge(a_df, h_df, on="date", how="inner")
+		if merged.empty:
+			return pd.DataFrame()
+
+		hkd_cny = self.get_hkd_cny_exchange_rate()
+		merged["hkd_cny"] = hkd_cny
+		merged["premium_pct"] = (merged["a_close"] / (merged["h_close"] * hkd_cny) - 1) * 100
+
+		return merged[["date", "a_close", "h_close", "hkd_cny", "premium_pct"]]
+
+	def get_hkd_cny_exchange_rate(self) -> float:
+		"""获取港币兑人民币汇率 (cached)."""
+		if self.use_mock_data:
+			return 0.92
+
+		if self._fx_cache:
+			ts, rate = self._fx_cache
+			if datetime.now() - ts < timedelta(seconds=self._fx_cache_ttl_seconds):
+				return rate
+
+		try:
+			# Use a free endpoint that provides base HKD.
+			url = "https://api.exchangerate-api.com/v4/latest/HKD"
+			response = requests.get(url, timeout=10)
+			if response.status_code == 200:
+				data = response.json()
+				rate = float(data.get("rates", {}).get("CNY", 0.92))
+				self._fx_cache = (datetime.now(), rate)
+				return rate
+			return 0.92
+		except Exception as e:
+			logger.warning(f"Failed to fetch FX rate HKD->CNY: {e}")
+			return 0.92
+
+	def get_usd_cnh_exchange_rate(self) -> float:
+		"""DEPRECATED: kept for compatibility. Use get_hkd_cny_exchange_rate."""
+		return self.get_hkd_cny_exchange_rate()
+
+	def clear_cache(self) -> None:
+		"""清空缓存"""
+		self.cache.clear()
+		self._fx_cache = None
+
+	def enable_mock_data(self) -> None:
+		"""启用模拟数据"""
+		self.use_mock_data = True
+
+
+# 全局实例
+price_fetcher = PriceFetcher()
+
+
+def get_price_fetcher() -> PriceFetcher:
+	return price_fetcher

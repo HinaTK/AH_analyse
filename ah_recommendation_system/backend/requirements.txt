@@ -1,0 +1,36 @@
+# AH股推荐系统后端依赖
+# ====================
+
+# Web框架
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+
+# 数据获取
+akshare>=1.11.0
+pandas>=2.1.0
+numpy>=1.26.0
+
+# 数据库
+sqlalchemy>=2.0.0
+
+# ML/因子分析
+scikit-learn>=1.4.0
+xgboost>=2.0.0
+
+# 定时任务
+apscheduler>=3.10.0
+
+# 导出功能
+openpyxl>=3.1.0
+xlsxwriter>=3.1.0
+reportlab>=4.0.0
+
+# HTTP客户端
+httpx>=0.25.0
+
+# 日志
+loguru>=0.7.0
+
+# 汇率数据
+forex-python>=1.6

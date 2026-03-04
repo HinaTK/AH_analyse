@@ -1,0 +1,794 @@
+{
+  "generated_at": "2026-02-13 16:07:24",
+  "pair_trading": {
+    "strategy": "AH溢价配对交易",
+    "description": "基于AH溢价率历史均值回归的配对交易策略",
+    "generated_at": "2026-02-13 16:07:23",
+    "parameters": {
+      "lookback_period": 20,
+      "upper_threshold": 1.15,
+      "lower_threshold": 0.85
+    },
+    "signals": {
+      "buy_ah": [
+        {
+          "a_code": "600030.SH",
+          "h_code": "06030.HK",
+          "name": "中信证券",
+          "current_premium": -84.13,
+          "premium_ma": -80.76,
+          "premium_std": 1.43,
+          "premium_max": -79.19,
+          "premium_min": -84.13,
+          "signal": "buy_ah",
+          "confidence": 0.78,
+          "position_size": 0.84,
+          "zscore": -2.35,
+          "fx_rate": 0.92,
+          "estimated_round_trip_cost_pct": 0.535,
+          "edge_vs_mean_pct": 3.369,
+          "tradeable": true,
+          "block_reason": "ok",
+          "data_quality": {
+            "a": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            },
+            "h": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            }
+          },
+          "last_updated": "2026-02-13 16:07:23"
+        },
+        {
+          "a_code": "601939.SH",
+          "h_code": "1988.HK",
+          "name": "建设银行",
+          "current_premium": -27.14,
+          "premium_ma": -14.4,
+          "premium_std": 9.69,
+          "premium_max": -0.26,
+          "premium_min": -27.14,
+          "signal": "buy_ah",
+          "confidence": 0.44,
+          "position_size": 0.55,
+          "zscore": -1.31,
+          "fx_rate": 0.92,
+          "estimated_round_trip_cost_pct": 0.535,
+          "edge_vs_mean_pct": 12.737,
+          "tradeable": true,
+          "block_reason": "ok",
+          "data_quality": {
+            "a": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            },
+            "h": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            }
+          },
+          "last_updated": "2026-02-13 16:07:23"
+        },
+        {
+          "a_code": "601857.SH",
+          "h_code": "0857.HK",
+          "name": "中国石油",
+          "current_premium": -64.63,
+          "premium_ma": -62.8,
+          "premium_std": 1.42,
+          "premium_max": -60.03,
+          "premium_min": -64.95,
+          "signal": "buy_ah",
+          "confidence": 0.43,
+          "position_size": 0.44,
+          "zscore": -1.28,
+          "fx_rate": 0.92,
+          "estimated_round_trip_cost_pct": 0.535,
+          "edge_vs_mean_pct": 1.821,
+          "tradeable": true,
+          "block_reason": "ok",
+          "data_quality": {
+            "a": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            },
+            "h": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            }
+          },
+          "last_updated": "2026-02-13 16:07:23"
+        },
+        {
+          "a_code": "601601.SH",
+          "h_code": "2600.HK",
+          "name": "中国太保",
+          "current_premium": -18.79,
+          "premium_ma": -16.26,
+          "premium_std": 3.74,
+          "premium_max": -8.84,
+          "premium_min": -21.84,
+          "signal": "buy_ah",
+          "confidence": 0.23,
+          "position_size": 0.24,
+          "zscore": -0.68,
+          "fx_rate": 0.92,
+          "estimated_round_trip_cost_pct": 0.535,
+          "edge_vs_mean_pct": 2.532,
+          "tradeable": true,
+          "block_reason": "ok",
+          "data_quality": {
+            "a": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            },
+            "h": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            }
+          },
+          "last_updated": "2026-02-13 16:07:23"
+        },
+        {
+          "a_code": "600362.SH",
+          "h_code": "0358.HK",
+          "name": "江西铜业",
+          "current_premium": -63.95,
+          "premium_ma": -62.24,
+          "premium_std": 2.47,
+          "premium_max": -58.19,
+          "premium_min": -65.54,
+          "signal": "buy_ah",
+          "confidence": 0.23,
+          "position_size": 0.24,
+          "zscore": -0.69,
+          "fx_rate": 0.92,
+          "estimated_round_trip_cost_pct": 0.535,
+          "edge_vs_mean_pct": 1.707,
+          "tradeable": true,
+          "block_reason": "ok",
+          "data_quality": {
+            "a": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            },
+            "h": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            }
+          },
+          "last_updated": "2026-02-13 16:07:23"
+        },
+        {
+          "a_code": "601398.SH",
+          "h_code": "1398.HK",
+          "name": "工商银行",
+          "current_premium": -17.21,
+          "premium_ma": -15.58,
+          "premium_std": 2.9,
+          "premium_max": -9.16,
+          "premium_min": -20.08,
+          "signal": "buy_ah",
+          "confidence": 0.19,
+          "position_size": 0.19,
+          "zscore": -0.56,
+          "fx_rate": 0.92,
+          "estimated_round_trip_cost_pct": 0.535,
+          "edge_vs_mean_pct": 1.633,
+          "tradeable": true,
+          "block_reason": "ok",
+          "data_quality": {
+            "a": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            },
+            "h": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            }
+          },
+          "last_updated": "2026-02-13 16:07:23"
+        },
+        {
+          "a_code": "002594.SZ",
+          "h_code": "1211.HK",
+          "name": "比亚迪",
+          "current_premium": -62.89,
+          "premium_ma": -63.77,
+          "premium_std": 2.33,
+          "premium_max": -60.25,
+          "premium_min": -67.95,
+          "signal": "buy_ah",
+          "confidence": 0.13,
+          "position_size": 0.13,
+          "zscore": 0.38,
+          "fx_rate": 0.92,
+          "estimated_round_trip_cost_pct": 0.535,
+          "edge_vs_mean_pct": 0.88,
+          "tradeable": true,
+          "block_reason": "ok",
+          "data_quality": {
+            "a": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            },
+            "h": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            }
+          },
+          "last_updated": "2026-02-13 16:07:23"
+        }
+      ],
+      "sell_ah": [
+        {
+          "a_code": "600015.SH",
+          "h_code": "0966.HK",
+          "name": "华夏银行",
+          "current_premium": 5.53,
+          "premium_ma": 14.43,
+          "premium_std": 4.4,
+          "premium_max": 20.53,
+          "premium_min": 5.53,
+          "signal": "sell_ah",
+          "confidence": 0.67,
+          "position_size": 0.79,
+          "zscore": -2.02,
+          "fx_rate": 0.92,
+          "estimated_round_trip_cost_pct": 0.535,
+          "edge_vs_mean_pct": 8.894,
+          "tradeable": true,
+          "block_reason": "ok",
+          "data_quality": {
+            "a": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            },
+            "h": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            }
+          },
+          "last_updated": "2026-02-13 16:07:23"
+        },
+        {
+          "a_code": "601336.SH",
+          "h_code": "2601.HK",
+          "name": "新华保险",
+          "current_premium": 36.91,
+          "premium_ma": 63.94,
+          "premium_std": 14.85,
+          "premium_max": 82.96,
+          "premium_min": 36.91,
+          "signal": "sell_ah",
+          "confidence": 0.61,
+          "position_size": 0.94,
+          "zscore": -1.82,
+          "fx_rate": 0.92,
+          "estimated_round_trip_cost_pct": 0.535,
+          "edge_vs_mean_pct": 27.035,
+          "tradeable": true,
+          "block_reason": "ok",
+          "data_quality": {
+            "a": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            },
+            "h": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            }
+          },
+          "last_updated": "2026-02-13 16:07:23"
+        },
+        {
+          "a_code": "600028.SH",
+          "h_code": "0386.HK",
+          "name": "中国石化",
+          "current_premium": 40.31,
+          "premium_ma": 54.9,
+          "premium_std": 9.05,
+          "premium_max": 71.34,
+          "premium_min": 40.31,
+          "signal": "sell_ah",
+          "confidence": 0.54,
+          "position_size": 0.69,
+          "zscore": -1.61,
+          "fx_rate": 0.92,
+          "estimated_round_trip_cost_pct": 0.535,
+          "edge_vs_mean_pct": 14.588,
+          "tradeable": true,
+          "block_reason": "ok",
+          "data_quality": {
+            "a": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            },
+            "h": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            }
+          },
+          "last_updated": "2026-02-13 16:07:23"
+        },
+        {
+          "a_code": "601988.SH",
+          "h_code": "0939.HK",
+          "name": "中国银行",
+          "current_premium": 113.16,
+          "premium_ma": 126.67,
+          "premium_std": 9.92,
+          "premium_max": 147.31,
+          "premium_min": 112.81,
+          "signal": "sell_ah",
+          "confidence": 0.45,
+          "position_size": 0.58,
+          "zscore": -1.36,
+          "fx_rate": 0.92,
+          "estimated_round_trip_cost_pct": 0.535,
+          "edge_vs_mean_pct": 13.517,
+          "tradeable": true,
+          "block_reason": "ok",
+          "data_quality": {
+            "a": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            },
+            "h": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            }
+          },
+          "last_updated": "2026-02-13 16:07:23"
+        },
+        {
+          "a_code": "600547.SH",
+          "h_code": "1788.HK",
+          "name": "山东黄金",
+          "current_premium": 79.23,
+          "premium_ma": 80.91,
+          "premium_std": 5.58,
+          "premium_max": 90.55,
+          "premium_min": 71.71,
+          "signal": "sell_ah",
+          "confidence": 0.1,
+          "position_size": 0.1,
+          "zscore": -0.3,
+          "fx_rate": 0.92,
+          "estimated_round_trip_cost_pct": 0.535,
+          "edge_vs_mean_pct": 1.682,
+          "tradeable": true,
+          "block_reason": "ok",
+          "data_quality": {
+            "a": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            },
+            "h": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            }
+          },
+          "last_updated": "2026-02-13 16:07:23"
+        },
+        {
+          "a_code": "601288.SH",
+          "h_code": "1288.HK",
+          "name": "农业银行",
+          "current_premium": 51.46,
+          "premium_ma": 49.46,
+          "premium_std": 8.05,
+          "premium_max": 64.89,
+          "premium_min": 33.59,
+          "signal": "sell_ah",
+          "confidence": 0.08,
+          "position_size": 0.09,
+          "zscore": 0.25,
+          "fx_rate": 0.92,
+          "estimated_round_trip_cost_pct": 0.535,
+          "edge_vs_mean_pct": 1.993,
+          "tradeable": true,
+          "block_reason": "ok",
+          "data_quality": {
+            "a": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            },
+            "h": {
+              "ok": true,
+              "reason": "ok",
+              "rows": 40,
+              "latest_date": "2026-02-27"
+            }
+          },
+          "last_updated": "2026-02-13 16:07:23"
+        }
+      ],
+      "hold": []
+    },
+    "summary": {
+      "total_analyzed": 13,
+      "buy_signals": 7,
+      "sell_signals": 6,
+      "hold_signals": 0,
+      "top_buy": [
+        "中信证券",
+        "建设银行",
+        "中国石油"
+      ],
+      "top_sell": [
+        "华夏银行",
+        "新华保险",
+        "中国石化"
+      ]
+    }
+  },
+  "multi_factor": {
+    "strategy": "多因子Alpha模型",
+    "description": "结合估值、动量、流动性和AH溢价的综合因子选股策略",
+    "generated_at": "2026-02-13 16:07:24",
+    "parameters": {
+      "factor_weights": {
+        "valuation": 0.25,
+        "momentum": 0.25,
+        "liquidity": 0.2,
+        "ah_premium": 0.3
+      },
+      "top_n": 10
+    },
+    "recommendations": [
+      {
+        "a_code": "600547.SH",
+        "h_code": "1788.HK",
+        "name": "山东黄金",
+        "current_price": 106.08174080173798,
+        "total_score": 0.752,
+        "factor_scores": {
+          "valuation": 0.628,
+          "momentum": 0.855,
+          "liquidity": 0.57,
+          "ah_premium": 0.892
+        },
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "601288.SH",
+        "h_code": "1288.HK",
+        "name": "农业银行",
+        "current_price": 76.36238087882205,
+        "total_score": 0.697,
+        "factor_scores": {
+          "valuation": 0.628,
+          "momentum": 0.436,
+          "liquidity": 0.857,
+          "ah_premium": 0.865
+        },
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "601857.SH",
+        "h_code": "0857.HK",
+        "name": "中国石油",
+        "current_price": 36.92704092995045,
+        "total_score": 0.685,
+        "factor_scores": {
+          "valuation": 0.628,
+          "momentum": 0.638,
+          "liquidity": 0.94,
+          "ah_premium": 0.602
+        },
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "601601.SH",
+        "h_code": "2600.HK",
+        "name": "中国太保",
+        "current_price": 62.56474650343706,
+        "total_score": 0.683,
+        "factor_scores": {
+          "valuation": 0.628,
+          "momentum": 0.413,
+          "liquidity": 0.714,
+          "ah_premium": 0.934
+        },
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "600030.SH",
+        "h_code": "06030.HK",
+        "name": "中信证券",
+        "current_price": 10.743432081602862,
+        "total_score": 0.674,
+        "factor_scores": {
+          "valuation": 0.628,
+          "momentum": 0.508,
+          "liquidity": 0.8,
+          "ah_premium": 0.766
+        },
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "601336.SH",
+        "h_code": "2601.HK",
+        "name": "新华保险",
+        "current_price": 79.22807283660119,
+        "total_score": 0.652,
+        "factor_scores": {
+          "valuation": 0.628,
+          "momentum": 0.702,
+          "liquidity": 0.714,
+          "ah_premium": 0.589
+        },
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "002594.SZ",
+        "h_code": "1211.HK",
+        "name": "比亚迪",
+        "current_price": 24.951331956331828,
+        "total_score": 0.649,
+        "factor_scores": {
+          "valuation": 0.628,
+          "momentum": 0.428,
+          "liquidity": 0.472,
+          "ah_premium": 0.969
+        },
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "600362.SH",
+        "h_code": "0358.HK",
+        "name": "江西铜业",
+        "current_price": 38.684543740979606,
+        "total_score": 0.606,
+        "factor_scores": {
+          "valuation": 0.628,
+          "momentum": 0.373,
+          "liquidity": 0.695,
+          "ah_premium": 0.722
+        },
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "600028.SH",
+        "h_code": "0386.HK",
+        "name": "中国石化",
+        "current_price": 27.057007408283,
+        "total_score": 0.604,
+        "factor_scores": {
+          "valuation": 0.628,
+          "momentum": 0.455,
+          "liquidity": 0.825,
+          "ah_premium": 0.561
+        },
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "600015.SH",
+        "h_code": "0966.HK",
+        "name": "华夏银行",
+        "current_price": 75.31031544382466,
+        "total_score": 0.576,
+        "factor_scores": {
+          "valuation": 0.628,
+          "momentum": 0.687,
+          "liquidity": 0.392,
+          "ah_premium": 0.564
+        },
+        "last_updated": "2026-02-13 16:07:24"
+      }
+    ],
+    "summary": {
+      "total_analyzed": 13,
+      "top_stocks": [
+        "山东黄金",
+        "农业银行",
+        "中国石油",
+        "中国太保",
+        "中信证券",
+        "新华保险",
+        "比亚迪",
+        "江西铜业",
+        "中国石化",
+        "华夏银行"
+      ],
+      "avg_score": 0.604
+    }
+  },
+  "ml_prediction": {
+    "strategy": "机器学习预测",
+    "description": "基于机器学习预测AH溢价率未来走势的策略",
+    "model_type": "xgboost",
+    "generated_at": "2026-02-13 16:07:24",
+    "predictions": [
+      {
+        "a_code": "601988.SH",
+        "h_code": "0939.HK",
+        "name": "中国银行",
+        "current_premium": 92.68,
+        "predicted_direction": "premium_decrease",
+        "predicted_change": -10.28,
+        "confidence": 0.5,
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "601398.SH",
+        "h_code": "1398.HK",
+        "name": "工商银行",
+        "current_premium": -20.37,
+        "predicted_direction": "premium_decrease",
+        "predicted_change": -7.86,
+        "confidence": 0.5,
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "601939.SH",
+        "h_code": "1988.HK",
+        "name": "建设银行",
+        "current_premium": -45.41,
+        "predicted_direction": "premium_decrease",
+        "predicted_change": -3.37,
+        "confidence": 0.5,
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "601288.SH",
+        "h_code": "1288.HK",
+        "name": "农业银行",
+        "current_premium": 53.57,
+        "predicted_direction": "premium_increase",
+        "predicted_change": 10.53,
+        "confidence": 0.5,
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "601336.SH",
+        "h_code": "2601.HK",
+        "name": "新华保险",
+        "current_premium": 24.36,
+        "predicted_direction": "premium_decrease",
+        "predicted_change": -6.1,
+        "confidence": 0.5,
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "601601.SH",
+        "h_code": "2600.HK",
+        "name": "中国太保",
+        "current_premium": -19.71,
+        "predicted_direction": "premium_decrease",
+        "predicted_change": -2.3,
+        "confidence": 0.5,
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "600030.SH",
+        "h_code": "06030.HK",
+        "name": "中信证券",
+        "current_premium": -84.48,
+        "predicted_direction": "stable",
+        "predicted_change": 0.46,
+        "confidence": 0.5,
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "600015.SH",
+        "h_code": "0966.HK",
+        "name": "华夏银行",
+        "current_premium": 20.99,
+        "predicted_direction": "premium_increase",
+        "predicted_change": 8.18,
+        "confidence": 0.5,
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "002594.SZ",
+        "h_code": "1211.HK",
+        "name": "比亚迪",
+        "current_premium": -63.78,
+        "predicted_direction": "stable",
+        "predicted_change": -1.96,
+        "confidence": 0.5,
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "600547.SH",
+        "h_code": "1788.HK",
+        "name": "山东黄金",
+        "current_premium": 87.35,
+        "predicted_direction": "stable",
+        "predicted_change": -1.14,
+        "confidence": 0.5,
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "600362.SH",
+        "h_code": "0358.HK",
+        "name": "江西铜业",
+        "current_premium": -66.83,
+        "predicted_direction": "stable",
+        "predicted_change": -1.86,
+        "confidence": 0.5,
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "600028.SH",
+        "h_code": "0386.HK",
+        "name": "中国石化",
+        "current_premium": 29.44,
+        "predicted_direction": "premium_decrease",
+        "predicted_change": -14.04,
+        "confidence": 0.5,
+        "last_updated": "2026-02-13 16:07:24"
+      },
+      {
+        "a_code": "601857.SH",
+        "h_code": "0857.HK",
+        "name": "中国石油",
+        "current_premium": -57.47,
+        "predicted_direction": "premium_increase",
+        "predicted_change": 3.75,
+        "confidence": 0.5,
+        "last_updated": "2026-02-13 16:07:24"
+      }
+    ],
+    "summary": {
+      "total_analyzed": 13,
+      "premium_increase": 3,
+      "premium_decrease": 6,
+      "stable": 4
+    }
+  }
+}
