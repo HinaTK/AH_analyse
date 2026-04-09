@@ -274,6 +274,8 @@
 				<div v-if="currentTab === 'multi_factor'"><multi-factor :refresh-key="refreshKey" @toast="showToast"></multi-factor></div>
 				<div v-if="currentTab === 'ml_prediction'"><ml-prediction :refresh-key="refreshKey" @toast="showToast"></ml-prediction></div>
 				<div v-if="currentTab === 'etf_sector'"><etf-sector :refresh-key="refreshKey" @toast="showToast"></etf-sector></div>
+				<div v-if="currentTab === 'watchlist'"><watchlist-tab :refresh-key="refreshKey" :selected-code="selectedResearchCode" @toast="showToast" @open-research="openResearch"></watchlist-tab></div>
+				<div v-if="currentTab === 'research'"><research-tab :refresh-key="refreshKey" :selected-code="selectedResearchCode" @toast="showToast" @select-code="setResearchCode"></research-tab></div>
 			</div>
 		</main>
 
@@ -380,6 +382,884 @@
 				}
 			} catch (e) {
 				emitToast({ title: '导出失败', message: e && e.message ? e.message : String(e) })
+			}
+		}
+
+		function normalizeCode(value) {
+			return String(value || '').trim().toUpperCase()
+		}
+
+		function getErrorMessage(error) {
+			if (error && error.response && error.response.data && error.response.data.detail) {
+				return error.response.data.detail
+			}
+			return error && error.message ? error.message : String(error)
+		}
+
+		function formatFixed(value, digits = 2) {
+			const n = _toNum(value)
+			return n === null ? '-' : n.toFixed(digits)
+		}
+
+		function formatPercent(value, digits = 2) {
+			const n = _toNum(value)
+			return n === null ? '-' : `${n.toFixed(digits)}%`
+		}
+
+		function formatDisplayValue(value) {
+			if (value === null || value === undefined || value === '') return '-'
+			if (typeof value === 'number') {
+				if (!Number.isFinite(value)) return '-'
+				return Math.abs(value) >= 100 ? value.toFixed(2) : value.toFixed(4).replace(/\.?0+$/, '')
+			}
+			if (typeof value === 'boolean') return value ? 'true' : 'false'
+			if (typeof value === 'object') return JSON.stringify(value)
+			return String(value)
+		}
+
+		function prettyJson(value) {
+			return JSON.stringify(value === undefined ? null : value, null, 2)
+		}
+
+		function toChartNumber(value) {
+			const n = _toNum(value)
+			return n === null ? null : n
+		}
+
+		function compactTableRows(rows, maxRows) {
+			return Array.isArray(rows) ? rows.slice(0, maxRows) : []
+		}
+
+		function buildLabeledSummary(primary, secondary, tertiary, emptyHint) {
+			return {
+				primary: primary || '暂无结构化结论',
+				secondary: secondary || '请展开原始输出查看完整细节。',
+				tertiary: tertiary || emptyHint,
+			}
+		}
+
+		const WATCHLIST_PINNED_KEY = 'ah-watchlist-pinned'
+		const RECENT_RESEARCH_KEY = 'ah-research-recent'
+
+		function readStoredCodes(key) {
+			try {
+				const raw = localStorage.getItem(key)
+				if (!raw) return []
+				const items = JSON.parse(raw)
+				return Array.isArray(items) ? items.map(normalizeCode).filter(Boolean) : []
+			} catch (_e) {
+				return []
+			}
+		}
+
+		function writeStoredCodes(key, items) {
+			try {
+				localStorage.setItem(key, JSON.stringify((items || []).map(normalizeCode).filter(Boolean)))
+			} catch (_e) {
+				// ignore storage failures
+			}
+		}
+
+		function humanizeDirection(value) {
+			const v = String(value || '').trim().toLowerCase()
+			if (v === 'sell_ah') return '做空A / 做多H'
+			if (v === 'buy_ah') return '做多A / 做空H'
+			if (v === 'hold') return '暂时观望'
+			if (v === 'premium_increase') return '溢价可能继续扩大'
+			if (v === 'premium_decrease') return '溢价可能回落'
+			if (v === 'stable' || v === 'flat') return '预计大体稳定'
+			if (v === 'unknown') return '方向暂不明确'
+			return formatDisplayValue(value)
+		}
+
+		function humanizeTradeDirection(value) {
+			const v = String(value || '').trim().toLowerCase()
+			if (v === 'long_a_short_h' || v === 'buy_ah') return '做多A / 做空H'
+			if (v === 'short_a_long_h' || v === 'sell_ah') return '做空A / 做多H'
+			return formatDisplayValue(value)
+		}
+
+		function humanizeMetricKey(key) {
+			const map = {
+				total_return_pct: '总收益率',
+				annual_return_pct: '年化收益率',
+				max_drawdown_pct: '最大回撤',
+				sharpe_ratio: '夏普比率',
+				win_rate: '胜率',
+				win_rate_pct: '胜率',
+				trades: '交易次数',
+				trade_count: '交易次数',
+				avg_trade_return_pct: '单笔平均收益',
+				volatility_pct: '波动率',
+			}
+			return map[key] || '其他指标'
+		}
+
+		function humanizeBlockReason(value) {
+			const v = String(value || '').trim().toLowerCase()
+			if (v === 'edge_lt_cost') return '价差不足覆盖成本'
+			if (v === 'data_quality') return '数据质量不足'
+			if (v === 'ok') return '条件满足'
+			return '暂不满足执行条件'
+		}
+
+		function humanizeBacktestMode(value) {
+			const v = String(value || '').trim().toLowerCase()
+			if (v === 'prices') return '价格驱动'
+			return v ? '自定义模式' : '-'
+		}
+
+		const WatchlistTab = {
+			emits: ['toast', 'open-research'],
+			props: {
+				refreshKey: { type: Number, default: 0 },
+				selectedCode: { type: String, default: '' },
+			},
+			template: `
+				<section class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+					<div class="panel p-6 lg:col-span-1">
+						<div class="flex items-start justify-between gap-3">
+							<div>
+								<div class="text-xs uppercase tracking-widest" style="color: var(--muted2)">观察列表</div>
+								<div class="text-xl font-bold mt-1">自选列表</div>
+								<div class="text-sm mt-2" style="color: var(--muted)">输入 A 股代码后加入自选，并从列表直接跳转到研究页。</div>
+							</div>
+							<span class="badge">本地自选列表</span>
+						</div>
+
+						<label class="block mt-6">
+							<div class="text-xs mb-1" style="color: var(--muted2)">A 股代码</div>
+							<input class="input mono" placeholder="601398.SH" v-model="inputCode" @keyup.enter="addSymbol" />
+							<div class="text-xs mt-2" style="color: var(--muted2)">支持 601398.SH 或 601398 形式，回车即可加入自选。</div>
+						</label>
+
+						<div class="mt-4 flex flex-wrap gap-2">
+							<span class="text-xs" style="color: var(--muted2)">重点示例：</span>
+							<button class="btn" @click="useExample('601398.SH')">601398.SH</button>
+							<button class="btn" @click="useExample('601988.SH')">601988.SH</button>
+						</div>
+
+						<div class="mt-4 flex flex-wrap gap-2">
+							<button class="btn btn-primary" @click="addSymbol" :disabled="submitting">{{ submitting ? '添加中...' : '添加' }}</button>
+							<button class="btn" @click="fetchItems" :disabled="loading">{{ loading ? '刷新中...' : '刷新列表' }}</button>
+						</div>
+
+						<div class="mt-6 grid grid-cols-2 gap-3">
+							<div class="kpi">
+								<div class="v" style="color: var(--accent2)">{{ items.length }}</div>
+								<div class="l">自选数量</div>
+							</div>
+							<div class="kpi">
+								<div class="v mono text-base">{{ selectedCode || '-' }}</div>
+								<div class="l">当前研究代码</div>
+							</div>
+						</div>
+					</div>
+
+					<div class="panel p-6 lg:col-span-2">
+						<div class="flex items-center justify-between gap-3">
+							<div>
+								<div class="text-xs uppercase tracking-widest" style="color: var(--muted2)">列表</div>
+								<div class="text-lg font-bold mt-1">已加入的股票</div>
+							</div>
+							<span class="badge">可删除，也可一键进入研究页</span>
+						</div>
+
+						<div class="mt-4 overflow-x-auto">
+							<table class="table">
+								<thead>
+									<tr>
+										<th>股票</th>
+										<th>代码</th>
+										<th>操作</th>
+									</tr>
+								</thead>
+								<tbody>
+									<tr v-for="item in items" :key="item.a_code" class="row">
+										<td>
+											<div class="flex flex-wrap items-center gap-2">
+												<button class="btn" @click="togglePinned(item.a_code)">{{ isPinned(item.a_code) ? '已置顶' : '置顶' }}</button>
+												<div class="font-semibold">{{ item.name || item.a_code }}</div>
+												<span v-if="selectedCode === item.a_code" class="badge">当前研究</span>
+											</div>
+											<div class="mono text-xs mt-2" style="color: var(--muted2)">{{ item.a_code }} / {{ item.h_code || '-' }}</div>
+										</td>
+										<td class="mono">{{ item.a_code }}</td>
+										<td>
+											<div class="flex flex-col sm:flex-row gap-2">
+												<button class="btn btn-blue" @click="openResearch(item.a_code)">研究</button>
+												<button class="btn" @click="removeSymbol(item.a_code)" :disabled="!!removingCodes[item.a_code]">{{ removingCodes[item.a_code] ? '删除中...' : '删除' }}</button>
+											</div>
+										</td>
+									</tr>
+									<tr v-if="loading">
+										<td colspan="3" style="color: var(--muted)">加载中...</td>
+									</tr>
+									<tr v-if="!loading && items.length === 0">
+										<td colspan="3" style="color: var(--muted)">还没有自选股。你可以先添加 601398.SH 这类 A 股代码，加入后即可直接进入研究页。</td>
+									</tr>
+								</tbody>
+							</table>
+						</div>
+					</div>
+				</section>
+			`,
+			data() {
+				return {
+					items: [],
+					inputCode: '',
+					loading: false,
+					submitting: false,
+					removingCodes: {},
+					pinnedCodes: [],
+					listEpoch: 0,
+					listRequestToken: 0,
+					addRequestToken: 0,
+				}
+			},
+			mounted() {
+				this.pinnedCodes = readStoredCodes(WATCHLIST_PINNED_KEY)
+				this.fetchItems()
+			},
+			watch: {
+				refreshKey() {
+					this.fetchItems()
+				}
+			},
+			methods: {
+				emitToast(payload) { this.$emit('toast', payload) },
+				isPinned(code) {
+					return this.pinnedCodes.includes(normalizeCode(code))
+				},
+				applyPinnedSort() {
+					const pinned = new Set(this.pinnedCodes)
+					this.items = [...this.items].sort((a, b) => {
+						const ap = pinned.has(normalizeCode(a && a.a_code)) ? 1 : 0
+						const bp = pinned.has(normalizeCode(b && b.a_code)) ? 1 : 0
+						if (ap !== bp) return bp - ap
+						return String(a && a.a_code || '').localeCompare(String(b && b.a_code || ''))
+					})
+				},
+				togglePinned(code) {
+					const normalized = normalizeCode(code)
+					if (!normalized) return
+					this.pinnedCodes = this.pinnedCodes.includes(normalized)
+						? this.pinnedCodes.filter(item => item !== normalized)
+						: [normalized, ...this.pinnedCodes]
+					writeStoredCodes(WATCHLIST_PINNED_KEY, this.pinnedCodes)
+					this.applyPinnedSort()
+				},
+				useExample(code) {
+					this.inputCode = normalizeCode(code)
+				},
+				async fetchItems() {
+					const token = ++this.listRequestToken
+					const epoch = this.listEpoch
+					this.loading = true
+					try {
+						const res = await api.get('/api/v1/watchlist')
+						if (token !== this.listRequestToken) return
+						if (epoch !== this.listEpoch) return
+						this.items = Array.isArray(res.data && res.data.items) ? res.data.items : []
+						this.applyPinnedSort()
+					} catch (e) {
+						if (token !== this.listRequestToken) return
+						if (epoch !== this.listEpoch) return
+						this.emitToast({ title: '自选列表获取失败', message: getErrorMessage(e) })
+					} finally {
+						if (token !== this.listRequestToken) return
+						this.loading = false
+					}
+				},
+				async addSymbol() {
+					const code = normalizeCode(this.inputCode)
+					if (!code) {
+						this.emitToast({ title: '请输入代码', message: '请先输入有效的 A 股代码。' })
+						return
+					}
+					const token = ++this.addRequestToken
+					this.submitting = true
+					try {
+						await api.post(`/api/v1/watchlist/${encodeURIComponent(code)}`)
+						if (token !== this.addRequestToken) return
+						this.listEpoch += 1
+						this.inputCode = ''
+						this.emitToast({ title: '已加入自选', message: `${code} 已加入自选。` })
+						await this.fetchItems()
+					} catch (e) {
+						if (token !== this.addRequestToken) return
+						this.emitToast({ title: '添加失败', message: getErrorMessage(e) })
+					} finally {
+						if (token !== this.addRequestToken) return
+						this.submitting = false
+					}
+				},
+				async removeSymbol(aCode) {
+					if (this.removingCodes[aCode]) return
+					this.removingCodes = { ...this.removingCodes, [aCode]: true }
+					try {
+						await api.delete(`/api/v1/watchlist/${encodeURIComponent(aCode)}`)
+						this.listEpoch += 1
+						this.emitToast({ title: '已删除', message: `${aCode} 已从自选移除。` })
+						await this.fetchItems()
+					} catch (e) {
+						this.emitToast({ title: '删除失败', message: getErrorMessage(e) })
+					} finally {
+						const next = { ...this.removingCodes }
+						delete next[aCode]
+						this.removingCodes = next
+					}
+				},
+				openResearch(aCode) {
+					this.$emit('open-research', normalizeCode(aCode))
+				}
+			}
+		}
+
+		const ResearchTab = {
+			emits: ['toast', 'select-code'],
+			props: {
+				refreshKey: { type: Number, default: 0 },
+				selectedCode: { type: String, default: '' },
+			},
+			template: `
+				<section class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+					<div class="panel p-6 lg:col-span-1">
+						<div class="flex items-start justify-between gap-3">
+							<div>
+								<div class="text-xs uppercase tracking-widest" style="color: var(--muted2)">个股研究</div>
+								<div class="text-xl font-bold mt-1">个股研究</div>
+								<div class="text-sm mt-2" style="color: var(--muted)">根据选中的 A 股代码拉取研究详情和配对回测结果。</div>
+							</div>
+							<span class="badge">研究数据已连接</span>
+						</div>
+
+						<label class="block mt-6">
+							<div class="text-xs mb-1" style="color: var(--muted2)">A 股代码</div>
+							<input class="input mono" placeholder="601398.SH" v-model="codeInput" @keyup.enter="loadFromInput" />
+							<div class="text-xs mt-2" style="color: var(--muted2)">可以从自选页点击“研究”，也可以直接手动输入代码并加载。</div>
+						</label>
+
+						<div class="mt-4 flex flex-wrap gap-2">
+							<button class="btn btn-primary" @click="loadFromInput" :disabled="loading">{{ loading ? '加载中...' : '加载研究' }}</button>
+							<button class="btn" @click="fetchAll(activeCode)" :disabled="loading || !activeCode">刷新</button>
+						</div>
+
+						<div class="mt-4 flex flex-wrap gap-2" v-if="!activeCode">
+							<span class="text-xs" style="color: var(--muted2)">试试示例：</span>
+							<button class="btn" @click="useExample('601398.SH')">601398.SH</button>
+						</div>
+
+						<div class="mt-4" v-if="recentCodes.length">
+							<div class="text-xs mb-2" style="color: var(--muted2)">最近查看</div>
+							<div class="flex flex-wrap gap-2">
+								<button v-for="code in recentCodes" :key="code" class="btn" @click="loadRecent(code)">{{ code }}</button>
+							</div>
+						</div>
+
+						<div class="mt-6 grid grid-cols-2 gap-3">
+							<div class="kpi col-span-2">
+								<div class="l">股票</div>
+								<div class="v text-lg">{{ stock.name || '-' }}</div>
+								<div class="mono text-xs mt-2" style="color: var(--muted2)">{{ stock.a_code || '-' }} / {{ stock.h_code || '-' }}</div>
+							</div>
+							<div class="kpi">
+								<div class="v" style="color: var(--accent)">{{ latestPremiumLabel }}</div>
+								<div class="l">最新溢价</div>
+							</div>
+							<div class="kpi">
+								<div class="v">{{ premiumCountLabel }}</div>
+								<div class="l">溢价样本数</div>
+							</div>
+						</div>
+
+						<div v-if="detailError || backtestError" class="mt-4 rounded-xl p-3 text-sm" style="color: var(--warn); border: 1px solid rgba(250,204,21,0.22); background: rgba(250,204,21,0.08)">{{ [detailError, backtestError].filter(Boolean).join('；') }}</div>
+						<div v-if="!activeCode" class="mt-4 text-sm" style="color: var(--muted)">请在自选列表中点击“研究”，或直接输入 A 股代码。</div>
+						<div v-if="activeCode && !loading && !detail && !backtest" class="mt-4 text-sm" style="color: var(--muted)">暂无可展示的研究结果，请刷新或更换标的。</div>
+						<div v-if="activeCode" class="mt-4 flex flex-wrap gap-2">
+							<span class="badge" v-if="detail && !detailError">研究详情已加载</span>
+							<span class="badge" v-if="backtest && !backtestError">回测结果已加载</span>
+							<span class="badge" v-if="detailError">研究详情暂不可用</span>
+							<span class="badge" v-if="backtestError">回测结果暂不可用</span>
+						</div>
+					</div>
+
+					<div class="panel p-6 lg:col-span-2" v-if="activeCode">
+						<div class="flex items-center justify-between gap-3">
+							<div>
+								<div class="text-xs uppercase tracking-widest" style="color: var(--muted2)">AH溢价</div>
+								<div class="text-lg font-bold mt-1">AH 溢价序列</div>
+							</div>
+							<span class="badge mono">{{ activeCode || '-' }}</span>
+						</div>
+						<div class="mt-4" ref="premiumChartEl" style="height: 320px"></div>
+					</div>
+					<div class="panel p-6 lg:col-span-2" v-else>
+						<div class="text-xs uppercase tracking-widest" style="color: var(--muted2)">Premium</div>
+						<div class="text-lg font-bold mt-1">等待选择标的</div>
+						<div class="text-sm mt-3" style="color: var(--muted)">从自选列表点击“研究”，或在左侧输入 A 股代码后加载。这里会显示 A/H 溢价曲线。</div>
+					</div>
+
+					<div class="panel p-6 lg:col-span-3" v-if="activeCode && detail">
+						<div class="flex items-center justify-between gap-3">
+							<div>
+								<div class="text-xs uppercase tracking-widest" style="color: var(--muted2)">策略摘要</div>
+								<div class="text-lg font-bold mt-1">研究摘要</div>
+							</div>
+							<span class="badge">先看结论，再看原始输出</span>
+						</div>
+
+							<div class="mt-4 grid grid-cols-1 xl:grid-cols-3 gap-4">
+							<div class="kpi">
+								<div class="l">配对交易</div>
+								<div class="v text-lg">{{ pairTradingSummary.primary }}</div>
+								<div class="mt-2 text-sm" style="color: var(--muted)">{{ pairTradingSummary.secondary }}</div>
+								<div class="mt-3 text-xs" style="color: var(--muted2)">{{ pairTradingSummary.tertiary }}</div>
+							</div>
+							<div class="kpi">
+								<div class="l">多因子</div>
+								<div class="v text-lg">{{ multiFactorSummary.primary }}</div>
+								<div class="mt-2 text-sm" style="color: var(--muted)">{{ multiFactorSummary.secondary }}</div>
+								<div class="mt-3 text-xs" style="color: var(--muted2)">{{ multiFactorSummary.tertiary }}</div>
+							</div>
+							<div class="kpi">
+								<div class="l">ML预测</div>
+								<div class="v text-lg">{{ mlPredictionSummary.primary }}</div>
+								<div class="mt-2 text-sm" style="color: var(--muted)">{{ mlPredictionSummary.secondary }}</div>
+								<div class="mt-3 text-xs" style="color: var(--muted2)">{{ mlPredictionSummary.tertiary }}</div>
+							</div>
+						</div>
+
+							<details class="mt-5 rounded-xl p-4" style="border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.04)">
+								<summary class="cursor-pointer font-semibold">查看原始策略输出</summary>
+								<div class="mt-4 grid grid-cols-1 xl:grid-cols-3 gap-4">
+									<div>
+										<div class="text-sm font-semibold">配对交易原始输出</div>
+										<pre class="mt-3 p-4 rounded-xl overflow-x-auto whitespace-pre-wrap break-all mono text-xs" style="border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.05); max-height: 260px">{{ pairTradingJson }}</pre>
+									</div>
+									<div>
+										<div class="text-sm font-semibold">多因子原始输出</div>
+										<pre class="mt-3 p-4 rounded-xl overflow-x-auto whitespace-pre-wrap break-all mono text-xs" style="border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.05); max-height: 260px">{{ multiFactorJson }}</pre>
+									</div>
+									<div>
+										<div class="text-sm font-semibold">ML预测原始输出</div>
+										<pre class="mt-3 p-4 rounded-xl overflow-x-auto whitespace-pre-wrap break-all mono text-xs" style="border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.05); max-height: 260px">{{ mlPredictionJson }}</pre>
+									</div>
+								</div>
+							</details>
+						</div>
+					</div>
+
+					<div class="panel p-6 lg:col-span-3" v-if="activeCode && backtest">
+						<div class="flex items-center justify-between gap-3">
+							<div>
+								<div class="text-xs uppercase tracking-widest" style="color: var(--muted2)">Backtest</div>
+								<div class="text-lg font-bold mt-1">回测结果</div>
+							</div>
+							<span class="badge mono">{{ activeCode || '-' }}</span>
+						</div>
+
+							<div class="mt-4 grid grid-cols-1 xl:grid-cols-3 gap-4">
+							<div class="lg:col-span-1">
+								<div class="text-sm font-semibold">指标</div>
+								<div class="mt-3 overflow-x-auto">
+									<table class="table">
+										<tbody>
+											<tr v-for="row in metricRows" :key="row.key" class="row">
+												<td class="mono">{{ row.label }}</td>
+												<td class="mono">{{ row.value }}</td>
+											</tr>
+											<tr v-if="metricRows.length === 0">
+												<td colspan="2" style="color: var(--muted)">暂无指标</td>
+											</tr>
+										</tbody>
+									</table>
+								</div>
+							</div>
+							<div class="lg:col-span-2">
+								<div class="text-sm font-semibold">权益曲线</div>
+								<div class="mt-3" ref="equityChartEl" style="height: 260px"></div>
+							</div>
+						</div>
+
+							<div class="mt-6">
+								<div class="text-sm font-semibold">交易明细</div>
+							<div class="mt-3 overflow-x-auto">
+								<table class="table">
+									<thead>
+										<tr>
+											<th>方向</th>
+											<th>开仓</th>
+											<th>平仓</th>
+											<th>开仓溢价</th>
+											<th>平仓溢价</th>
+											<th>盈亏(%)</th>
+											<th>持有天数</th>
+										</tr>
+									</thead>
+									<tbody>
+										<tr v-for="(trade, idx) in tradeRows" :key="(trade.entry_date || 'entry') + '_' + idx" class="row">
+											<td class="mono">{{ humanizeTradeDirection(trade.direction) }}</td>
+											<td class="mono">{{ trade.entry_date || '-' }}</td>
+											<td class="mono">{{ trade.exit_date || '-' }}</td>
+											<td class="mono">{{ formatTradePercent(trade.entry_premium_pct) }}</td>
+											<td class="mono">{{ formatTradePercent(trade.exit_premium_pct) }}</td>
+											<td class="mono">{{ formatTradePercent(trade.pnl_pct) }}</td>
+											<td class="mono">{{ trade.holding_days ?? '-' }}</td>
+										</tr>
+										<tr v-if="tradeRows.length === 0">
+											<td colspan="7" style="color: var(--muted)">暂无交易明细</td>
+										</tr>
+									</tbody>
+								</table>
+							</div>
+						</div>
+					</div>
+				</section>
+			`,
+			data() {
+				return {
+					codeInput: '',
+					activeCode: '',
+					recentCodes: [],
+					detail: null,
+					backtest: null,
+					loading: false,
+					detailError: '',
+					backtestError: '',
+					premiumChart: null,
+					equityChart: null,
+					requestToken: 0,
+					isAlive: true,
+				}
+			},
+			computed: {
+				stock() {
+					return (this.detail && this.detail.stock) ? this.detail.stock : {}
+				},
+				premiumSeries() {
+					return Array.isArray(this.detail && this.detail.premium_series) ? this.detail.premium_series : []
+				},
+				pairTradingJson() {
+					return prettyJson(this.detail && this.detail.pair_trading ? this.detail.pair_trading : {})
+				},
+				multiFactorJson() {
+					return prettyJson(this.detail && this.detail.multi_factor ? this.detail.multi_factor : {})
+				},
+				mlPredictionJson() {
+					return prettyJson(this.detail && this.detail.ml_prediction ? this.detail.ml_prediction : {})
+				},
+				pairTradingSummary() {
+					const payload = this.detail && this.detail.pair_trading ? this.detail.pair_trading : {}
+					return buildLabeledSummary(
+						payload.signal ? `当前建议：${humanizeDirection(payload.signal)}` : null,
+						payload.confidence !== undefined ? `置信度：${formatPercent((_toNum(payload.confidence) || 0) * 100)}` : null,
+						(payload.last_signal_at || payload.last_updated)
+							? `最近信号时间：${formatDisplayValue(payload.last_signal_at || payload.last_updated)}`
+							: (payload.tradeable !== undefined
+								? `是否可执行：${payload.tradeable ? '可以' : `暂不建议（${humanizeBlockReason(payload.block_reason || '未知原因')}）`}`
+								: '关注溢价偏离和均值回归信号。')
+					)
+				},
+				multiFactorSummary() {
+					const payload = this.detail && this.detail.multi_factor ? this.detail.multi_factor : {}
+					const factors = payload.factor_scores || {}
+					return buildLabeledSummary(
+						payload.total_score !== undefined ? `综合评分：${formatPercent((_toNum(payload.total_score) || 0) * 100)}` : null,
+						factors.valuation !== undefined ? `估值得分：${formatPercent((_toNum(factors.valuation) || 0) * 100)}` : null,
+						(payload.rebalance_at || factors.as_of || payload.last_updated)
+							? `参考时间：${formatDisplayValue(payload.rebalance_at || factors.as_of || payload.last_updated)}`
+							: (factors.momentum !== undefined
+								? `趋势得分：${formatPercent((_toNum(factors.momentum) || 0) * 100)}`
+								: '关注估值、质量和动量是否共振。')
+					)
+				},
+				mlPredictionSummary() {
+					const payload = this.detail && this.detail.ml_prediction ? this.detail.ml_prediction : {}
+					return buildLabeledSummary(
+						payload.predicted_direction ? `模型判断：${humanizeDirection(payload.predicted_direction)}` : null,
+						payload.confidence !== undefined ? `置信度：${formatPercent((_toNum(payload.confidence) || 0) * 100)}` : null,
+						(payload.generated_at || payload.last_updated)
+							? `生成时间：${formatDisplayValue(payload.generated_at || payload.last_updated)}`
+							: (payload.predicted_change !== undefined
+								? `预计变动幅度：${formatFixed(payload.predicted_change, 2)}%`
+								: '重点看方向、置信度和预期收益。')
+					)
+				},
+				latestPremiumLabel() {
+					return formatPercent(this.stock.latest_premium_pct)
+				},
+				premiumCountLabel() {
+					if (!this.activeCode) return '-'
+					if (!this.detail && this.loading) return '加载中'
+					if (!this.detail) return '-'
+					return String(this.premiumSeries.length)
+				},
+				metricRows() {
+					return Object.entries((this.backtest && this.backtest.metrics) || {}).map(([key, value]) => ({
+						key,
+						label: humanizeMetricKey(key),
+						value: (key === 'win_rate' || key === 'win_rate_pct') && _toNum(value) !== null
+							? formatPercent((_toNum(value) || 0) * (key === 'win_rate' ? 100 : 1))
+							: formatDisplayValue(value),
+					}))
+				},
+				tradeRows() {
+					return compactTableRows(this.backtest && this.backtest.trades, 6)
+				},
+				equityRows() {
+					const rows = Array.isArray(this.backtest && this.backtest.equity_curve) ? this.backtest.equity_curve : []
+					return rows.slice(-16)
+				},
+			},
+			mounted() {
+				this.recentCodes = readStoredCodes(RECENT_RESEARCH_KEY)
+				this._onResize = () => {
+					if (this.premiumChart) this.premiumChart.resize()
+					if (this.equityChart) this.equityChart.resize()
+				}
+				window.addEventListener('resize', this._onResize)
+				if (this.selectedCode) {
+					this.applySelectedCode(this.selectedCode)
+				} else {
+					this.renderPremiumChart()
+					this.renderEquityChart()
+				}
+			},
+			unmounted() {
+				this.isAlive = false
+				window.removeEventListener('resize', this._onResize)
+				if (this.premiumChart) this.premiumChart.dispose()
+				if (this.equityChart) this.equityChart.dispose()
+				this.premiumChart = null
+				this.equityChart = null
+			},
+			watch: {
+				selectedCode(newCode) {
+					const normalized = normalizeCode(newCode)
+					if (normalized && normalized !== this.activeCode) {
+						this.applySelectedCode(normalized)
+					}
+				},
+				refreshKey() {
+					if (this.activeCode) {
+						this.fetchAll(this.activeCode)
+					}
+				}
+			},
+			methods: {
+				emitToast(payload) { this.$emit('toast', payload) },
+				humanizeBacktestMode,
+				humanizeTradeDirection,
+				pushRecent(code) {
+					const normalized = normalizeCode(code)
+					if (!normalized) return
+					this.recentCodes = [normalized, ...this.recentCodes.filter(item => item !== normalized)].slice(0, 5)
+					writeStoredCodes(RECENT_RESEARCH_KEY, this.recentCodes)
+				},
+				useExample(code) {
+					this.codeInput = normalizeCode(code)
+					this.loadFromInput()
+				},
+				loadRecent(code) {
+					this.codeInput = normalizeCode(code)
+					this.loadFromInput()
+				},
+				formatTradePercent(value) {
+					return formatPercent(value)
+				},
+				applySelectedCode(code) {
+					const normalized = normalizeCode(code)
+					if (!normalized) return
+					this.codeInput = normalized
+					this.activeCode = normalized
+					this.resetDisplayState()
+					this.pushRecent(normalized)
+					this.fetchAll(normalized)
+				},
+				async loadFromInput() {
+					const normalized = normalizeCode(this.codeInput)
+					if (!normalized) {
+						this.emitToast({ title: '请输入代码', message: '请先输入有效的 A 股代码。' })
+						return
+					}
+					this.codeInput = normalized
+					this.activeCode = normalized
+					this.resetDisplayState()
+					this.pushRecent(normalized)
+					this.$emit('select-code', normalized)
+					await this.fetchAll(normalized)
+				},
+				resetDisplayState() {
+					this.detail = null
+					this.backtest = null
+					this.detailError = ''
+					this.backtestError = ''
+					if (this.equityChart) {
+						this.equityChart.dispose()
+						this.equityChart = null
+					}
+					this.renderPremiumChart()
+					this.renderEquityChart()
+				},
+				async fetchAll(code) {
+					const normalized = normalizeCode(code)
+					if (!normalized) return
+					const token = ++this.requestToken
+					this.loading = true
+					this.activeCode = normalized
+					this.detailError = ''
+					this.backtestError = ''
+					const requestCode = normalized
+					try {
+						const [detailRes, backtestRes] = await Promise.allSettled([
+							api.get(`/api/v1/research/${encodeURIComponent(requestCode)}`),
+							api.get(`/api/v1/research/${encodeURIComponent(requestCode)}/backtest`),
+						])
+
+						if (token !== this.requestToken || !this.isAlive) return
+
+						if (detailRes.status === 'fulfilled') {
+							this.detail = detailRes.value.data
+						} else {
+							this.detail = null
+							this.detailError = getErrorMessage(detailRes.reason)
+						}
+
+						if (backtestRes.status === 'fulfilled') {
+							this.backtest = backtestRes.value.data
+						} else {
+							this.backtest = null
+							this.backtestError = getErrorMessage(backtestRes.reason)
+						}
+
+						if (this.detailError || this.backtestError) {
+							this.emitToast({
+								title: '研究数据加载不完整',
+								message: [this.detailError, this.backtestError].filter(Boolean).join('；')
+							})
+						}
+					} finally {
+						if (token !== this.requestToken || !this.isAlive) return
+						this.loading = false
+						this.$nextTick(() => {
+							if (!this.isAlive) return
+							this.renderPremiumChart()
+							this.renderEquityChart()
+						})
+					}
+				},
+				renderEmptyChart(chart, text) {
+					if (!chart) return
+					chart.clear()
+					chart.setOption({
+						backgroundColor: 'transparent',
+						graphic: [{
+							type: 'text',
+							left: 'center',
+							top: 'middle',
+							style: {
+								text,
+								fill: 'rgba(255,255,255,0.45)',
+								font: '14px "IBM Plex Sans"'
+							}
+						}]
+					}, true)
+				},
+				renderPremiumChart() {
+					if (!this.$refs.premiumChartEl) {
+						if (this.premiumChart) {
+							this.premiumChart.dispose()
+							this.premiumChart = null
+						}
+						return
+					}
+					if (!this.premiumChart && this.$refs.premiumChartEl) {
+						this.premiumChart = echarts.init(this.$refs.premiumChartEl)
+					}
+					if (!this.premiumChart) return
+					const series = this.premiumSeries
+					if (!series.length) {
+						this.renderEmptyChart(this.premiumChart, '暂无溢价序列数据')
+						return
+					}
+					this.premiumChart.setOption({
+						backgroundColor: 'transparent',
+						grid: { left: 18, right: 18, top: 24, bottom: 24, containLabel: true },
+						tooltip: { trigger: 'axis' },
+						xAxis: {
+							type: 'category',
+							data: series.map(item => item.date || '-'),
+							axisLabel: { color: 'rgba(255,255,255,0.65)' },
+							axisLine: { lineStyle: { color: 'rgba(255,255,255,0.14)' } },
+						},
+						yAxis: {
+							type: 'value',
+							axisLabel: { color: 'rgba(255,255,255,0.65)', formatter: value => `${value}%` },
+							splitLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } },
+						},
+						series: [{
+							name: 'AH溢价(%)',
+							type: 'line',
+							smooth: true,
+							data: series.map(item => {
+								const value = _toNum(item.premium_pct)
+								return value === null ? null : value
+							}),
+							symbolSize: 6,
+							lineStyle: { color: 'rgba(59,130,246,0.95)', width: 2 },
+							itemStyle: { color: 'rgba(59,130,246,0.95)' },
+							areaStyle: { color: 'rgba(59,130,246,0.16)' },
+						}],
+					}, true)
+				},
+				renderEquityChart() {
+					if (!this.$refs.equityChartEl) {
+						if (this.equityChart) {
+							this.equityChart.dispose()
+							this.equityChart = null
+						}
+						return
+					}
+					if (!this.equityChart && this.$refs.equityChartEl) {
+						this.equityChart = echarts.init(this.$refs.equityChartEl)
+					}
+					if (!this.equityChart) return
+					const rows = this.equityRows
+					if (!rows.length) {
+						this.renderEmptyChart(this.equityChart, '暂无权益曲线数据')
+						return
+					}
+					this.equityChart.setOption({
+						backgroundColor: 'transparent',
+						grid: { left: 18, right: 18, top: 24, bottom: 24, containLabel: true },
+						tooltip: { trigger: 'axis' },
+						xAxis: {
+							type: 'category',
+							data: rows.map(item => item.date || '-'),
+							axisLabel: { color: 'rgba(255,255,255,0.65)' },
+							axisLine: { lineStyle: { color: 'rgba(255,255,255,0.14)' } },
+						},
+						yAxis: {
+							type: 'value',
+							axisLabel: { color: 'rgba(255,255,255,0.65)' },
+							splitLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } },
+						},
+						series: [{
+							name: '权益曲线',
+							type: 'line',
+							smooth: true,
+							data: rows.map(item => {
+								const value = _toNum(item.equity)
+								return value === null ? null : value
+							}),
+							symbolSize: 5,
+							lineStyle: { color: 'rgba(51,214,166,0.95)', width: 2 },
+							itemStyle: { color: 'rgba(51,214,166,0.95)' },
+							areaStyle: { color: 'rgba(51,214,166,0.14)' },
+						}],
+					}, true)
+				},
 			}
 		}
 
@@ -521,7 +1401,7 @@
 											<th class="th-sort" @click="toggleSort('sortBacktest','trades', -1)"><span class="inline-flex items-center gap-2">交易数<help-tip title="交易数" text="该股票对在回测区间内产生的交易笔数。"></help-tip></span><span class="sort-ind">{{ sortIndicator('sortBacktest','trades') }}</span></th>
 											<th class="th-sort" @click="toggleSort('sortBacktest','total_return_pct', -1)"><span class="inline-flex items-center gap-2">总收益(%)<help-tip title="总收益" text="该股票对的回测总收益(%)，包含简单交易成本扣减（估算）。"></help-tip></span><span class="sort-ind">{{ sortIndicator('sortBacktest','total_return_pct') }}</span></th>
 											<th class="th-sort" @click="toggleSort('sortBacktest','win_rate', -1)"><span class="inline-flex items-center gap-2">胜率<help-tip title="胜率" text="盈利交易笔数 / 总交易笔数。"></help-tip></span><span class="sort-ind">{{ sortIndicator('sortBacktest','win_rate') }}</span></th>
-											<th class="th-sort" @click="toggleSort('sortBacktest','mode', 1)"><span class="inline-flex items-center gap-2">模式<help-tip title="模式" text="本回测使用A/H收盘价计算溢价与相对收益（prices）。"></help-tip></span><span class="sort-ind">{{ sortIndicator('sortBacktest','mode') }}</span></th>
+											<th class="th-sort" @click="toggleSort('sortBacktest','mode', 1)"><span class="inline-flex items-center gap-2">模式<help-tip title="模式" text="本回测当前使用价格驱动模式，根据A/H价格序列计算溢价与相对收益。"></help-tip></span><span class="sort-ind">{{ sortIndicator('sortBacktest','mode') }}</span></th>
 										</tr>
 									</thead>
 									<tbody>
@@ -533,7 +1413,7 @@
 											<td class="mono">{{ r.metrics && r.metrics.trades ? r.metrics.trades : 0 }}</td>
 											<td class="mono">{{ r.metrics && r.metrics.total_return_pct !== undefined ? r.metrics.total_return_pct.toFixed(2) : '0.00' }}</td>
 											<td class="mono">{{ r.metrics && r.metrics.win_rate !== undefined ? (r.metrics.win_rate * 100).toFixed(1) + '%' : '0.0%' }}</td>
-											<td class="mono">{{ r.parameters && r.parameters.mode ? r.parameters.mode : '-' }}</td>
+											<td class="mono">{{ humanizeBacktestMode(r.parameters && r.parameters.mode ? r.parameters.mode : '-') }}</td>
 										</tr>
 										<tr v-if="!backtest || !backtest.results || backtest.results.length === 0">
 											<td colspan="5" style="color: var(--muted)">暂无回测结果（请先运行每日任务，或点击“刷新回测”）</td>
@@ -912,14 +1792,14 @@
 										<div class="font-semibold">{{ p.name }}</div>
 										<div class="mono text-xs" style="color: var(--muted2)">{{ p.a_code }} / {{ p.h_code }}</div>
 									</div>
-								<div class="badge mono">{{ p.predicted_direction || '未知' }}</div>
+								<div class="badge mono">{{ humanizeDirection(p.predicted_direction || '未知') }}</div>
 							</div>
 							<div class="mt-3 grid grid-cols-3 gap-2 text-sm">
 								<div><div style="color: var(--muted2)">当前溢价</div><div class="mono">{{ p.current_premium }}</div></div>
-								<div><div style="color: var(--muted2)">预测变化</div><div class="mono">{{ p.predicted_change ?? '无' }}</div></div>
+								<div><div style="color: var(--muted2)">预计变动幅度</div><div class="mono">{{ p.predicted_change !== undefined ? formatFixed(p.predicted_change, 2) + '%' : '无' }}</div></div>
 								<div>
 									<div class="inline-flex items-center gap-2" style="color: var(--muted2)">置信度<help-tip title="置信度" text="模型对方向判断的置信度(0~1)。这是模型输出，不等同于真实胜率。"></help-tip></div>
-									<div class="mono">{{ (p.confidence ?? 0).toFixed(2) }}</div>
+									<div class="mono">{{ formatPercent((p.confidence ?? 0) * 100) }}</div>
 								</div>
 							</div>
 						</div>
@@ -1150,6 +2030,8 @@
 
 		const app = Vue.createApp({
 			components: {
+				'watchlist-tab': WatchlistTab,
+				'research-tab': ResearchTab,
 				'pair-trading': PairTrading,
 				'multi-factor': MultiFactor,
 				'ml-prediction': MLPrediction,
@@ -1158,6 +2040,7 @@
 			data() {
 				return {
 					currentTab: 'pair_trading',
+					selectedResearchCode: '',
 					refreshKey: 0,
 					updating: false,
 					tabs: [
@@ -1165,11 +2048,22 @@
 						{ id: 'multi_factor', short: '02', name: '多因子' },
 						{ id: 'ml_prediction', short: '03', name: 'ML预测' },
 						{ id: 'etf_sector', short: '04', name: 'ETF&板块' },
+						{ id: 'watchlist', short: '05', name: '自选' },
+						{ id: 'research', short: '06', name: '个股研究' },
 					],
 					toast: { show: false, title: '', message: '' },
 				}
 			},
 			methods: {
+				setResearchCode(code) {
+					this.selectedResearchCode = normalizeCode(code)
+				},
+				openResearch(code) {
+					const normalized = normalizeCode(code)
+					if (!normalized) return
+					this.selectedResearchCode = normalized
+					this.currentTab = 'research'
+				},
 				showToast(payload) {
 					this.toast.title = payload.title || '提示'
 					this.toast.message = payload.message || ''
