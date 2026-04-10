@@ -211,6 +211,31 @@ class TestResearchRoutes(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.json(), {"detail": "watchlist write failed"})
 
+    def test_watchlist_add_returns_404_when_mapping_is_missing(self):
+        import ah_recommendation_system.backend.watchlist.watchlist_store as watchlist_store
+
+        app, _, watchlist_routes = self._build_route_app()
+        store = FakeWatchlistStore(
+            failures={
+                "add": watchlist_store.MissingAHMappingError(
+                    "No AH pair mapping found for 000001.SZ"
+                )
+            }
+        )
+        app.dependency_overrides[watchlist_routes.get_watchlist_store] = lambda: store
+        client = TestClient(app)
+
+        try:
+            response = client.post("/api/v1/watchlist/000001.SZ")
+        finally:
+            client.close()
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(
+            response.json(),
+            {"detail": "No AH pair mapping found for 000001.SZ"},
+        )
+
     def test_main_registers_watchlist_and_research_routes(self):
         app = self._import_main_module().app
 

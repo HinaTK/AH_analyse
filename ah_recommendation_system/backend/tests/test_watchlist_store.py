@@ -215,7 +215,7 @@ class TestWatchlistStore(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         store.list_symbols()
 
-    def test_add_symbol_skips_write_when_snapshot_incomplete(self):
+    def test_add_symbol_raises_when_snapshot_incomplete(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = WatchlistStore(root_dir=Path(tmp))
 
@@ -229,7 +229,8 @@ class TestWatchlistStore(unittest.TestCase):
                     return_value="",
                 ),
             ):
-                store.add_symbol("601398.SH")
+                with self.assertRaises(ValueError):
+                    store.add_symbol("601398.SH")
 
             self.assertFalse(store._file_path.exists())
 

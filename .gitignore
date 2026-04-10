@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+
+ah_recommendation_system/backend/logs/
+ah_recommendation_system/backend/data/daily_reports/
+ah_recommendation_system/backend/data/watchlist/
+ah_recommendation_system/backend/data/exports/
+ah_recommendation_system/backend/data/models/
+
+tmp-shots/

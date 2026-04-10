@@ -275,7 +275,7 @@
 				<div v-if="currentTab === 'ml_prediction'"><ml-prediction :refresh-key="refreshKey" @toast="showToast"></ml-prediction></div>
 				<div v-if="currentTab === 'etf_sector'"><etf-sector :refresh-key="refreshKey" @toast="showToast"></etf-sector></div>
 				<div v-if="currentTab === 'watchlist'"><watchlist-tab :refresh-key="refreshKey" :selected-code="selectedResearchCode" @toast="showToast" @open-research="openResearch"></watchlist-tab></div>
-				<div v-if="currentTab === 'research'"><research-tab :refresh-key="refreshKey" :selected-code="selectedResearchCode" @toast="showToast" @select-code="setResearchCode"></research-tab></div>
+				<div v-if="currentTab === 'research'"><research-tab :refresh-key="refreshKey" :selected-code="selectedResearchCode" @toast="showToast" @select-code="setResearchCode" @save-watchlist="saveToWatchlist"></research-tab></div>
 			</div>
 		</main>
 
@@ -717,7 +717,7 @@
 		}
 
 		const ResearchTab = {
-			emits: ['toast', 'select-code'],
+			emits: ['toast', 'select-code', 'save-watchlist'],
 			props: {
 				refreshKey: { type: Number, default: 0 },
 				selectedCode: { type: String, default: '' },
@@ -743,6 +743,7 @@
 						<div class="mt-4 flex flex-wrap gap-2">
 							<button class="btn btn-primary" @click="loadFromInput" :disabled="loading">{{ loading ? '加载中...' : '加载研究' }}</button>
 							<button class="btn" @click="fetchAll(activeCode)" :disabled="loading || !activeCode">刷新</button>
+							<button class="btn" @click="saveToWatchlist" :disabled="!activeCode">加入自选</button>
 						</div>
 
 						<div class="mt-4 flex flex-wrap gap-2" v-if="!activeCode">
@@ -751,7 +752,10 @@
 						</div>
 
 						<div class="mt-4" v-if="recentCodes.length">
-							<div class="text-xs mb-2" style="color: var(--muted2)">最近查看</div>
+							<div class="flex items-center justify-between gap-3 mb-2">
+								<div class="text-xs" style="color: var(--muted2)">最近查看</div>
+								<button class="btn" @click="clearRecent">清空</button>
+							</div>
 							<div class="flex flex-wrap gap-2">
 								<button v-for="code in recentCodes" :key="code" class="btn" @click="loadRecent(code)">{{ code }}</button>
 							</div>
@@ -1057,6 +1061,11 @@
 					this.recentCodes = [normalized, ...this.recentCodes.filter(item => item !== normalized)].slice(0, 5)
 					writeStoredCodes(RECENT_RESEARCH_KEY, this.recentCodes)
 				},
+				clearRecent() {
+					this.recentCodes = []
+					writeStoredCodes(RECENT_RESEARCH_KEY, [])
+					this.emitToast({ title: '已清空', message: '最近查看记录已清空。' })
+				},
 				useExample(code) {
 					this.codeInput = normalizeCode(code)
 					this.loadFromInput()
@@ -1064,6 +1073,10 @@
 				loadRecent(code) {
 					this.codeInput = normalizeCode(code)
 					this.loadFromInput()
+				},
+				saveToWatchlist() {
+					if (!this.activeCode) return
+					this.$emit('save-watchlist', this.activeCode)
 				},
 				formatTradePercent(value) {
 					return formatPercent(value)
@@ -2057,6 +2070,17 @@
 			methods: {
 				setResearchCode(code) {
 					this.selectedResearchCode = normalizeCode(code)
+				},
+				async saveToWatchlist(code) {
+					const normalized = normalizeCode(code)
+					if (!normalized) return
+					try {
+						await api.post(`/api/v1/watchlist/${encodeURIComponent(normalized)}`)
+						this.refreshKey += 1
+						this.showToast({ title: '已加入自选', message: `${normalized} 已加入自选列表。` })
+					} catch (e) {
+						this.showToast({ title: '加入失败', message: getErrorMessage(e) })
+					}
 				},
 				openResearch(code) {
 					const normalized = normalizeCode(code)

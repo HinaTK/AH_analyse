@@ -14,6 +14,10 @@ from ah_recommendation_system.backend.data.ah_stock_list import (
 _A_CODE_RE = re.compile(r"\d{6}\.(SH|SZ)$", re.IGNORECASE)
 
 
+class MissingAHMappingError(ValueError):
+    pass
+
+
 def _normalize_symbol_code(code: str) -> str:
     value = (code or "").strip().upper()
     if not value:
@@ -40,9 +44,10 @@ class WatchlistStore:
 
     def add_symbol(self, a_code: str) -> None:
         normalized = _normalize_symbol_code(a_code)
-        snapshot = self._build_symbol_snapshot(normalized)
-        if not snapshot:
-            return
+        if not normalized:
+            raise ValueError("Watchlist symbol code is invalid")
+
+        snapshot = self._build_symbol_snapshot_or_raise(normalized)
 
         payload = self._read_payload()
         symbols = payload["symbols"]
@@ -134,6 +139,17 @@ class WatchlistStore:
             return None
 
         return self._build_complete_snapshot(a_code, h_code, get_stock_name(a_code))
+
+    def _build_symbol_snapshot_or_raise(self, a_code: str) -> Dict[str, str]:
+        h_code = get_ah_pairs().get(a_code)
+        if not h_code:
+            raise MissingAHMappingError(f"No AH pair mapping found for {a_code}")
+
+        snapshot = self._build_complete_snapshot(a_code, h_code, get_stock_name(a_code))
+        if not snapshot:
+            raise ValueError(f"Watchlist snapshot is incomplete for {a_code}")
+
+        return snapshot
 
     def _build_legacy_snapshot(self, a_code: str) -> Dict[str, str]:
         snapshot = self._build_complete_snapshot(

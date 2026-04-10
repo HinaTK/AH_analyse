@@ -4,6 +4,10 @@ from typing import Protocol
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from ah_recommendation_system.backend.watchlist.watchlist_store import (
+    MissingAHMappingError,
+)
+
 router = APIRouter(prefix="/api/v1/watchlist", tags=["watchlist"])
 
 
@@ -41,6 +45,8 @@ async def add_watchlist_symbol(
     try:
         store.add_symbol(a_code)
         return {"items": store.list_symbols()}
+    except MissingAHMappingError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
