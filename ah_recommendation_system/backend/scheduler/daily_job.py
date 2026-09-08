@@ -24,6 +24,11 @@ from ah_recommendation_system.backend.reporting.report_store import (
     get_report_store,
 )
 from ah_recommendation_system.backend.run_daily_job import generate_report
+from ah_recommendation_system.backend.stock_recommend.run import (
+    run_pipeline,
+    run_post_market,
+    run_weekly_reweight_job,
+)
 
 
 class DailyJobScheduler:
@@ -47,9 +52,21 @@ def main() -> int:
     parser.add_argument(
         "--run-now", action="store_true", help="Generate report immediately"
     )
+    parser.add_argument("--mode", choices=("legacy", "pre_market", "post_market", "weekly_reweight"), default="legacy")
+    parser.add_argument("--mock", action="store_true")
+    parser.add_argument("--push", action="store_true")
     args = parser.parse_args()
 
     scheduler = DailyJobScheduler()
+    if args.mode == "pre_market":
+        run_pipeline(mock=args.mock, push=args.push)
+        return 0
+    if args.mode == "post_market":
+        run_post_market(mock=args.mock, push=args.push)
+        return 0
+    if args.mode == "weekly_reweight":
+        run_weekly_reweight_job()
+        return 0
     if args.run_now:
         scheduler.run_now()
         return 0

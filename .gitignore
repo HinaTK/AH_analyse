@@ -1,0 +1,20 @@
+.worktrees/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Runtime outputs and local market caches
+logs/
+ah_recommendation_system/logs/
+ah_recommendation_system/backend/logs/
+ah_recommendation_system/backend/data/market_store/
+ah_recommendation_system/backend/data/stock_recommend/
+
+# Local research/tool state
+.tmp-*/
+.firecrawl/
+.omo/
+.opencode/
+.playwright-mcp/
+.financial-api-info.json
+tmp_*

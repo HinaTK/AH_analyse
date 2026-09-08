@@ -4,7 +4,7 @@ import re
 import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -92,9 +92,7 @@ def _extract_items(xml_bytes: bytes) -> List[Dict[str, Any]]:
     # Atom: entry
     if not items:
         for entry in root.findall(".//{http://www.w3.org/2005/Atom}entry"):
-            title = (
-                entry.findtext("{http://www.w3.org/2005/Atom}title") or ""
-            ).strip()
+            title = (entry.findtext("{http://www.w3.org/2005/Atom}title") or "").strip()
             link_el = entry.find("{http://www.w3.org/2005/Atom}link")
             link = (link_el.get("href") if link_el is not None else "") or ""
             updated = (
@@ -147,10 +145,27 @@ def _hot_keywords(titles: List[str], limit: int = 20) -> List[Dict[str, Any]]:
     return [{"keyword": k, "count": v} for k, v in sorted_items[:limit]]
 
 
+def _parse_datetime_value(value: Any) -> Optional[datetime]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    patterns = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%a, %d %b %Y %H:%M:%S %z"]
+    for pattern in patterns:
+        try:
+            dt = datetime.strptime(text, pattern)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone()
+        except Exception:
+            continue
+    return None
+
+
 def fetch_news_digest(
     *,
     sources: Optional[List[RssSource]] = None,
     max_items: int = 120,
+    max_age_days: int = 7,
 ) -> Dict[str, Any]:
     used = sources or _DEFAULT_SOURCES
     all_items: List[Dict[str, Any]] = []
@@ -177,10 +192,36 @@ def fetch_news_digest(
         if len(deduped) >= max_items:
             break
 
-    titles = [str(it.get("title") or "") for it in deduped]
+    cutoff = datetime.now().astimezone() - timedelta(
+        days=max(1, int(max_age_days or 7))
+    )
+    fresh_items = []
+    stale_count = 0
+    latest_published_at = None
+    for it in deduped:
+        parsed = _parse_datetime_value(it.get("published_at"))
+        if parsed and (latest_published_at is None or parsed > latest_published_at):
+            latest_published_at = parsed
+        if parsed and parsed >= cutoff:
+            fresh_items.append(it)
+        else:
+            stale_count += 1
+
+    titles = [str(it.get("title") or "") for it in fresh_items]
     return {
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "count": len(deduped),
-        "items": deduped,
+        "count": len(fresh_items),
+        "items": fresh_items,
         "hot_keywords": _hot_keywords(titles),
+        "freshness": {
+            "max_age_days": max(1, int(max_age_days or 7)),
+            "stale_count": stale_count,
+            "is_stale": len(fresh_items) == 0 and len(deduped) > 0,
+            "latest_published_at": latest_published_at.strftime("%Y-%m-%d %H:%M:%S")
+            if latest_published_at
+            else None,
+            "status": "stale_filtered"
+            if len(fresh_items) == 0 and len(deduped) > 0
+            else "ok",
+        },
     }

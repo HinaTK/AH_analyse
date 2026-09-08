@@ -89,6 +89,8 @@ async def export_data(request: ExportRequest):
             add_sheet("multi_factor", report.get("multi_factor"))
         if request.data_type in ["ml_prediction", "all"]:
             add_sheet("ml_prediction", report.get("ml_prediction"))
+        if request.data_type in ["etf_trend", "all"]:
+            add_sheet("etf_trend", ((report.get("etf_sector") or {}).get("etf_trend")))
 
         if not frames:
             return ExportResponse(

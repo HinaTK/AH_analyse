@@ -10,6 +10,9 @@ pydantic>=2.5.0
 akshare>=1.11.0
 pandas>=2.1.0
 numpy>=1.26.0
+duckdb>=1.1.0
+polars>=1.12.0
+pyarrow>=17.0.0
 
 # 数据库
 sqlalchemy>=2.0.0

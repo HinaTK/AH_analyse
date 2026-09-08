@@ -9,6 +9,7 @@ from datetime import datetime
 # 通用响应模型
 class ResponseModel(BaseModel):
     """通用API响应"""
+
     success: bool
     message: str
     data: Optional[Dict] = None
@@ -18,6 +19,7 @@ class ResponseModel(BaseModel):
 # 策略1: 配对交易
 class PairTradingSignal(BaseModel):
     """配对交易信号"""
+
     a_code: str
     h_code: str
     name: str
@@ -33,6 +35,7 @@ class PairTradingSignal(BaseModel):
 
 class PairTradingRecommendation(BaseModel):
     """配对交易推荐结果"""
+
     strategy: str
     description: str
     generated_at: str
@@ -44,6 +47,7 @@ class PairTradingRecommendation(BaseModel):
 # 策略2: 多因子
 class MultiFactorStock(BaseModel):
     """多因子选股结果"""
+
     a_code: str
     h_code: str
     name: str
@@ -55,6 +59,7 @@ class MultiFactorStock(BaseModel):
 
 class MultiFactorRecommendation(BaseModel):
     """多因子推荐结果"""
+
     strategy: str
     description: str
     generated_at: str
@@ -66,6 +71,7 @@ class MultiFactorRecommendation(BaseModel):
 # 策略3: ML预测
 class MLPrediction(BaseModel):
     """ML预测结果"""
+
     a_code: str
     h_code: str
     name: str
@@ -78,6 +84,7 @@ class MLPrediction(BaseModel):
 
 class MLRecommendation(BaseModel):
     """ML策略推荐结果"""
+
     strategy: str
     description: str
     model_type: str
@@ -89,13 +96,17 @@ class MLRecommendation(BaseModel):
 # 导出
 class ExportRequest(BaseModel):
     """导出请求"""
+
     format: str  # "xlsx", "csv", "pdf"
-    data_type: str  # "pair_trading", "multi_factor", "ml_prediction", "all"
+    data_type: (
+        str  # "pair_trading", "multi_factor", "ml_prediction", "etf_trend", "all"
+    )
     date: Optional[str] = None
 
 
 class ExportResponse(BaseModel):
     """导出响应"""
+
     success: bool
     file_path: Optional[str]
     message: str
@@ -105,6 +116,7 @@ class ExportResponse(BaseModel):
 # AH股票
 class AHStock(BaseModel):
     """AH股票信息"""
+
     a_code: str
     h_code: str
     name: str
@@ -115,12 +127,14 @@ class AHStock(BaseModel):
 # 图表数据
 class ChartDataPoint(BaseModel):
     """图表数据点"""
+
     date: str
     value: float
 
 
 class ChartData(BaseModel):
     """图表数据"""
+
     title: str
     x_label: str
     y_label: str

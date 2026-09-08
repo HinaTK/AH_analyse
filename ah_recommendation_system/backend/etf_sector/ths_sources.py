@@ -9,6 +9,11 @@ import pandas as pd
 from loguru import logger
 
 
+_SUSPICIOUS_MOJIBAKE_CHARS = set(
+    "ÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿŒœŠšŸŽž€‚ƒ„…†‡ˆ‰‹›™"
+)
+
+
 def _to_float(x: Any) -> Optional[float]:
     try:
         if x is None:
@@ -35,6 +40,73 @@ def _safe_head(df: pd.DataFrame, n: int) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
     return df.head(n).copy()
+
+
+def _is_missing_value(value: Any) -> bool:
+    try:
+        return value is None or bool(pd.isna(value))
+    except Exception:
+        return value is None
+
+
+def _count_cjk_chars(text: str) -> int:
+    return sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+
+
+def _count_suspicious_chars(text: str) -> int:
+    return sum(
+        1 for ch in text if ch in _SUSPICIOUS_MOJIBAKE_CHARS or 0x80 <= ord(ch) <= 0x9F
+    )
+
+
+def normalize_display_text(value: Any) -> str:
+    """Conservatively repair common UTF-8 mojibake in display text."""
+    if _is_missing_value(value):
+        return ""
+
+    text = str(value).replace("\x00", "").replace("\xa0", " ").strip()
+    if not text:
+        return ""
+
+    if "�" in text:
+        return text
+
+    base_cjk = _count_cjk_chars(text)
+    base_suspicious = _count_suspicious_chars(text)
+    if base_suspicious == 0 and base_cjk > 0:
+        return text
+
+    best = text
+    best_cjk = base_cjk
+    best_suspicious = base_suspicious
+
+    for source_encoding in ("latin1", "cp1252"):
+        try:
+            candidate = text.encode(source_encoding).decode("utf-8")
+        except Exception:
+            continue
+        candidate = candidate.replace("\x00", "").replace("\xa0", " ").strip()
+        if not candidate or "�" in candidate:
+            continue
+        candidate_cjk = _count_cjk_chars(candidate)
+        candidate_suspicious = _count_suspicious_chars(candidate)
+        if candidate_cjk <= 0:
+            continue
+        if candidate_cjk < best_cjk:
+            continue
+        if candidate_cjk == best_cjk and candidate_suspicious >= best_suspicious:
+            continue
+        if candidate_cjk == best_cjk and best_cjk == base_cjk:
+            continue
+        best = candidate
+        best_cjk = candidate_cjk
+        best_suspicious = candidate_suspicious
+
+    if best_cjk > base_cjk and best_suspicious <= base_suspicious:
+        return best
+    if best_cjk == base_cjk and best_cjk > 0 and best_suspicious < base_suspicious:
+        return best
+    return text
 
 
 def fetch_etf_spot_ths() -> pd.DataFrame:
@@ -130,10 +202,10 @@ def normalize_etf_spot_ths(
     df2 = _safe_head(df, max(limit, 10))
     for _, row in df2.iterrows():
         code = str(row.iloc[1])
-        name = str(row.iloc[2])
+        name = normalize_display_text(row.iloc[2])
         growth_pct = _to_float(row.iloc[8])
         unit_nav = _to_float(row.iloc[3])
-        fund_type = str(row.iloc[14]) if len(row) > 14 else ""
+        fund_type = normalize_display_text(row.iloc[14]) if len(row) > 14 else ""
         out.append(
             {
                 "code": code,
@@ -164,7 +236,7 @@ def normalize_etf_spot_sina(
     df2 = _safe_head(df, max(limit, 10))
     for _, row in df2.iterrows():
         code_raw = str(row.iloc[0])
-        name = str(row.iloc[1])
+        name = normalize_display_text(row.iloc[1])
         price = _to_float(row.iloc[2])
         chg_pct = _to_float(row.iloc[4])
         vol = _to_int(row.iloc[11])
@@ -201,10 +273,10 @@ def normalize_industry_summary_ths(
         return {"top_gainers": [], "top_losers": []}
     rows: List[Dict[str, Any]] = []
     for _, row in df.iterrows():
-        name = str(row.iloc[1])
+        name = normalize_display_text(row.iloc[1])
         chg_pct = _to_float(row.iloc[2])
         turnover_yi = _to_float(row.iloc[3])
-        leader = str(row.iloc[9]) if len(row) > 9 else ""
+        leader = normalize_display_text(row.iloc[9]) if len(row) > 9 else ""
         leader_chg = _to_float(row.iloc[10]) if len(row) > 10 else None
         rows.append(
             {
@@ -221,3 +293,125 @@ def normalize_industry_summary_ths(
     top = rows_ok[:limit]
     bottom = list(reversed(rows_ok[-limit:]))
     return {"top_gainers": top, "top_losers": bottom}
+
+
+def normalize_board_index_ths(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    """Normalize THS board index data (industry/concept) by position.
+
+    AKShare returns 7 columns like:
+    [日期, 开盘价, 最高价, 最低价, 收盘价, 成交量, 成交额]
+
+    Column names may appear garbled in some consoles; map by position.
+    """
+    if df is None or df.empty:
+        return []
+
+    out: List[Dict[str, Any]] = []
+    for _, row in df.iterrows():
+        dt = str(row.iloc[0])
+        close = _to_float(row.iloc[4]) if len(row) > 4 else None
+        out.append({"date": dt, "close": close})
+    return out
+
+
+def normalize_concept_summary_ths(
+    df: pd.DataFrame, *, limit: int = 50
+) -> List[Dict[str, Any]]:
+    """Normalize THS concept summary text for ETF sector pages."""
+    if df is None or df.empty:
+        return []
+
+    items: List[Dict[str, Any]] = []
+    df2 = _safe_head(df, max(limit, 10))
+    for _, row in df2.iterrows():
+        items.append(
+            {
+                "date": str(row.iloc[0]).strip(),
+                "concept": normalize_display_text(row.iloc[1]),
+                "headline": normalize_display_text(row.iloc[2]),
+                "leader": normalize_display_text(row.iloc[3]) if len(row) > 3 else "",
+                "constituents": _to_int(row.iloc[4]) if len(row) > 4 else None,
+            }
+        )
+    return items[:limit]
+
+
+def compute_index_trend(
+    points: List[Dict[str, Any]], *, lookbacks: List[int]
+) -> Dict[str, Any]:
+    closes: List[float] = [
+        float(p["close"]) for p in points if p.get("close") is not None
+    ]
+    if not closes:
+        return {"last_close": None, "returns": {}}
+
+    last_close = float(closes[-1])
+    returns: Dict[str, Optional[float]] = {}
+    for n in lookbacks:
+        key = f"ret_{int(n)}d"
+        if len(closes) <= n:
+            returns[key] = None
+            continue
+        prev = float(closes[-(n + 1)])
+        if prev == 0:
+            returns[key] = None
+            continue
+        returns[key] = (last_close / prev - 1.0) * 100.0
+
+    return {"last_close": last_close, "returns": returns}
+
+
+def fetch_board_trend_items_ths(
+    *,
+    kind: str,
+    names: List[str],
+    lookbacks: List[int],
+    start_date: str,
+    end_date: str,
+    per_item_delay_s: float = 0.0,
+) -> List[Dict[str, Any]]:
+    """Fetch trend metrics for THS industry/concept boards by name."""
+    if not names:
+        return []
+
+    out: List[Dict[str, Any]] = []
+    fetcher = (
+        fetch_industry_index_ths if kind == "industry" else fetch_concept_index_ths
+    )
+
+    for nm in names:
+        nm2 = normalize_display_text(nm) or str(nm).strip()
+        if not nm2:
+            continue
+        try:
+            df = fetcher(nm2, start_date, end_date)
+            points = normalize_board_index_ths(df)
+            tr = compute_index_trend(points, lookbacks=lookbacks)
+            out.append(
+                {
+                    "name": nm2,
+                    "kind": kind,
+                    "source": "ths",
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "last_date": points[-1]["date"] if points else None,
+                    "last_close": tr.get("last_close"),
+                    **(tr.get("returns") or {}),
+                }
+            )
+        except Exception as e:
+            logger.warning(f"board_index_fetch_failed kind={kind} name={nm2}: {e}")
+            out.append(
+                {
+                    "name": nm2,
+                    "kind": kind,
+                    "source": "ths",
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "error": str(e),
+                }
+            )
+        if per_item_delay_s and per_item_delay_s > 0:
+            time.sleep(per_item_delay_s)
+
+    return out
