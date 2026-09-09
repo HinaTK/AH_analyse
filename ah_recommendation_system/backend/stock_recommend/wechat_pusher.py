@@ -17,11 +17,6 @@ def build_wechat_payload(report: Dict[str, Any]) -> Dict[str, Any]:
         lines.append(f"**{index}. {pick.get('name', '')}（{pick.get('code', '')}）**")
         lines.append(str(pick.get("rationale") or ""))
         lines.append(f"触发：{pick.get('trigger', '—')}；失效：{pick.get('invalidation', '—')}")
-    observations = report.get("observation_pool") or []
-    if observations:
-        lines.append("### 观察池")
-        for item in observations[:6]:
-            lines.append(f"- {item.get('name', '')}（{item.get('code', '')}）")
     return {"msgtype": "markdown", "markdown": {"content": "\n\n".join(lines)}}
 
 

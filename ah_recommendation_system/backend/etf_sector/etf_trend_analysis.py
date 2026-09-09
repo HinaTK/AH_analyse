@@ -553,6 +553,10 @@ def _build_one_etf(
             if last_close not in (None, 0) and breakout_high not in (None, 0)
             else None
         )
+        drawdown_window = close.tail(60)
+        running_peak = drawdown_window.cummax()
+        drawdowns = (drawdown_window / running_peak - 1.0) * 100.0
+        max_drawdown_60d = _to_float(drawdowns.min()) if not drawdowns.empty else None
 
         metrics = {
             "ret_shortd": _calc_return(close, params.lookback_short),
@@ -570,6 +574,7 @@ def _build_one_etf(
             if ma_short is None or ma_mid is None
             else bool(ma_short >= ma_mid),
             "volatility_shortd_pct": _round_or_none(volatility),
+            "max_drawdown_60d_pct": _round_or_none(max_drawdown_60d),
             "breakout_gap_pct": _round_or_none(breakout_gap),
             "returns_pct": {
                 "short": _calc_return(close, params.lookback_short),

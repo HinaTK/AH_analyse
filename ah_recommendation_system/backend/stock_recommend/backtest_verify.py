@@ -119,6 +119,7 @@ def verify_recommendation(
         metrics["action"] = p.get("action", "")
         metrics["confidence"] = p.get("confidence", 0)
         metrics["factors"] = p.get("factors") or {}
+        metrics["risk_flags"] = p.get("risk_flags") or []
         metrics["as_of"] = as_of
         per_pick.append(metrics)
 

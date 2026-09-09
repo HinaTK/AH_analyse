@@ -4,21 +4,17 @@
 from __future__ import annotations
 
 import argparse
-
-from typing import Any, Dict
-
 import sys
 from pathlib import Path
+from typing import Any, Dict
 
 from loguru import logger
 
-# Ensure repo root is on sys.path so `tools.*` imports work when running from this folder.
-try:
-    SCHEDULER_DIR = Path(__file__).resolve().parent
-    REPO_ROOT = SCHEDULER_DIR.parents[3]
+# Ensure absolute package imports work when Task Scheduler has no PYTHONPATH.
+SCHEDULER_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCHEDULER_DIR.parents[2]
+if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-except Exception:
-    pass
 
 from ah_recommendation_system.backend.reporting.report_store import (
     get_report_store,
@@ -47,6 +43,14 @@ class DailyJobScheduler:
         return self.generate_daily_report()
 
 
+def _scheduled_exit_code(result: Dict[str, Any], *, push_requested: bool) -> int:
+    if not result.get("ok"):
+        return 1
+    if push_requested and not (result.get("push") or {}).get("ok"):
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -55,15 +59,16 @@ def main() -> int:
     parser.add_argument("--mode", choices=("legacy", "pre_market", "post_market", "weekly_reweight"), default="legacy")
     parser.add_argument("--mock", action="store_true")
     parser.add_argument("--push", action="store_true")
+    parser.add_argument("--force-push", action="store_true")
     args = parser.parse_args()
 
     scheduler = DailyJobScheduler()
     if args.mode == "pre_market":
-        run_pipeline(mock=args.mock, push=args.push)
-        return 0
+        result = run_pipeline(mock=args.mock, push=args.push, force_push=args.force_push)
+        return _scheduled_exit_code(result, push_requested=args.push)
     if args.mode == "post_market":
-        run_post_market(mock=args.mock, push=args.push)
-        return 0
+        result = run_post_market(mock=args.mock, push=args.push, force_push=args.force_push)
+        return _scheduled_exit_code(result, push_requested=args.push)
     if args.mode == "weekly_reweight":
         run_weekly_reweight_job()
         return 0

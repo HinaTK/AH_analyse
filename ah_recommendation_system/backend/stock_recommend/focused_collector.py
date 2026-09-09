@@ -12,8 +12,10 @@ from datetime import datetime
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence
 
 import requests
+from loguru import logger
 
 from ah_recommendation_system.backend.stock_recommend.data_collector import CollectedSnapshot
+from ah_recommendation_system.backend.stock_recommend.data_source_router import parse_sina_quotes
 
 
 DEFAULT_FOCUS_UNIVERSE: Dict[str, List[Dict[str, str]]] = {
@@ -68,11 +70,45 @@ def _quote_tencent(codes: Sequence[str], *, batch_size: int = 50) -> List[Dict[s
                         "volume": float(parts[6] or 0),
                         "amount": float(parts[37] or 0),
                         "quote_time": parts[30],
+                        "quote_source": "tencent",
                     }
                 )
             except (TypeError, ValueError):
                 continue
     return rows
+
+
+def _quote_sina(codes: Sequence[str], *, batch_size: int = 50) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for start in range(0, len(codes), max(1, int(batch_size))):
+        batch = codes[start : start + max(1, int(batch_size))]
+        symbols = ",".join(("sh" if code.startswith(("5", "6", "9")) else "sz") + code for code in batch)
+        response = requests.get(
+            "https://hq.sinajs.cn/list=" + symbols,
+            headers={"Referer": "https://finance.sina.com.cn", "User-Agent": "Mozilla/5.0"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        for row in parse_sina_quotes(response.content):
+            row["quote_source"] = "sina"
+            rows.append(row)
+    return rows
+
+
+def _quote_with_fallback(codes: Sequence[str]) -> List[Dict[str, Any]]:
+    try:
+        rows = _quote_tencent(codes)
+        if rows:
+            return rows
+    except Exception as exc:
+        logger.warning(f"Tencent quote fallback unavailable: {exc}")
+    try:
+        rows = _quote_sina(codes)
+        if rows:
+            return rows
+    except Exception as exc:
+        logger.warning(f"Sina quote fallback unavailable: {exc}")
+    return []
 
 
 def _number(value: Any) -> float:
@@ -154,9 +190,13 @@ def build_focused_snapshot(
         row.update(quoted.get(code) or {})
     rows = [row for row in by_code.values() if _number(row.get("price")) > 0]
     errors = [] if rows else ["focused_quotes_unavailable"]
+    quote_source = next(
+        (str(row.get("quote_source")) for row in rows if row.get("quote_source")),
+        "tencent",
+    )
     return CollectedSnapshot(
         date=datetime.now().strftime("%Y-%m-%d"),
-        fundamental={"generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "source": "focused_tencent_quotes", "rows": rows, "count": len(rows), "universe_size": requested_count, "requested_count": requested_count},
+        fundamental={"generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "source": f"focused_{quote_source}_quotes", "rows": rows, "count": len(rows), "universe_size": requested_count, "requested_count": requested_count},
         capital={
             "source": "sina_lhb",
             "rows": [
@@ -193,4 +233,8 @@ def collect_lhb_activity() -> List[Dict[str, Any]]:
 
 
 def collect_focused_market(*, focus_universe: Mapping[str, Sequence[Mapping[str, Any]]] | None = None) -> CollectedSnapshot:
-    return build_focused_snapshot(focus_universe=focus_universe or DEFAULT_FOCUS_UNIVERSE, activity_rows=collect_lhb_activity())
+    return build_focused_snapshot(
+        focus_universe=focus_universe or DEFAULT_FOCUS_UNIVERSE,
+        activity_rows=collect_lhb_activity(),
+        quote_fetcher=_quote_with_fallback,
+    )

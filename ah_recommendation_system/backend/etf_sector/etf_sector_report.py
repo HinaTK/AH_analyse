@@ -16,6 +16,10 @@ from ah_recommendation_system.backend.etf_sector.etf_universe_selector import (
     build_theme_breakout_block,
     select_hot_etf_candidates,
 )
+from ah_recommendation_system.backend.etf_sector.etf_portfolio import (
+    build_etf_quality_scores,
+    select_etf_portfolio,
+)
 from ah_recommendation_system.backend.etf_sector.ths_sources import (
     fetch_board_trend_items_ths,
     fetch_concept_summary_ths,
@@ -276,6 +280,24 @@ def generate_etf_sector_block(
     except Exception as e:
         etf_trend_err = f"etf_trend_fetch_failed: {e}"
         logger.warning(etf_trend_err)
+
+    if isinstance(etf_trend_payload, dict) and etf_trend_payload.get("recommendations"):
+        turnover_map = {}
+        for bucket in ("top_by_turnover", "top_gainers", "top_losers", "top_gainers_nav"):
+            for spot in (etf_payload.get(bucket) or []):
+                digits = "".join(ch for ch in str(spot.get("code") or "") if ch.isdigit())
+                code = digits[-6:]
+                if len(code) == 6 and spot.get("turnover") is not None:
+                    turnover_map[code] = spot.get("turnover")
+        rows = []
+        for item in etf_trend_payload.get("recommendations") or []:
+            row = dict(item)
+            code = "".join(ch for ch in str(row.get("code") or "") if ch.isdigit())[-6:]
+            if code in turnover_map:
+                row["turnover"] = turnover_map[code]
+            rows.append(row)
+        scored_rows = build_etf_quality_scores(rows)
+        etf_trend_payload["portfolio"] = select_etf_portfolio(scored_rows, limit=3, min_score=60.0)
 
     breakout_payload: Dict[str, Any] = {}
     breakout_err: Optional[str] = None

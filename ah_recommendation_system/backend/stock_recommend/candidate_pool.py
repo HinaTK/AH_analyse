@@ -29,6 +29,7 @@ DEFAULT_WEIGHTS = {
     "value_quality": 0.15,
     "capital": 0.15,
     "relative_strength": 0.15,
+    "event": 0.10,
 }
 
 # 排除：ST、停牌、明显仙股、异常 PE
@@ -48,7 +49,10 @@ class Candidate:
     main_net: Optional[float] = None
     fundamental_score: float = 0.0
     capital_score: float = 0.0
-    event_score: float = 0.0
+    event_score: Optional[float] = None
+    event_score_rule: Optional[float] = None
+    event_score_llm: Optional[float] = None
+    event_score_status: str = "no_relevant_news"
     composite: float = 0.0
     reasons: List[str] = field(default_factory=list)
     candidate_sources: List[str] = field(default_factory=list)
@@ -63,6 +67,11 @@ class Candidate:
     quality_grade: str = "C"
     data_quality: float = 0.0
     factor_scores: Dict[str, float] = field(default_factory=dict)
+    llm_review: str = ""
+    llm_catalysts: List[str] = field(default_factory=list)
+    llm_risks: List[str] = field(default_factory=list)
+    llm_evidence_refs: List[str] = field(default_factory=list)
+    hotspot_themes: List[str] = field(default_factory=list)
 
 
 def _safe_float(x: Any) -> Optional[float]:
@@ -187,6 +196,7 @@ def build_candidates(
             atr=_safe_float(r.get("atr")),
             support=_safe_float(r.get("support")),
             resistance=_safe_float(r.get("resistance")),
+            hotspot_themes=list(r.get("hotspot_themes") or []),
         )
 
         # Industry membership is provenance only; it is never an investment reason.
@@ -244,7 +254,11 @@ def build_candidates(
             c.evidence.append({"factor": "value", "statement": f"PE {pe:.1f}", "value": pe, "source": r.get("source") or "snapshot", "as_of": snapshot.date, "supports": pe <= max_pe, "falsifier": "估值升至筛选上限或盈利预期下修"})
         amount = _safe_float(r.get("amount"))
         volume_ratio = _safe_float(r.get("volume_ratio") or r.get("volume_ratio_20d"))
-        if amount is not None and amount >= 100_000_000 and (volume_ratio is None or volume_ratio >= 1.0):
+        # A completed daily bar is the liquidity reference during pre-market;
+        # a ratio around 0.8 still represents normal tradability and should
+        # not be rejected as if it were an illiquid security. Stronger
+        # expansion remains a separate scanner tag (>=1.5).
+        if amount is not None and amount >= 100_000_000 and (volume_ratio is None or volume_ratio >= 0.8):
             c.valid_dimensions.add("price_volume")
             c.evidence.append({"factor": "price_volume", "statement": f"成交额 {amount / 1e8:.2f}亿", "value": amount, "source": r.get("source") or "snapshot", "as_of": snapshot.date, "supports": amount >= 100_000_000, "falsifier": "成交额跌破1亿或量价背离"})
         if chg is not None and chg >= 0 and chg60 is not None and chg60 > 0:
@@ -270,16 +284,23 @@ def build_candidates(
             c.rejection_reasons.append("quality:历史日线覆盖未知")
         elif history_days < 60:
             c.rejection_reasons.append("quality:历史日线不足60个交易日")
-        for news in snapshot.events.get("stock_news") or []:
+        matched_event_scores: List[float] = []
+        events_payload = snapshot.events or {}
+        provider_failed = str(events_payload.get("status") or events_payload.get("event_status") or "") in {"provider_failed", "failed"}
+        for event_index, news in enumerate(events_payload.get("stock_news") or []):
             news_text = f"{news.get('title', '')} {news.get('content', '')}"
             if code not in news_text and name not in news_text:
                 continue
-            negative = any(word in news_text for word in ("立案", "调查", "处罚", "减持", "违约", "退市", "亏损"))
-            c.event_score = 0.0 if negative else 0.8
+            p0_negative = any(word in news_text for word in ("立案", "调查", "重大处罚", "财务造假", "退市风险", "重大违约", "业绩暴雷"))
+            ordinary_negative = any(word in news_text for word in ("减持", "诉讼", "亏损", "低于预期"))
+            negative = p0_negative or ordinary_negative
+            event_score = 0.15 if ordinary_negative and not p0_negative else 0.0 if p0_negative else 0.8
+            matched_event_scores.append(event_score)
             evidence = {
                 "factor": "event",
+                "event_id": str(news.get("event_id") or f"event-{code}-{event_index}"),
                 "statement": str(news.get("title") or "近期公告/新闻覆盖"),
-                "value": 0.0 if negative else 1.0,
+                "value": event_score,
                 "source": news.get("source") or "news",
                 "url": news.get("url"),
                 "as_of": news.get("published_at") or snapshot.date,
@@ -289,11 +310,23 @@ def build_candidates(
             c.evidence.append(evidence)
             if not negative:
                 c.valid_dimensions.add("event")
-            if negative:
-                c.rejection_reasons.append("p0:负面公告/新闻风险否决")
+            if p0_negative:
+                c.rejection_reasons.append("p0:重大负面公告/新闻风险否决")
+        if matched_event_scores:
+            c.event_score_rule = round(max(0.0, min(1.0, sum(matched_event_scores) / len(matched_event_scores))), 4)
+            c.event_score = c.event_score_rule
+            c.event_score_status = "available"
+        elif provider_failed:
+            c.event_score = None
+            c.event_score_rule = None
+            c.event_score_status = "provider_failed"
+        else:
+            c.event_score = 0.5
+            c.event_score_rule = 0.5
+            c.event_score_status = "no_relevant_news"
         if len(c.valid_dimensions) < 3:
             c.rejection_reasons.append("evidence:有效证据维度少于3个")
-        c.data_quality = round(min(1.0, len(c.valid_dimensions) / 5.0), 3)
+        c.data_quality = round(min(1.0, len(c.valid_dimensions) / 6.0), 3)
         c.quality_grade = "A" if len(c.valid_dimensions) >= 4 and history_days is not None and history_days >= 120 else "B" if len(c.valid_dimensions) >= 3 and history_days is not None and history_days >= 60 else "C"
 
         trend_factor = max(0.0, min(1.0, ((chg60 or 0.0) + 30.0) / 60.0)) if chg60 is not None else 0.0
@@ -320,14 +353,17 @@ def build_candidates(
             "value_quality": round(value_factor, 4),
             "capital": round(capital_factor, 4),
             "relative_strength": round(relative_factor, 4),
+            "event": c.event_score,
             "risk": round(risk_penalty, 4),
         }
+        event_factor = c.event_score if c.event_score is not None else 0.0
         c.composite = round(
             weights.get("trend", 0.25) * trend_factor
             + weights.get("price_volume", 0.20) * liquidity_factor
             + weights.get("value_quality", 0.15) * value_factor
             + weights.get("capital", 0.15) * capital_factor
             + weights.get("relative_strength", 0.15) * relative_factor
+            + weights.get("event", 0.10) * event_factor
             + risk_penalty,
             4,
         )
@@ -366,6 +402,9 @@ def to_dict_list(cands: Iterable[Candidate]) -> List[Dict[str, Any]]:
                 "fundamental_score": c.fundamental_score,
                 "capital_score": c.capital_score,
                 "event_score": c.event_score,
+                "event_score_rule": c.event_score_rule,
+                "event_score_llm": c.event_score_llm,
+                "event_score_status": c.event_score_status,
                 "composite": c.composite,
                 "reasons": c.reasons,
                 "candidate_sources": c.candidate_sources,
@@ -380,6 +419,11 @@ def to_dict_list(cands: Iterable[Candidate]) -> List[Dict[str, Any]]:
                 "support": c.support,
                 "resistance": c.resistance,
                 "factor_scores": c.factor_scores,
+                "llm_review": getattr(c, "llm_review", ""),
+                "llm_catalysts": list(getattr(c, "llm_catalysts", []) or []),
+                "llm_risks": list(getattr(c, "llm_risks", []) or []),
+                "llm_evidence_refs": list(getattr(c, "llm_evidence_refs", []) or []),
+                "hotspot_themes": list(getattr(c, "hotspot_themes", []) or []),
             }
         )
     return out

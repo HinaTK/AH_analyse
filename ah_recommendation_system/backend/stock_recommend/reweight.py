@@ -13,7 +13,125 @@ DEFAULT_WEIGHTS = {
     "value_quality": 0.15,
     "capital": 0.15,
     "relative_strength": 0.15,
+    "event": 0.10,
 }
+
+
+def decide_event_llm_weight(
+    *,
+    current_llm_weight: float,
+    sample_count: int,
+    rule_hit_rate: float,
+    llm_hit_rate: float,
+    rule_false_positive_rate: float = 0.0,
+    llm_false_positive_rate: float = 0.0,
+) -> Dict[str, Any]:
+    """Adjust only the message sub-weight after a sufficiently large sample."""
+    current = max(0.3, min(0.5, float(current_llm_weight)))
+    if sample_count < 100:
+        return {"applied": False, "llm_weight": current, "reason": "insufficient_samples"}
+    improvement = float(llm_hit_rate) - float(rule_hit_rate)
+    fp_change = float(llm_false_positive_rate) - float(rule_false_positive_rate)
+    if improvement >= 0.05 and fp_change <= 0.03:
+        new = min(0.5, current + 0.1)
+        return {"applied": new != current, "llm_weight": new, "reason": "llm_outperforms_rule"}
+    if improvement < 0 or fp_change > 0.03:
+        new = max(0.3, current - 0.1)
+        return {"applied": new != current, "llm_weight": new, "reason": "llm_underperforms_or_overalerts"}
+    return {"applied": False, "llm_weight": current, "reason": "no_significant_gain"}
+
+
+def evaluate_event_llm_calibration(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    current_share: float = 0.3,
+    qualifying_streak: int = 0,
+) -> Dict[str, Any]:
+    """Compare rule and mixed event probabilities using completed outcomes.
+
+    Positive streaks represent qualifying weeks and negative streaks represent
+    consecutive regressions.  Two consecutive weeks are required in either
+    direction before changing the share by 0.1.
+    """
+    records = []
+    for row in rows:
+        try:
+            outcome = int(row.get("outcome"))
+            rule = float(row.get("rule_score"))
+            llm = float(row.get("llm_score"))
+        except (TypeError, ValueError):
+            continue
+        if outcome not in {0, 1} or not (0 <= rule <= 1 and 0 <= llm <= 1):
+            continue
+        records.append((outcome, rule, llm, bool(row.get("p0"))))
+
+    share = max(0.3, min(0.5, float(current_share)))
+    if not records:
+        return {
+            "applied": False,
+            "llm_share": share,
+            "qualifying_streak": 0,
+            "reason": "insufficient_samples",
+            "metrics": {"sample_count": 0},
+        }
+
+    mixed_rows = [(outcome, rule, (1.0 - share) * rule + share * llm, p0) for outcome, rule, llm, p0 in records]
+    rule_brier = sum((rule - outcome) ** 2 for outcome, rule, _, _ in mixed_rows) / len(mixed_rows)
+    mixed_brier = sum((mixed - outcome) ** 2 for outcome, _, mixed, _ in mixed_rows) / len(mixed_rows)
+    rule_accuracy = sum((rule >= 0.5) == bool(outcome) for outcome, rule, _, _ in mixed_rows) / len(mixed_rows)
+    mixed_accuracy = sum((mixed >= 0.5) == bool(outcome) for outcome, _, mixed, _ in mixed_rows) / len(mixed_rows)
+    p0_rows = [row for row in mixed_rows if row[3] and row[0] == 0]
+    rule_p0_misses = sum(rule >= 0.5 for _, rule, _, _ in p0_rows)
+    mixed_p0_misses = sum(mixed >= 0.5 for _, _, mixed, _ in p0_rows)
+    brier_improvement = ((rule_brier - mixed_brier) / rule_brier * 100.0) if rule_brier else 0.0
+    accuracy_improvement = (mixed_accuracy - rule_accuracy) * 100.0
+    metrics = {
+        "sample_count": len(mixed_rows),
+        "rule_brier": round(rule_brier, 6),
+        "mixed_brier": round(mixed_brier, 6),
+        "brier_improvement_pct": round(brier_improvement, 3),
+        "rule_accuracy_pct": round(rule_accuracy * 100.0, 3),
+        "mixed_accuracy_pct": round(mixed_accuracy * 100.0, 3),
+        "accuracy_improvement_pp": round(accuracy_improvement, 3),
+        "rule_p0_misses": rule_p0_misses,
+        "mixed_p0_misses": mixed_p0_misses,
+    }
+    qualifies = (
+        len(mixed_rows) >= 100
+        and brier_improvement >= 5.0
+        and accuracy_improvement >= 3.0
+        and mixed_p0_misses <= rule_p0_misses
+    )
+    regresses = (
+        len(mixed_rows) >= 100
+        and (brier_improvement < 0 or accuracy_improvement < 0 or mixed_p0_misses > rule_p0_misses)
+    )
+    if qualifies:
+        streak = qualifying_streak + 1 if qualifying_streak > 0 else 1
+    elif regresses:
+        streak = qualifying_streak - 1 if qualifying_streak < 0 else -1
+    else:
+        streak = 0
+
+    applied = False
+    reason = "quality_threshold_not_met"
+    if streak >= 2 and share < 0.5:
+        share = round(min(0.5, share + 0.1), 1)
+        applied, streak, reason = True, 0, "two_week_outperformance"
+    elif streak <= -2 and share > 0.3:
+        share = round(max(0.3, share - 0.1), 1)
+        applied, streak, reason = True, 0, "two_week_regression"
+    elif qualifies:
+        reason = "awaiting_second_qualifying_week"
+    elif regresses:
+        reason = "awaiting_second_regression_week"
+    return {
+        "applied": applied,
+        "llm_share": share,
+        "qualifying_streak": streak,
+        "reason": reason,
+        "metrics": metrics,
+    }
 
 
 def load_factor_weights(path: Path) -> Dict[str, float]:
@@ -31,6 +149,39 @@ def load_factor_weights(path: Path) -> Dict[str, float]:
         return candidate
     except Exception:
         return dict(DEFAULT_WEIGHTS)
+
+
+def load_event_llm_share(path: Path) -> float:
+    """Load the independently calibrated share inside the event sub-score."""
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        value = float((payload.get("event_llm_calibration") or {}).get("llm_share", 0.3))
+        return max(0.3, min(0.5, value))
+    except Exception:
+        return 0.3
+
+
+def build_event_calibration_records(rows: Iterable[Mapping[str, Any]]) -> list[Dict[str, Any]]:
+    records: list[Dict[str, Any]] = []
+    for row in rows:
+        for pick in row.get("per_pick") or []:
+            if not isinstance(pick, Mapping) or pick.get("return_T5_pct") is None:
+                continue
+            factors = pick.get("factors") or {}
+            try:
+                rule_score = float(factors.get("event_score_rule"))
+                llm_score = float(factors.get("event_score_llm"))
+                outcome = 1 if float(pick.get("return_T5_pct")) > 0 else 0
+            except (TypeError, ValueError):
+                continue
+            risk_flags = [str(item) for item in (pick.get("risk_flags") or [])]
+            records.append({
+                "outcome": outcome,
+                "rule_score": rule_score,
+                "llm_score": llm_score,
+                "p0": any(flag.startswith("p0") for flag in risk_flags),
+            })
+    return records
 
 
 def adjust_weights(
@@ -132,10 +283,24 @@ def run_weekly_reweight(
     if weights_path is None:
         weights_path = ledgers_dir.parent.parent / "ah_recommendation_system" / "backend" / "data" / "stock_recommend" / "factor_weights.json"
     weights_path = Path(weights_path)
+    ledger_rows = list(_read_jsonl(ledger_path))
     old = load_factor_weights(weights_path) if weights_path.exists() else dict(DEFAULT_WEIGHTS)
-    stats = aggregate_factor_stats(_read_jsonl(ledger_path))
+    stats = aggregate_factor_stats(ledger_rows)
     decision = decide_weekly_weights(old, stats, max_delta=max_delta)
     new = decision["weights"]
+    old_calibration: Dict[str, Any] = {}
+    if weights_path.exists():
+        try:
+            old_calibration = dict(
+                (json.loads(weights_path.read_text(encoding="utf-8")).get("event_llm_calibration") or {})
+            )
+        except Exception:
+            old_calibration = {}
+    event_calibration = evaluate_event_llm_calibration(
+        build_event_calibration_records(ledger_rows),
+        current_share=float(old_calibration.get("llm_share", 0.3)),
+        qualifying_streak=int(old_calibration.get("qualifying_streak", 0)),
+    )
     weights_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -145,6 +310,13 @@ def run_weekly_reweight(
         "stats": stats,
         "applied": decision["applied"],
         "decision_reason": decision["reason"],
+        "event_llm_calibration": event_calibration,
     }
     weights_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"ok": True, "weights_path": str(weights_path), "weights": new, "stats": stats}
+    return {
+        "ok": True,
+        "weights_path": str(weights_path),
+        "weights": new,
+        "stats": stats,
+        "event_llm_calibration": event_calibration,
+    }

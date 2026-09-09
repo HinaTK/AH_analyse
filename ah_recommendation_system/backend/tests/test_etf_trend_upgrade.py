@@ -94,6 +94,34 @@ class TestEtfTrendHistoryHelpers(unittest.TestCase):
             self.assertEqual(history[0]["strongest_summary"], "沪深300ETF")
 
 
+class TestEtfTrendMetrics(unittest.TestCase):
+    def test_build_one_etf_exposes_60d_max_drawdown(self):
+        from ah_recommendation_system.backend.etf_sector.etf_trend_analysis import (
+            DEFAULT_PARAMETERS,
+            EtfUniverseItem,
+            _build_one_etf,
+        )
+
+        dates = pd.date_range("2025-01-01", periods=140, freq="B")
+        closes = [100.0 + min(i, 80) * 0.2 for i in range(140)]
+        closes[120:125] = [110.0, 100.0, 98.0, 99.0, 101.0]
+        history = pd.DataFrame({"date": dates, "close": closes, "high": closes})
+        item = EtfUniverseItem("510300", "沪深300ETF", "宽基", "大盘核心")
+        with patch(
+            "ah_recommendation_system.backend.etf_sector.etf_trend_analysis.fetch_etf_history_with_fallback",
+            return_value=(history, "test"),
+        ):
+            result = _build_one_etf(
+                item,
+                start_date="20250101",
+                end_date="20260101",
+                params=DEFAULT_PARAMETERS,
+            )
+
+        self.assertIn("max_drawdown_60d_pct", result)
+        self.assertLess(result["max_drawdown_60d_pct"], 0)
+
+
 class TestEtfTrendBacktest(unittest.TestCase):
     def test_backtest_from_histories_generates_metrics(self):
         from ah_recommendation_system.backend.backtest.etf_trend_backtest import (

@@ -18,7 +18,7 @@ $weeklyAction = New-ScheduledTaskAction -Execute $PythonExe -Argument $weeklyArg
 $preTrigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "08:30"
 $postTrigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "18:30"
 $weeklyTrigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Friday -At "19:00"
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 1) -MultipleInstances IgnoreNew
 
 Register-ScheduledTask -TaskName "AHAnalyse-PreMarket" -Action $preAction -Trigger $preTrigger -Settings $settings -Description "A-share pre-market recommendation" -Force
 Register-ScheduledTask -TaskName "AHAnalyse-PostMarket" -Action $postAction -Trigger $postTrigger -Settings $settings -Description "A-share post-market review" -Force

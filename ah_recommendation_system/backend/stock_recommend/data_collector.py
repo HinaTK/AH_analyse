@@ -10,6 +10,7 @@ Each collector degrades gracefully: returns {} on failure and logs a warning.
 from __future__ import annotations
 
 import time
+import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -65,6 +66,24 @@ def _is_recent_timestamp(value: Any, *, max_age_days: int = 4) -> bool:
         except (TypeError, ValueError):
             return False
     return datetime.now() - observed <= timedelta(days=max_age_days)
+
+
+def _snapshot_is_usable(rows: List[Dict[str, Any]]) -> bool:
+    """Reject a fresh-but-empty pre-market snapshot before fallback routing."""
+    if not rows:
+        return False
+    def present(row: Dict[str, Any], key: str) -> bool:
+        value = row.get(key)
+        return value is not None and value != "" and value != 0
+    # Keep the single-row unit/integration probe useful; real market pages
+    # must have broad price and activity coverage to enter the pipeline.
+    if len(rows) == 1:
+        return present(rows[0], "price")
+    price_ratio = sum(present(row, "price") for row in rows) / len(rows)
+    activity_ratio = sum(
+        present(row, "change_pct") or present(row, "amount") for row in rows
+    ) / len(rows)
+    return price_ratio >= 0.6 and activity_ratio >= 0.4
 
 
 # ---------- mock data (used when price_fetcher.use_mock_data is True) ----------
@@ -142,10 +161,11 @@ def _collect_a_share_spot(limit: int = 200) -> List[Dict[str, Any]]:
     try:
         from ah_recommendation_system.backend.stock_recommend.hithink_client import HithinkClient
         hithink_rows = HithinkClient().market_snapshot(limit=limit)
-        if hithink_rows and _is_recent_timestamp(hithink_rows[0].get("observed_at")):
+        if hithink_rows and _is_recent_timestamp(hithink_rows[0].get("observed_at")) and _snapshot_is_usable(hithink_rows):
             return [dict(row, source="hithink_financial_api") for row in hithink_rows]
         if hithink_rows:
-            logger.warning("Financial-API snapshot is stale; falling through to AKShare")
+            reason = "stale" if not _is_recent_timestamp(hithink_rows[0].get("observed_at")) else "incomplete"
+            logger.warning(f"Financial-API snapshot {reason}; falling through to AKShare")
     except Exception as exc:
         logger.warning(f"Financial-API snapshot unavailable: {exc}")
     if ak is None:
@@ -316,37 +336,165 @@ def _collect_news_em(limit: int = 100, codes: Optional[List[str]] = None) -> Lis
         "新闻内容": "content",
         "发布时间": "published_at",
         "来源": "source",
+        "文章来源": "source",
         "网址": "url",
+        "新闻链接": "url",
     }
     records: List[Dict[str, Any]] = []
     for code in (codes or [])[: max(1, limit)]:
-        df = _safe_call(lambda symbol=str(code): ak.stock_news_em(symbol=symbol), attempts=2)
+        def fetch_news(symbol: str = str(code)):
+            with pd.option_context("future.infer_string", False):
+                return ak.stock_news_em(symbol=symbol)
+
+        df = _safe_call(fetch_news, attempts=2)
         if df is None or df.empty:
             continue
         df = df.rename(columns=rename)
-        keep = [c for c in rename.values() if c in df.columns]
+        keep = [column for column in dict.fromkeys(rename.values()) if column in df.columns]
         records.extend(_df_to_records(df[keep]))
         if len(records) >= limit:
             break
     return records[:limit]
 
 
+def _collect_notice_news(
+    limit: int = 100,
+    codes: Optional[List[str]] = None,
+    *,
+    ak_module: Any = None,
+) -> List[Dict[str, Any]]:
+    """Collect dated company announcements as a candidate-news fallback."""
+    provider = ak if ak_module is None else ak_module
+    if provider is None:
+        return []
+    today = datetime.now().strftime("%Y%m%d")
+    df = _safe_call(
+        lambda: provider.stock_notice_report(symbol="全部", date=today),
+        attempts=2,
+    )
+    if df is None or df.empty:
+        return []
+    wanted = {str(code).zfill(6) for code in (codes or []) if str(code)}
+    output: List[Dict[str, Any]] = []
+    for raw in df.head(max(limit * 10, limit)).to_dict("records"):
+        code = str(raw.get("代码") or raw.get("股票代码") or raw.get("code") or "").zfill(6)
+        if wanted and code not in wanted:
+            continue
+        title = str(raw.get("公告标题") or raw.get("标题") or raw.get("title") or "").strip()
+        if not title:
+            continue
+        output.append({
+            "code": code,
+            "name": raw.get("名称") or raw.get("股票简称") or "",
+            "title": title,
+            "content": raw.get("公告类型") or raw.get("类型") or "",
+            "published_at": str(raw.get("公告日期") or raw.get("日期") or ""),
+            "source": "上市公司公告聚合",
+            "url": raw.get("网址") or raw.get("链接") or raw.get("url") or "",
+        })
+        if len(output) >= limit:
+            break
+    return output
+
+
+def _collect_macro_news_fallback(
+    limit: int = 80,
+    *,
+    ak_module: Any = None,
+) -> List[Dict[str, Any]]:
+    """Collect non-RSS macro/global news from independent AKShare adapters."""
+    provider = ak if ak_module is None else ak_module
+    if provider is None:
+        return []
+    today = datetime.now().strftime("%Y%m%d")
+    sources = (
+        ("东方财富全球财经", "stock_info_global_em", {}),
+        ("新浪全球财经", "stock_info_global_sina", {}),
+        ("百度宏观资讯", "news_economic_baidu", {"date": today}),
+    )
+    output: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for source_name, method_name, kwargs in sources:
+        method = getattr(provider, method_name, None)
+        if method is None:
+            continue
+
+        def fetch(method=method, kwargs=kwargs):
+            try:
+                return method(**kwargs)
+            except TypeError:
+                return method()
+
+        df = _safe_call(fetch, attempts=2)
+        if df is None or df.empty:
+            continue
+        for raw in df.head(limit).to_dict("records"):
+            title = str(raw.get("标题") or raw.get("新闻标题") or raw.get("title") or "").strip()
+            if not title or title in seen:
+                continue
+            seen.add(title)
+            output.append({
+                "title": title,
+                "summary": raw.get("摘要") or raw.get("内容") or raw.get("新闻内容") or "",
+                "published_at": str(raw.get("发布时间") or raw.get("时间") or raw.get("日期") or ""),
+                "source": source_name,
+                "url": raw.get("链接") or raw.get("网址") or raw.get("url") or "",
+            })
+            if len(output) >= limit:
+                return output
+    return output
+
+
 def collect_events(limit: int = 100, codes: Optional[List[str]] = None) -> Dict[str, Any]:
-    """事件面汇总：个股新闻 + 宏观 RSS。"""
+    """事件面汇总：个股新闻、公告、RSS和非RSS宏观兜底。"""
     news = _collect_news_em(limit=limit, codes=codes)
+    notices = _collect_notice_news(limit=limit, codes=codes) if codes and not _is_mock_mode() else []
+    existing_news = {(str(item.get("title") or ""), str(item.get("published_at") or "")) for item in news}
+    news.extend(
+        item for item in notices
+        if (str(item.get("title") or ""), str(item.get("published_at") or "")) not in existing_news
+    )
+    news = news[:limit]
     macro: Dict[str, Any] = {"source": "mock", "items": []} if _is_mock_mode() else {}
-    if not _is_mock_mode():
+    if not _is_mock_mode() and not codes:
         try:
             macro = fetch_news_digest(max_items=80)
         except Exception as e:
             logger.warning(f"rss digest failed: {e}")
+        fallback_macro = _collect_macro_news_fallback(limit=80)
+        macro = dict(macro or {})
+        macro_items = list(macro.get("items") or [])
+        seen_macro = {str(item.get("title") or "") for item in macro_items}
+        macro_items.extend(item for item in fallback_macro if str(item.get("title") or "") not in seen_macro)
+        macro["items"] = macro_items[:80]
+        macro["count"] = len(macro["items"])
+        macro["source"] = "rss+akshare_global_macro"
+
+    def with_event_id(item: Dict[str, Any], prefix: str) -> Dict[str, Any]:
+        value = dict(item)
+        raw = f"{value.get('url', '')}|{value.get('title', '')}|{value.get('published_at', '')}"
+        value.setdefault("event_id", f"{prefix}-{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:12]}")
+        return value
+
+    news = [with_event_id(item, "stock") for item in news]
+    if macro.get("items"):
+        macro = dict(macro)
+        macro["items"] = [with_event_id(item, "macro") for item in macro.get("items") or []]
+    status = "available" if news or macro.get("items") else "provider_failed" if ak is None and not _is_mock_mode() else "no_relevant_news"
 
     payload = {
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "source": "akshare.stock_news_em+rss",
+        "source": "akshare.stock_news_em+announcements+rss+global_macro",
         "stock_news": news,
         "macro_news": macro,
         "count": len(news),
+        "status": status,
+        "provider_health": {
+            "akshare_stock_news": "healthy" if news else ("disabled" if ak is None else "empty"),
+            "company_notices": "healthy" if notices else "empty",
+            "rss": "healthy" if macro.get("count", 0) else "empty",
+            "macro_fallback": "healthy" if not codes and macro.get("source") == "rss+akshare_global_macro" and macro.get("count", 0) else "empty",
+        },
     }
     logger.info(f"events stock_news={len(news)} macro_count={macro.get('count', 0)}")
     return payload
@@ -360,6 +508,7 @@ class CollectedSnapshot:
     fundamental: Dict[str, Any] = field(default_factory=dict)
     capital: Dict[str, Any] = field(default_factory=dict)
     events: Dict[str, Any] = field(default_factory=dict)
+    cross_market: Dict[str, Any] = field(default_factory=dict)
     errors: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -368,6 +517,7 @@ class CollectedSnapshot:
             "fundamental": self.fundamental,
             "capital": self.capital,
             "events": self.events,
+            "cross_market": self.cross_market,
             "errors": self.errors,
         }
 
@@ -393,6 +543,17 @@ def collect_all(limit: int = 6000) -> CollectedSnapshot:
     except Exception as e:
         snap.errors.append(f"events:{e}")
         logger.warning(f"collect_events failed: {e}")
+
+    if not _is_mock_mode():
+        try:
+            from ah_recommendation_system.backend.stock_recommend.cross_market import collect_cross_market
+
+            snap.cross_market = collect_cross_market()
+            if snap.cross_market.get("status") == "failed":
+                snap.errors.append("cross_market:all_sources_failed")
+        except Exception as e:
+            snap.errors.append(f"cross_market:{type(e).__name__}")
+            logger.warning(f"collect_cross_market failed: {type(e).__name__}")
 
     return snap
 

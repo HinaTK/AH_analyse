@@ -14,6 +14,13 @@ import pandas as pd
 import requests
 from loguru import logger
 
+try:
+	import baostock as bs  # type: ignore
+except Exception:  # pragma: no cover
+	bs = None  # type: ignore
+
+from ah_recommendation_system.backend.stock_recommend.hithink_client import HithinkClient
+
 
 _A_SHARE_SUFFIXES = (".SH", ".SZ")
 _H_SHARE_SUFFIX = ".HK"
@@ -80,6 +87,57 @@ class PriceFetcher:
 
 		self._fx_cache: Optional[tuple[datetime, float]] = None
 		self._fx_cache_ttl_seconds = 3600
+		self._ak_history_failures = 0
+		self._ak_history_open_until = 0.0
+		self._ak_history_cooldown = 60.0
+		self.history_source_counts: Dict[str, int] = {}
+		self.history_errors: list[str] = []
+
+	def _record_history_source(self, source: str) -> None:
+		self.history_source_counts[source] = self.history_source_counts.get(source, 0) + 1
+
+	def provider_health(self) -> Dict[str, object]:
+		return {
+			"history_sources": dict(self.history_source_counts),
+			"akshare_history": "open" if time.time() < self._ak_history_open_until else "healthy",
+			"history_errors": list(self.history_errors[-10:]),
+		}
+
+	def _get_hithink_history(self, normalized: str, start: str, end: str) -> pd.DataFrame:
+		client = HithinkClient()
+		if not client.enabled:
+			return pd.DataFrame()
+		start_ms = int(datetime.strptime(start, "%Y%m%d").timestamp() * 1000)
+		end_ms = int(datetime.strptime(end, "%Y%m%d").timestamp() * 1000)
+		rows = client.historical(normalized, start_ms=start_ms, end_ms=end_ms)
+		if not rows:
+			return pd.DataFrame()
+		df = pd.DataFrame(rows)
+		if "date" in df.columns:
+			unit = "ms" if pd.api.types.is_numeric_dtype(df["date"]) else None
+			df["date"] = pd.to_datetime(df["date"], errors="coerce", unit=unit).dt.tz_localize(None)
+		return df
+
+	def _get_baostock_history(self, normalized: str, start: str, end: str) -> pd.DataFrame:
+		if bs is None:
+			return pd.DataFrame()
+		login = bs.login()
+		if getattr(login, "error_code", "1") != "0":
+			return pd.DataFrame()
+		try:
+			code = ("sh." if normalized.startswith(("5", "6", "9")) else "sz.") + normalized
+			result = bs.query_history_k_data_plus(
+				code, "date,open,high,low,close,volume,amount", start_date=f"{start[:4]}-{start[4:6]}-{start[6:]}",
+				end_date=f"{end[:4]}-{end[4:6]}-{end[6:]}", frequency="d", adjustflag="2",
+			)
+			if getattr(result, "error_code", "1") != "0":
+				return pd.DataFrame()
+			rows = []
+			while result.next():
+				rows.append(result.get_row_data())
+			return pd.DataFrame(rows, columns=result.fields)
+		finally:
+			bs.logout()
 
 	def _get_mock_price_data(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
 		"""生成模拟价格数据"""
@@ -135,6 +193,23 @@ class PriceFetcher:
 		start = start_date or (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
 		end = end_date or datetime.now().strftime("%Y%m%d")
 
+		# Prefer the official Financial-API when configured, then an independent
+		# historical provider.  AKShare remains the final compatibility fallback.
+		for source, provider in (("hithink_financial_api", self._get_hithink_history), ("baostock", self._get_baostock_history)):
+			try:
+				df = provider(normalized, start, end)
+				if df is not None and not df.empty:
+					self._record_history_source(source)
+					self.cache[cache_key] = (datetime.now(), df)
+					return df
+			except Exception as e:
+				self.history_errors.append(f"{source}:{type(e).__name__}")
+				logger.warning(f"Historical provider {provider.__name__} failed for {normalized}: {e}")
+
+		if time.time() < self._ak_history_open_until:
+			logger.warning(f"AKShare historical circuit open; skipping {normalized}")
+			return pd.DataFrame()
+
 		last_exc: Optional[Exception] = None
 		for attempt in range(3):
 			try:
@@ -164,12 +239,19 @@ class PriceFetcher:
 				)
 				df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
 				self.cache[cache_key] = (datetime.now(), df)
+				self._ak_history_failures = 0
+				self._record_history_source("akshare")
 				return df
 			except Exception as e:
 				last_exc = e
+				self._ak_history_failures += 1
+				if self._ak_history_failures >= 2:
+					self._ak_history_open_until = time.time() + self._ak_history_cooldown
+					break
 				time.sleep(0.6 * (attempt + 1))
 
 		logger.warning(f"Failed to fetch A-share price {symbol} (normalized={normalized}): {last_exc}")
+		self.history_errors.append(f"akshare:{type(last_exc).__name__ if last_exc else 'empty'}")
 		return pd.DataFrame()
 
 	def get_h_share_price(self, symbol: str, start_date: str | None = None, end_date: str | None = None) -> pd.DataFrame:

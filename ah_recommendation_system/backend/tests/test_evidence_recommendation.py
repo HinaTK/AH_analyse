@@ -1,6 +1,9 @@
 import unittest
 from datetime import datetime, timedelta
+from pathlib import Path
 from unittest.mock import patch
+
+import pandas as pd
 
 
 class TestEvidenceRecommendation(unittest.TestCase):
@@ -86,6 +89,41 @@ class TestEvidenceRecommendation(unittest.TestCase):
         self.assertFalse(result["available"])
         self.assertEqual(result["reason"], "missing_api_key")
 
+    def test_hithink_api_key_supports_ths_key_download_filename(self):
+        from ah_recommendation_system.backend.stock_recommend.hithink_client import resolve_api_key
+
+        original_read_text = Path.read_text
+
+        def read_test_key(path, *args, **kwargs):
+            if str(path).replace("/", "\\").endswith(r"Downloads\ths_key.txt"):
+                return "test-key\n"
+            return original_read_text(path, *args, **kwargs)
+
+        with patch.dict(
+            "os.environ",
+            {"HITHINK_FINANCE_API_KEY": "", "HITHINK_FINANCE_API_KEY_FILE": ""},
+            clear=False,
+        ), patch.object(Path, "read_text", read_test_key):
+            self.assertEqual(resolve_api_key(), "test-key")
+
+    def test_feishu_webhook_extracts_url_from_wrapped_file_value(self):
+        from ah_recommendation_system.backend.stock_recommend.feishu_pusher import resolve_webhook
+
+        value = "{web_hook, https://open.feishu.cn/open-apis/bot/v2/hook/abc-123}"
+        self.assertEqual(resolve_webhook(value), "https://open.feishu.cn/open-apis/bot/v2/hook/abc-123")
+
+    def test_feishu_webhook_reads_local_key_file_when_env_is_missing(self):
+        from ah_recommendation_system.backend.stock_recommend.feishu_pusher import resolve_webhook
+
+        with patch.dict("os.environ", {"AH_FEISHU_WEBHOOK": ""}, clear=False), patch(
+            "ah_recommendation_system.backend.stock_recommend.feishu_pusher.Path.read_text",
+            return_value="{web_hook, https://open.feishu.cn/open-apis/bot/v2/hook/file-123}",
+        ):
+            self.assertEqual(
+                resolve_webhook(),
+                "https://open.feishu.cn/open-apis/bot/v2/hook/file-123",
+            )
+
     def test_hithink_snapshot_uses_documented_field_names(self):
         from ah_recommendation_system.backend.stock_recommend.hithink_client import HithinkClient
 
@@ -166,6 +204,25 @@ class TestEvidenceRecommendation(unittest.TestCase):
         self.assertTrue(any("估值" in reason for reason in candidate.rejection_reasons))
         self.assertTrue(any("市值" in reason for reason in candidate.rejection_reasons))
 
+    def test_price_volume_accepts_normal_liquidity_ratio_from_completed_bar(self):
+        from ah_recommendation_system.backend.stock_recommend.candidate_pool import build_candidates
+        from ah_recommendation_system.backend.stock_recommend.data_collector import CollectedSnapshot
+
+        snapshot = CollectedSnapshot(
+            date="2026-09-08",
+            fundamental={"rows": [{
+                "code": "000007", "name": "liquidity-test", "price": 10,
+                "change_pct": 0.5, "change_60d_pct": 12,
+                "amount": 240_000_000, "volume_ratio": 0.9,
+                "pe": 20, "market_cap": 10_000_000_000,
+                "history_days": 120,
+            }]},
+            capital={"rows": [{"code": "000007", "main_net": 20_000_000}]},
+        )
+        candidate = build_candidates(snapshot)[0]
+
+        self.assertIn("price_volume", candidate.valid_dimensions)
+
     def test_selector_limits_formal_picks_to_one_per_industry(self):
         from ah_recommendation_system.backend.stock_recommend.candidate_pool import Candidate
         from ah_recommendation_system.backend.stock_recommend.rule_selector import select_by_rules
@@ -233,10 +290,10 @@ class TestEvidenceRecommendation(unittest.TestCase):
 
         self.assertEqual(
             set(candidate.factor_scores),
-            {"trend", "price_volume", "value_quality", "capital", "relative_strength", "risk"},
+            {"trend", "price_volume", "value_quality", "capital", "relative_strength", "event", "risk"},
         )
         self.assertLess(candidate.factor_scores["risk"], 0)
-        self.assertAlmostEqual(candidate.composite, 0.8016, places=4)
+        self.assertAlmostEqual(candidate.composite, 0.8516, places=4)
 
     def test_formal_pick_exposes_evidence_factor_scores_directly(self):
         from ah_recommendation_system.backend.stock_recommend.candidate_pool import Candidate
@@ -317,6 +374,19 @@ class TestEvidenceRecommendation(unittest.TestCase):
         self.assertEqual(enriched[0]["pb"], 8)
         self.assertEqual(enriched[0]["market_cap"], 1_000_000_000_000)
 
+    def test_hithink_enrichment_does_not_erase_existing_fields_when_optional_calls_fail(self):
+        from ah_recommendation_system.backend.stock_recommend.hithink_client import HithinkClient
+
+        client = HithinkClient(api_key="secret")
+        rows = [{"code": "600519", "name": "贵州茅台", "price": 1500, "pe": 20, "pb": 6, "market_cap": 9e11, "turnover_pct": 0.2}]
+        with patch.object(client, "ticker_names", return_value={}), patch.object(
+            client, "valuations", return_value={}
+        ), patch.object(client, "auction_metrics", return_value={}):
+            enriched = client.enrich_snapshot(rows)
+
+        self.assertEqual(enriched[0]["pe"], 20)
+        self.assertEqual(enriched[0]["market_cap"], 9e11)
+
     def test_hithink_full_market_collection_defers_expensive_enrichment(self):
         from ah_recommendation_system.backend.stock_recommend.data_collector import _collect_a_share_spot
 
@@ -330,6 +400,27 @@ class TestEvidenceRecommendation(unittest.TestCase):
 
         self.assertEqual(rows[0]["source"], "hithink_financial_api")
         enrich.assert_not_called()
+
+    def test_incomplete_hithink_snapshot_falls_through_to_akshare(self):
+        from ah_recommendation_system.backend.stock_recommend.data_collector import _collect_a_share_spot
+
+        class FakeAk:
+            @staticmethod
+            def stock_zh_a_spot_em():
+                return pd.DataFrame([{
+                    "代码": "600519", "名称": "贵州茅台", "最新价": 1500.0,
+                    "涨跌幅": 1.2, "成交额": 800000000.0,
+                    "市盈率-动态": 22.0, "总市值": 2.0e12,
+                }])
+
+        with patch("ah_recommendation_system.backend.stock_recommend.data_collector._is_mock_mode", return_value=False), patch(
+            "ah_recommendation_system.backend.stock_recommend.hithink_client.HithinkClient.market_snapshot",
+            return_value=[{"code": "600519", "name": "600519", "price": None, "change_pct": None, "amount": 0, "observed_at": int(datetime.now().timestamp() * 1000)} for _ in range(10)],
+        ), patch("ah_recommendation_system.backend.stock_recommend.data_collector.ak", FakeAk()):
+            rows = _collect_a_share_spot(limit=6000)
+
+        self.assertEqual(rows[0]["price"], 1500.0)
+        self.assertNotEqual(rows[0].get("source"), "hithink_financial_api")
 
     def test_hithink_snapshot_preserves_zero_change_and_response_timestamp(self):
         from ah_recommendation_system.backend.stock_recommend.hithink_client import HithinkClient
@@ -352,6 +443,44 @@ class TestEvidenceRecommendation(unittest.TestCase):
             rows = client.dragon_tiger(board_type="org")
 
         self.assertEqual(rows[0]["thscode"], "600000.SH")
+
+    def test_hithink_valuation_batch_failure_falls_back_per_symbol(self):
+        from ah_recommendation_system.backend.stock_recommend.hithink_client import HithinkClient
+
+        client = HithinkClient(api_key="secret")
+        calls = []
+
+        def fake_get(path, params):
+            calls.append(params["thscodes"])
+            if "," in params["thscodes"]:
+                raise RuntimeError("invalid symbol in batch")
+            if params["thscodes"] == "600519.SH":
+                return {"item": [{"thscode": "600519.SH", "pe_ttm": 22}]}
+            raise RuntimeError("unknown symbol")
+
+        with patch.object(client, "_get", side_effect=fake_get):
+            result = client.valuations(["600519", "000003"])
+
+        self.assertEqual(result["600519"]["pe_ttm"], 22)
+        self.assertEqual(calls[0], "600519.SH,000003.SZ")
+        self.assertIn("000003.SZ", calls)
+
+    def test_hithink_auction_batch_failure_keeps_valid_symbols(self):
+        from ah_recommendation_system.backend.stock_recommend.hithink_client import HithinkClient
+
+        client = HithinkClient(api_key="secret")
+
+        def fake_get(path, params):
+            if "," in params["thscodes"]:
+                raise RuntimeError("invalid symbol in batch")
+            if params["thscodes"] == "600519.SH":
+                return {"item": [{"thscode": "600519.SH", "float_market_cap": 1_000_000_000_000}]}
+            raise RuntimeError("unknown symbol")
+
+        with patch.object(client, "_get", side_effect=fake_get):
+            result = client.auction_metrics(["600519", "000003"])
+
+        self.assertEqual(result["600519"]["float_market_cap"], 1_000_000_000_000)
 
     def test_scanner_uses_cross_sectional_liquidity_when_history_is_absent(self):
         from ah_recommendation_system.backend.stock_recommend.dynamic_scanner import scan_snapshot
@@ -376,6 +505,26 @@ class TestEvidenceRecommendation(unittest.TestCase):
             result = client.focus_universe(["半导体"])
 
         self.assertEqual(result["半导体"][0]["code"], "688981")
+
+    def test_hithink_focus_alias_expands_broad_theme_to_catalog_industries(self):
+        from ah_recommendation_system.backend.stock_recommend.hithink_client import HithinkClient
+
+        client = HithinkClient(api_key="secret")
+        with patch.object(
+            client,
+            "industry_catalog",
+            return_value=[
+                {"thscode": "881121.TI", "name": "半导体"},
+                {"thscode": "881123.TI", "name": "通信设备"},
+            ],
+        ), patch.object(
+            client,
+            "index_constituents",
+            side_effect=lambda code: [{"ticker": "688981", "name": "中芯国际"}] if code == "881121.TI" else [],
+        ):
+            result = client.focus_universe(["科技"])
+
+        self.assertEqual(result["科技"][0]["code"], "688981")
 
     def test_report_quality_counts_eligible_candidates_not_only_picks(self):
         from ah_recommendation_system.backend.stock_recommend.report_builder import build_report
@@ -435,7 +584,7 @@ class TestEvidenceRecommendation(unittest.TestCase):
         factors = {name: 0.8 for name in DEFAULT_WEIGHTS}
         stats = aggregate_factor_stats([{"per_pick": [{"factors": factors, "return_T5_pct": 2.0}]}])
 
-        self.assertEqual(set(stats), {"trend", "price_volume", "value_quality", "capital", "relative_strength"})
+        self.assertEqual(set(stats), {"trend", "price_volume", "value_quality", "capital", "relative_strength", "event"})
         self.assertTrue(all(item["sample_count"] == 1 for item in stats.values()))
 
     def test_non_selected_eligible_candidates_are_returned_as_observations(self):
@@ -577,6 +726,74 @@ class TestEvidenceRecommendation(unittest.TestCase):
         self.assertEqual(event["source"], "交易所公告")
         self.assertEqual(event["url"], "https://example.invalid/notice")
         self.assertTrue(any(reason.startswith("p0") for reason in candidate.rejection_reasons))
+
+    def test_notice_fallback_filters_candidate_codes_and_preserves_source(self):
+        from ah_recommendation_system.backend.stock_recommend.data_collector import _collect_notice_news
+
+        class AkModule:
+            @staticmethod
+            def stock_notice_report(*, symbol, date):
+                return pd.DataFrame([
+                    {"代码": "000001", "名称": "甲公司", "公告标题": "甲公司获得订单", "公告类型": "重大事项", "公告日期": "2026-09-09", "网址": "https://example.com/a"},
+                    {"代码": "000002", "名称": "乙公司", "公告标题": "乙公司日常公告", "公告类型": "其他", "公告日期": "2026-09-09", "网址": "https://example.com/b"},
+                ])
+
+        rows = _collect_notice_news(limit=10, codes=["000001"], ak_module=AkModule())
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["code"], "000001")
+        self.assertEqual(rows[0]["source"], "上市公司公告聚合")
+        self.assertEqual(rows[0]["url"], "https://example.com/a")
+
+    def test_stock_news_uses_python_strings_for_akshare_pandas3_compatibility(self):
+        from ah_recommendation_system.backend.stock_recommend import data_collector
+
+        class AkModule:
+            @staticmethod
+            def stock_news_em(*, symbol):
+                if pd.options.future.infer_string:
+                    raise RuntimeError("Arrow regex backend rejects AKShare unicode escape")
+                return pd.DataFrame([{
+                    "新闻标题": f"{symbol}获得订单",
+                    "新闻内容": "订单金额同比增长",
+                    "发布时间": "2026-09-09 08:00:00",
+                    "文章来源": "测试媒体",
+                    "新闻链接": "https://example.com/news",
+                }])
+
+        with patch.object(data_collector, "ak", AkModule()), patch.object(
+            data_collector, "_is_mock_mode", return_value=False
+        ):
+            rows = data_collector._collect_news_em(limit=1, codes=["000001"])
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["title"], "000001获得订单")
+        self.assertEqual(rows[0]["source"], "测试媒体")
+        self.assertEqual(rows[0]["url"], "https://example.com/news")
+        self.assertTrue(pd.options.future.infer_string)
+
+    def test_macro_news_fallback_uses_non_rss_sources(self):
+        from ah_recommendation_system.backend.stock_recommend.data_collector import _collect_macro_news_fallback
+
+        class AkModule:
+            @staticmethod
+            def stock_info_global_em():
+                return pd.DataFrame([
+                    {"标题": "海外市场重要变化", "摘要": "风险偏好变化", "发布时间": "2026-09-09 07:30:00", "链接": "https://example.com/global"}
+                ])
+
+            @staticmethod
+            def stock_info_global_sina():
+                return pd.DataFrame()
+
+            @staticmethod
+            def news_economic_baidu():
+                return pd.DataFrame([
+                    {"标题": "国内宏观数据发布", "摘要": "需求改善", "时间": "2026-09-09 08:00:00", "链接": "https://example.com/macro"}
+                ])
+
+        rows = _collect_macro_news_fallback(limit=10, ak_module=AkModule())
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({row["source"] for row in rows}, {"东方财富全球财经", "百度宏观资讯"})
 
 
 if __name__ == "__main__":

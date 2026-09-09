@@ -289,6 +289,11 @@ def normalize_industry_summary_ths(
             }
         )
     rows_ok = [r for r in rows if r.get("chg_pct") is not None]
+    advance_count = sum(1 for row in rows_ok if float(row.get("chg_pct") or 0.0) > 0)
+    total_count = len(rows_ok)
+    for row in rows_ok:
+        row["advance_count"] = advance_count
+        row["total_count"] = total_count
     rows_ok.sort(key=lambda r: float(r.get("chg_pct") or 0.0), reverse=True)
     top = rows_ok[:limit]
     bottom = list(reversed(rows_ok[-limit:]))
