@@ -64,6 +64,7 @@ from ah_recommendation_system.backend.stock_recommend.hotspot_analyzer import an
 from ah_recommendation_system.backend.stock_recommend.hotspot_mapper import validate_and_expand_hotspots
 from ah_recommendation_system.backend.stock_recommend.llm_review import apply_llm_event_scores, review_candidate_events
 from ah_recommendation_system.backend.stock_recommend.decision_engine import build_market_decision
+from ah_recommendation_system.backend.stock_recommend.risk_review import review_candidate_risks
 from ah_recommendation_system.backend.stock_recommend.delivery_guard import (
     get_delivery,
     record_delivery,
@@ -72,6 +73,16 @@ from ah_recommendation_system.backend.stock_recommend.delivery_guard import (
 from ah_recommendation_system.backend.etf_sector.etf_portfolio import build_etf_quality_scores, select_etf_portfolio
 
 LLM_EVENT_REVIEW_CANDIDATE_LIMIT = 10
+
+
+def market_data_attempted_chain(snap: Any) -> list[str]:
+    """Return the source chain actually attempted by this snapshot."""
+    provider = (snap.fundamental or {}).get("provider_health") or {}
+    attempted = list(provider.get("attempted_sources") or [])
+    if attempted:
+        return attempted
+    source = (snap.fundamental or {}).get("source")
+    return [str(source)] if source else []
 
 
 def _backend_root() -> Path:
@@ -124,6 +135,11 @@ def _deliver_report(
         "ambiguous": ambiguous,
         "status": result.get("status"),
     })
+    # A prior guarded attempt may have left ``skipped/reason`` fields on the
+    # same report. Remove them after an actual (including forced) delivery so
+    # the audit record cannot claim both accepted and skipped.
+    report["delivery"].pop("skipped", None)
+    report["delivery"].pop("reason", None)
     record_delivery(
         target,
         trade_date=trade_date,
@@ -496,7 +512,11 @@ def run_pipeline(
         reviewed_count=int(llm_context.get("llm", {}).get("event_reviewed_count") or 0),
     )
     cand_dicts = to_dict_list(cands)
-    selection = select_by_rules(cands, top_n_pick=top_n_pick)
+    risk_result = review_candidate_risks(cands)
+    llm_context["llm"]["risk_review_status"] = risk_result.get("status")
+    llm_context["llm"]["risk_reviewed_count"] = risk_result.get("reviewed_count", 0)
+    llm_context["llm"]["risk_p0_count"] = risk_result.get("p0_count", 0)
+    selection = select_by_rules(cands, top_n_pick=top_n_pick, coverage_mode=coverage_mode)
     if not mock and data_available:
         try:
             from ah_recommendation_system.backend.etf_sector.etf_sector_report import generate_etf_sector_block
@@ -519,6 +539,40 @@ def run_pipeline(
                 hotspots=llm_context.get("hotspots") or [],
             )
             etf_result = select_etf_portfolio(etf_rows, limit=3, min_score=65.0)
+            # ETF turnover feeds are sometimes reported in a smaller unit
+            # (or omit large institutional lots).  If the strict 1e8 gate
+            # leaves no usable portfolio, retry once at 1e7 with all other
+            # trend/history/risk gates unchanged and disclose the relaxation.
+            if not etf_result.get("selected"):
+                relaxed = select_etf_portfolio(
+                    etf_rows,
+                    limit=3,
+                    min_score=65.0,
+                    min_turnover=10_000_000.0,
+                )
+                if relaxed.get("selected"):
+                    relaxed["portfolio_summary"]["liquidity_gate_relaxed"] = True
+                    relaxed["portfolio_summary"]["liquidity_gate_reason"] = (
+                        "严格流动性门槛无合格标的，按成交额单位差异降至1000万元；趋势、历史、均线和风险门槛未放宽"
+                    )
+                    etf_result = relaxed
+                else:
+                    # Last-resort trend-only watchlist when turnover is
+                    # unavailable from both Sina/THS.  This is never an
+                    # aggressive buy signal; the report records the missing
+                    # liquidity confirmation and keeps action=WATCH.
+                    trend_only = select_etf_portfolio(
+                        etf_rows,
+                        limit=3,
+                        min_score=65.0,
+                        min_turnover=0.0,
+                    )
+                    if trend_only.get("selected"):
+                        trend_only["portfolio_summary"]["liquidity_gate_relaxed"] = True
+                        trend_only["portfolio_summary"]["liquidity_gate_reason"] = (
+                            "ETF成交额接口不可用，仅依据趋势/历史/均线/风险生成观察名单；流动性待确认"
+                        )
+                        etf_result = trend_only
 
             def _etf_rationale(row: Dict[str, Any]) -> str:
                 reasons = [str(item).strip() for item in (row.get("reasons") or []) if str(item).strip()]
@@ -576,7 +630,7 @@ def run_pipeline(
             "fresh_data_available": data_available,
             "stale": any(bool(row.get("stale")) for row in (snap.fundamental.get("rows") or [])),
             "sources": [snap.fundamental.get("source")] if snap.fundamental.get("source") else [],
-            "provider_health": {
+        "provider_health": {
                 "hithink_financial_api": "healthy" if HithinkClient().enabled and snap.fundamental.get("source") == "hithink_financial_api" else ("disabled" if not HithinkClient().enabled else "degraded"),
                 "hithink_probe": {
                     "available": bool(hithink_probe.get("available")),
@@ -585,12 +639,14 @@ def run_pipeline(
                 },
                 "akshare": "degraded" if any("AKShare" in str(error) or "akshare" in str(error) for error in snap.errors) else "unknown",
                 "tencent_sina_fallback": "active" if str(snap.fundamental.get("source") or "").startswith("focused_") else "standby",
+                "market_data_attempted": list((snap.fundamental.get("provider_health") or {}).get("attempted_sources") or []),
+                "market_data_skipped": list((snap.fundamental.get("provider_health") or {}).get("skipped_sources") or []),
                 "history": dict(pf.provider_health() if hasattr(pf, "provider_health") else {}),
                 "news": dict((snap.events or {}).get("provider_health") or {}),
                 "cross_market": str((snap.cross_market or {}).get("status") or "disabled"),
                 "llm_codex": llm_context.get("llm", {}),
-            },
-            "fallback_chain": ["hithink_financial_api", "tencent", "sina", "baostock", "akshare", "last_good_snapshot"],
+        },
+            "fallback_chain": market_data_attempted_chain(snap),
             "circuit_breakers": list((pf.provider_health() if hasattr(pf, "provider_health") else {}).get("history_errors") or []),
         }
     coverage_universe = int(coverage_payload.get("universe_size") or 0)

@@ -65,3 +65,18 @@ class TestDataSourceRouter(unittest.TestCase):
         )
         self.assertEqual(report["provider_health"]["hithink_financial_api"], "healthy")
         self.assertEqual(report["fallback_chain"], ["hithink_financial_api"])
+
+    def test_pipeline_reports_actual_market_data_attempted_chain(self):
+        from ah_recommendation_system.backend.stock_recommend import data_collector, run
+
+        snapshot = data_collector.CollectedSnapshot(date="2026-09-10")
+        snapshot.fundamental = {
+            "source": "hithink_financial_api",
+            "rows": [{"code": "600519", "price": 1500, "provider_health": {"attempted_sources": ["hithink_financial_api", "akshare:supplement"]}}],
+            "count": 1,
+            "universe_size": 1,
+            "provider_health": {"attempted_sources": ["hithink_financial_api", "akshare:supplement"]},
+        }
+        self.assertEqual(run.market_data_attempted_chain(snapshot), ["hithink_financial_api", "akshare:supplement"])
+        snapshot.fundamental.pop("provider_health")
+        self.assertEqual(run.market_data_attempted_chain(snapshot), ["hithink_financial_api"])

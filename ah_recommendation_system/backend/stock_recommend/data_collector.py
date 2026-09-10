@@ -24,6 +24,7 @@ except Exception:  # pragma: no cover
     ak = None  # type: ignore
 
 from ah_recommendation_system.backend.data.price_fetcher import get_price_fetcher
+from ah_recommendation_system.backend.stock_recommend.market_data import MarketDataManager, SnapshotResult
 from ah_recommendation_system.backend.etf_sector.rss_fetcher import (
     fetch_news_digest,
 )
@@ -156,53 +157,19 @@ def _collect_a_share_spot(limit: int = 200) -> List[Dict[str, Any]]:
     if _is_mock_mode():
         rows = [dict(row, amount=row.get("amount", 300_000_000), volume_ratio=row.get("volume_ratio", 1.6), history_days=120, source="mock") for row in _MOCK_FUND_ROWS]
         return rows[:limit] if limit else rows
-    # Financial-API is optional.  It is used only when a key exists and a
-    # complete snapshot can be obtained; all failures fall through to AKShare.
-    try:
-        from ah_recommendation_system.backend.stock_recommend.hithink_client import HithinkClient
-        hithink_rows = HithinkClient().market_snapshot(limit=limit)
-        if hithink_rows and _is_recent_timestamp(hithink_rows[0].get("observed_at")) and _snapshot_is_usable(hithink_rows):
-            return [dict(row, source="hithink_financial_api") for row in hithink_rows]
-        if hithink_rows:
-            reason = "stale" if not _is_recent_timestamp(hithink_rows[0].get("observed_at")) else "incomplete"
-            logger.warning(f"Financial-API snapshot {reason}; falling through to AKShare")
-    except Exception as exc:
-        logger.warning(f"Financial-API snapshot unavailable: {exc}")
-    if ak is None:
+    manager = MarketDataManager(akshare_module=ak)
+    result = manager.fetch_snapshot(limit=limit)
+    if not result.rows:
+        logger.warning(f"market snapshot unavailable: {result.error}")
         return []
-
-    def _go():
-        df = ak.stock_zh_a_spot_em()
-        return df
-
-    df = _safe_call(_go, attempts=2)
-    if df is None or df.empty:
-        return []
-
-    # 期望列（中文）：代码/名称/最新价/涨跌幅/换手率/市盈率-动态/市净率/总市值/流通市值/成交量
-    rename = {
-        "代码": "code",
-        "名称": "name",
-        "最新价": "price",
-        "涨跌幅": "change_pct",
-        "换手率": "turnover_pct",
-        "市盈率-动态": "pe",
-        "市净率": "pb",
-        "总市值": "market_cap",
-        "流通市值": "float_cap",
-        "成交量": "volume",
-        "成交额": "amount",
-        "60日涨跌幅": "change_60d_pct",
-        "年初至今涨跌幅": "change_ytd_pct",
+    health = {
+        "market_data": result.health(),
+        "market_stats": result.stats,
+        "attempted_sources": list(result.attempted),
+        "skipped_sources": list(result.skipped),
     }
-    df = df.rename(columns=rename)
-    keep = [c for c in rename.values() if c in df.columns]
-    df = df[keep]
-    if "code" in df.columns:
-        df["code"] = df["code"].astype(str).str.zfill(6)
-    if limit and len(df) > limit:
-        df = df.head(limit)
-    return _df_to_records(df)
+    return [dict(row, provider_health=health) for row in result.rows]
+
 
 
 def collect_fundamental(limit: int = 6000) -> Dict[str, Any]:
@@ -219,6 +186,7 @@ def collect_fundamental(limit: int = 6000) -> Dict[str, Any]:
         "universe_size": 5300 if _is_mock_mode() else len(rows),
         "fields": ["code", "name", "price", "change_pct", "pe", "pb",
                    "turnover_pct", "market_cap", "change_60d_pct"],
+        "provider_health": (rows[0].get("provider_health") if rows else {}) or {},
     }
     logger.info(f"fundamental rows={len(rows)}")
     return payload

@@ -7,6 +7,44 @@ import pandas as pd
 
 
 class TestEvidenceRecommendation(unittest.TestCase):
+    def test_risk_review_vetoes_p0_event(self):
+        from ah_recommendation_system.backend.stock_recommend.candidate_pool import Candidate
+        from ah_recommendation_system.backend.stock_recommend.risk_review import review_candidate_risks
+
+        candidate = Candidate(code="000001", name="风险股", evidence=[{"statement": "公司被立案调查", "factor": "event"}])
+        result = review_candidate_risks([candidate])
+        self.assertEqual(result["p0_count"], 1)
+        self.assertTrue(any(reason.startswith("p0:") for reason in candidate.rejection_reasons))
+    def test_focused_sample_requires_news_or_capital_confirmation_for_formal_pick(self):
+        from ah_recommendation_system.backend.stock_recommend.candidate_pool import Candidate
+        from ah_recommendation_system.backend.stock_recommend.rule_selector import select_by_rules
+
+        candidate = Candidate(
+            code="300760", name="有限样本股", price=100, composite=0.70,
+            change_60d_pct=15, pe=20, focus_industries=["医疗"],
+            evidence=[
+                {"factor": "trend", "statement": "趋势确认", "source": "test", "supports": True},
+                {"factor": "price_volume", "statement": "量价确认", "source": "test", "supports": True},
+                {"factor": "value_quality", "statement": "估值质量确认", "source": "test", "supports": True},
+            ], valid_dimensions={"trend", "price_volume", "value_quality"}, quality_grade="A",
+        )
+        result = select_by_rules([candidate], coverage_mode="focused_fallback")
+        self.assertEqual(result["picks"], [])
+        self.assertTrue(any(reason.startswith("coverage") for reason in candidate.rejection_reasons))
+
+    def test_observation_pool_assigns_distinct_roles(self):
+        from ah_recommendation_system.backend.stock_recommend.candidate_pool import Candidate
+        from ah_recommendation_system.backend.stock_recommend.rule_selector import select_by_rules
+
+        candidates = []
+        for idx, role in enumerate(("龙头", "弹性", "中军", "验证", "防御", "避雷"), 1):
+            candidates.append(Candidate(
+                code=f"6000{idx:02d}", name=f"{role}候选", price=10, composite=0.5 - idx * 0.01,
+                focus_industries=["行业"], observation_only=True,
+            ))
+        result = select_by_rules(candidates, top_n_pick=0)
+        roles = [item.get("role") for item in result["observation_pool"]]
+        self.assertEqual(roles, ["龙头", "弹性", "中军", "验证", "防御", "避雷"])
     def test_missing_metrics_are_not_scored_as_neutral_or_selected(self):
         from ah_recommendation_system.backend.stock_recommend.candidate_pool import Candidate
         from ah_recommendation_system.backend.stock_recommend.rule_selector import select_by_rules
@@ -400,6 +438,37 @@ class TestEvidenceRecommendation(unittest.TestCase):
 
         self.assertEqual(rows[0]["source"], "hithink_financial_api")
         enrich.assert_not_called()
+
+    def test_usable_hithink_snapshot_supplements_missing_fields_from_akshare(self):
+        from ah_recommendation_system.backend.stock_recommend import data_collector
+
+        managed_rows = [{
+            "code": "600519", "name": "Moutai", "price": 1500.0, "change_pct": 1.0,
+            "pe": 22.0, "amount": 8e8,
+            "observed_at": int(datetime.now().timestamp() * 1000),
+        }]
+        akshare_rows = [{
+            "code": "600519", "price": 1501.0, "pe": 22.0, "pb": 8.0,
+            "market_cap": 1.8e12, "float_cap": 1.8e12, "turnover_pct": 0.4,
+            "amount": 8e8, "volume": 5000,
+        }]
+        manager = object.__new__(data_collector.MarketDataManager)
+        manager.fetch_snapshot = lambda *, limit: data_collector.SnapshotResult(
+            rows=managed_rows,
+            source="hithink_financial_api",
+            attempted=["hithink_financial_api", "akshare:supplement"],
+            supplemented_fields={"pe": ["600519"], "amount": ["600519"]},
+            stats={"up_count": 1},
+        )
+        with patch.object(data_collector, "_is_mock_mode", return_value=False), patch.object(
+            data_collector, "MarketDataManager", return_value=manager
+        ):
+            rows = data_collector._collect_a_share_spot(limit=6000)
+
+        self.assertEqual(rows[0]["price"], 1500.0)
+        self.assertEqual(rows[0]["pe"], 22.0)
+        self.assertEqual(rows[0]["amount"], 8e8)
+        self.assertEqual(rows[0]["provider_health"]["attempted_sources"], ["hithink_financial_api", "akshare:supplement"])
 
     def test_incomplete_hithink_snapshot_falls_through_to_akshare(self):
         from ah_recommendation_system.backend.stock_recommend.data_collector import _collect_a_share_spot
