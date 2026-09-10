@@ -223,6 +223,20 @@ class TestEvidenceRecommendation(unittest.TestCase):
         self.assertIn("new_high", seeds[0]["source_tags"])
         self.assertIn("科技", seeds[0]["industries"])
 
+    def test_dynamic_scanner_ignores_non_numeric_amount_strings(self):
+        from ah_recommendation_system.backend.stock_recommend.dynamic_scanner import scan_snapshot
+
+        rows = [
+            {"code": "000005", "name": "无效额度", "price": 12, "change_pct": 6, "amount": "-", "change_60d_pct": 0},
+            {"code": "000006", "name": "正常", "price": 10, "change_pct": 1, "amount": 200_000_000},
+        ]
+        seeds = scan_snapshot(rows, limit=10)
+
+        invalid_seed = next(seed for seed in seeds if seed["code"] == "000005")
+        valid_seed = next(seed for seed in seeds if seed["code"] == "000006")
+        self.assertNotIn("liquidity_leader", invalid_seed["source_tags"])
+        self.assertIn("liquidity_leader", valid_seed["source_tags"])
+
     def test_missing_valuation_or_market_cap_fails_hard_screen(self):
         from ah_recommendation_system.backend.stock_recommend.candidate_pool import build_candidates
         from ah_recommendation_system.backend.stock_recommend.data_collector import CollectedSnapshot

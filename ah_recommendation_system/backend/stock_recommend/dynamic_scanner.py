@@ -11,6 +11,11 @@ def _float(value: Any) -> Optional[float]:
         return None
 
 
+def _safe_amount(value: Any) -> float:
+    amount = _float(value)
+    return amount or 0.0
+
+
 def scan_snapshot(
     rows: Iterable[Dict[str, Any]],
     *,
@@ -35,8 +40,8 @@ def scan_snapshot(
     market_rows = list(rows)
     liquid_codes = {
         str(row.get("code") or "").zfill(6)
-        for row in sorted(market_rows, key=lambda item: float(item.get("amount") or 0), reverse=True)[: min(300, limit)]
-        if float(row.get("amount") or 0) >= 100_000_000
+        for row in sorted(market_rows, key=lambda item: _safe_amount(item.get("amount")), reverse=True)[: min(300, limit)]
+        if _safe_amount(row.get("amount")) >= 100_000_000
     }
     seeds: List[Dict[str, Any]] = []
     for row in market_rows:
@@ -77,7 +82,7 @@ def scan_snapshot(
     seeds.sort(
         key=lambda item: (
             -len([tag for tag in item["source_tags"] if tag != "focus_industry"]),
-            -float(item.get("amount") or 0),
+            -_safe_amount(item.get("amount")),
             -float(item.get("change_60d_pct") or 0),
         )
     )

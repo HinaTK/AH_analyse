@@ -5,6 +5,13 @@ import pandas as pd
 
 
 class TestMarketDataManager(unittest.TestCase):
+    def setUp(self):
+        from ah_recommendation_system.backend.stock_recommend.market_data import MarketDataManager
+
+        MarketDataManager._shared_cache_rows = None
+        MarketDataManager._shared_cache_timestamp = None
+        MarketDataManager._shared_cache_source = "none"
+
     def test_primary_quote_is_kept_and_missing_fields_are_supplemented(self):
         from ah_recommendation_system.backend.stock_recommend.market_data import (
             MarketDataManager,
@@ -27,6 +34,95 @@ class TestMarketDataManager(unittest.TestCase):
         self.assertEqual(result.rows[0]["turnover_pct"], 0.4)
         self.assertEqual(set(result.supplemented_fields), {"pe", "pb", "market_cap", "float_cap", "turnover_pct", "amount", "volume"})
         self.assertEqual(result.attempted, ["hithink_financial_api", "akshare:supplement"])
+
+    def test_snapshot_is_served_from_fresh_cache(self):
+        from ah_recommendation_system.backend.stock_recommend.market_data import MarketDataManager
+
+        manager = MarketDataManager(cache_ttl_seconds=60)
+        manager._shared_cache = False
+        rows = [{
+            "code": "600519", "price": 1500.0, "change_pct": 1.0, "pe": 22.0,
+            "pb": 8.0, "market_cap": 1.8e12, "float_cap": 1.8e12,
+            "turnover_pct": 0.4, "amount": 8e8, "volume": 5_000,
+        }]
+        with patch.object(manager, "_snapshot", return_value=rows) as snapshot:
+            first = manager.fetch_snapshot(limit=10)
+            second = manager.fetch_snapshot(limit=10)
+
+        self.assertEqual(snapshot.call_count, 1)
+        self.assertEqual(first.source, "hithink_financial_api")
+        self.assertEqual(second.source, "cache:hithink_financial_api")
+        self.assertEqual(second.rows, first.rows)
+        self.assertLessEqual(second.health()["cache_age_seconds"], 60)
+
+    def test_stale_cache_is_refreshed(self):
+        from ah_recommendation_system.backend.stock_recommend.market_data import MarketDataManager
+
+        manager = MarketDataManager(cache_ttl_seconds=60)
+        manager._shared_cache = True
+        manager.__class__._shared_cache_rows = None
+        manager.__class__._shared_cache_timestamp = None
+        manager.__class__._shared_cache_source = "none"
+        rows = [{
+            "code": "600519", "price": 1500.0, "change_pct": 1.0, "pe": 22.0,
+            "pb": 8.0, "market_cap": 1.8e12, "float_cap": 1.8e12,
+            "turnover_pct": 0.4, "amount": 8e8, "volume": 5_000,
+        }]
+        with patch.object(manager, "_snapshot", return_value=rows) as snapshot:
+            manager.fetch_snapshot(limit=10)
+            manager._shared_cache_timestamp = (manager._shared_cache_timestamp or 0) - 61
+            manager.fetch_snapshot(limit=10)
+
+        self.assertEqual(snapshot.call_count, 2)
+
+    def test_efinance_snapshot_falls_back_from_akshare(self):
+        from ah_recommendation_system.backend.stock_recommend.market_data import MarketDataManager
+
+        manager = MarketDataManager(
+            order=["hithink_financial_api", "akshare", "efinance"],
+            efinance_module=object(),
+        )
+        broken = [{"code": "600519", "price": None}]
+        backup = [{"code": "600519", "price": 1500.0, "change_pct": 1.0, "amount": 8e8}]
+        with patch.object(manager, "_snapshot", side_effect=[broken, broken, backup]):
+            result = manager.fetch_snapshot(limit=10)
+
+        self.assertEqual(result.source, "efinance")
+        self.assertEqual(result.attempted, ["hithink_financial_api", "akshare", "efinance"])
+
+    def test_efinance_supplements_missing_fields_from_fallback(self):
+        from ah_recommendation_system.backend.stock_recommend.market_data import MarketDataManager
+
+        manager = MarketDataManager(
+            order=["hithink_financial_api", "akshare", "efinance"],
+            efinance_module=object(),
+        )
+        primary = [{"code": "600519", "name": "Moutai", "price": 1500.0, "change_pct": 1.0}]
+        akshare = [{"code": "600519", "price": 1501.0, "pe": 22.0, "turnover_pct": 0.4}]
+        efinance = [{"code": "600519", "price": 1502.0, "pb": 8.0, "amount": 8e8}]
+        with patch.object(manager, "_snapshot", side_effect=[primary, akshare, efinance]):
+            result = manager.fetch_snapshot(limit=10)
+
+        self.assertEqual(result.attempted, [
+            "hithink_financial_api", "akshare:supplement", "efinance:supplement",
+        ])
+        self.assertEqual(result.rows[0]["price"], 1500.0)
+        self.assertEqual(result.rows[0]["pe"], 22.0)
+        self.assertEqual(result.rows[0]["pb"], 8.0)
+
+    def test_primary_without_missing_fields_skips_supplement_calls(self):
+        from ah_recommendation_system.backend.stock_recommend.market_data import MarketDataManager
+
+        manager = MarketDataManager()
+        rows = [{
+            "code": "600519", "price": 1500.0, "change_pct": 1.0, "pe": 22.0,
+            "pb": 8.0, "market_cap": 1.8e12, "float_cap": 1.8e12,
+            "turnover_pct": 0.4, "amount": 8e8, "volume": 5_000,
+        }]
+        with patch.object(manager, "_snapshot", return_value=rows) as snapshot:
+            manager.fetch_snapshot(limit=10)
+
+        self.assertEqual(snapshot.call_count, 1)
 
     def test_unusable_primary_snapshot_falls_back_to_akshare(self):
         from ah_recommendation_system.backend.stock_recommend.market_data import MarketDataManager
@@ -95,3 +191,14 @@ class TestMarketDataManager(unittest.TestCase):
         self.assertEqual(rows[0]["code"], "600519")
         self.assertEqual(rows[0]["price"], 1500.0)
         self.assertEqual(rows[0]["pe"], 22)
+
+    def test_numeric_placeholders_are_coerced_to_none(self):
+        from ah_recommendation_system.backend.stock_recommend.market_data import normalize_numeric_fields
+
+        rows = [{"amount": "-", "turnover_pct": "--", "pe": " ", "price": "-"}]
+        normalize_numeric_fields(rows)
+
+        self.assertIsNone(rows[0]["amount"])
+        self.assertIsNone(rows[0]["turnover_pct"])
+        self.assertIsNone(rows[0]["pe"])
+        self.assertEqual(rows[0]["price"], "-")
