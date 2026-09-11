@@ -1,0 +1,118 @@
+{
+  "generated_at": "2026-07-14 09:32:15",
+  "sources": [
+    "Sina realtime quotes",
+    "EastMoney board data via AkShare"
+  ],
+  "universe": {
+    "a_quotes": {
+      "sz300502": "新易盛",
+      "sh600900": "长江电力",
+      "sh600030": "中信证券",
+      "sz300059": "东方财富",
+      "sh600276": "恒瑞医药"
+    },
+    "hk_quotes": {
+      "rt_hk01801": "信达生物"
+    }
+  },
+  "a_quotes": [
+    {
+      "code": "sz300502",
+      "configured_name": "新易盛",
+      "name": "新易盛",
+      "price": 524.66,
+      "pct": 2.3726829268292624,
+      "open": 525.0,
+      "prev_close": 512.5,
+      "high": 530.88,
+      "low": 522.75,
+      "amount_yi": 15.4942594848,
+      "quote_date": "2026-07-14",
+      "quote_time": "09:32:12",
+      "note": ""
+    },
+    {
+      "code": "sh600900",
+      "configured_name": "长江电力",
+      "name": "长江电力",
+      "price": 28.46,
+      "pct": 0.14074595355383232,
+      "open": 28.4,
+      "prev_close": 28.42,
+      "high": 28.47,
+      "low": 28.21,
+      "amount_yi": 2.7755258,
+      "quote_date": "2026-07-14",
+      "quote_time": "09:32:14",
+      "note": ""
+    },
+    {
+      "code": "sh600030",
+      "configured_name": "中信证券",
+      "name": "中信证券",
+      "price": 27.71,
+      "pct": -1.4580369843527743,
+      "open": 28.0,
+      "prev_close": 28.12,
+      "high": 28.01,
+      "low": 27.7,
+      "amount_yi": 2.23933568,
+      "quote_date": "2026-07-14",
+      "quote_time": "09:32:15",
+      "note": ""
+    },
+    {
+      "code": "sz300059",
+      "configured_name": "东方财富",
+      "name": "东方财富",
+      "price": 19.8,
+      "pct": -0.20161290322580216,
+      "open": 19.89,
+      "prev_close": 19.84,
+      "high": 19.95,
+      "low": 19.76,
+      "amount_yi": 1.7183686485,
+      "quote_date": "2026-07-14",
+      "quote_time": "09:32:12",
+      "note": ""
+    },
+    {
+      "code": "sh600276",
+      "configured_name": "恒瑞医药",
+      "name": "恒瑞医药",
+      "price": 55.2,
+      "pct": -0.9865470852017886,
+      "open": 55.75,
+      "prev_close": 55.75,
+      "high": 55.75,
+      "low": 55.06,
+      "amount_yi": 1.92025367,
+      "quote_date": "2026-07-14",
+      "quote_time": "09:32:14",
+      "note": ""
+    }
+  ],
+  "a_quote_error": null,
+  "hk_quotes": [
+    {
+      "code": "rt_hk01801",
+      "configured_name": "信达生物",
+      "name": "信达生物",
+      "price": 90.2,
+      "pct": 1.235,
+      "open": 89.8,
+      "prev_close": 89.1,
+      "high": 90.8,
+      "low": 88.55,
+      "amount_yi": 0.713563657,
+      "quote_date": "",
+      "quote_time": "",
+      "note": ""
+    }
+  ],
+  "hk_quote_error": null,
+  "boards": {},
+  "stock_candidates": [],
+  "stock_candidate_error": null
+}

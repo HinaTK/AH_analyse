@@ -9,6 +9,31 @@ import pandas as pd
 
 
 class TestStockRecommendationPipeline(unittest.TestCase):
+    def setUp(self):
+        # Unit pipeline tests inject upstream boundaries; provider integration
+        # is covered separately. Never scan real markets during these tests.
+        prefetch = patch("ah_recommendation_system.backend.stock_recommend.run.prefetch_market_snapshot")
+        prefetch.start()
+        self.addCleanup(prefetch.stop)
+        evidence = patch("ah_recommendation_system.backend.stock_recommend.run.enrich_evidence", return_value={
+            "market_regime": {"regime": "offense", "status": "available"},
+            "attempted_count": 0, "coverage": "test_fixture", "errors": []})
+        evidence.start()
+        self.addCleanup(evidence.stop)
+
+    def test_collect_all_attempts_cross_market_in_focused_mode(self):
+        from ah_recommendation_system.backend.stock_recommend import data_collector
+
+        with patch.object(data_collector, "_is_mock_mode", return_value=False), patch(
+            "ah_recommendation_system.backend.stock_recommend.cross_market.collect_cross_market",
+            return_value={"status": "ok", "risk_level": "normal", "markets": {}},
+        ) as cross:
+            with patch.object(data_collector, "collect_fundamental", return_value={"rows": []}), patch.object(
+                data_collector, "collect_capital", return_value={"rows": []}
+            ), patch.object(data_collector, "collect_events", return_value={}):
+                snapshot = data_collector.collect_all(limit=10)
+        cross.assert_called_once()
+        self.assertEqual(snapshot.cross_market["status"], "ok")
     def test_focused_candidates_use_hithink_valuation_enrichment(self):
         from ah_recommendation_system.backend.stock_recommend.run import _enrich_hithink_candidates
 
@@ -143,7 +168,8 @@ class TestStockRecommendationPipeline(unittest.TestCase):
     def test_mock_pipeline_never_fills_etfs_without_quality_screening(self):
         from ah_recommendation_system.backend.stock_recommend.run import run_pipeline
 
-        result = run_pipeline(mock=True, push=False)
+        with patch("ah_recommendation_system.backend.stock_recommend.run.save_report", return_value={}):
+            result = run_pipeline(mock=True, push=False)
         report = result["report"]
 
         self.assertEqual(report["type"], "stock_recommend_pre_market")
@@ -166,7 +192,8 @@ class TestStockRecommendationPipeline(unittest.TestCase):
     def test_pipeline_clamps_requested_stock_count_to_five(self):
         from ah_recommendation_system.backend.stock_recommend.run import run_pipeline
 
-        result = run_pipeline(mock=True, top_n_pick=99, push=False)
+        with patch("ah_recommendation_system.backend.stock_recommend.run.save_report", return_value={}):
+            result = run_pipeline(mock=True, top_n_pick=99, push=False)
 
         self.assertEqual(len(result["report"]["picks"]), 5)
         self.assertTrue(result["report"]["quality_gate"]["passed"])
@@ -328,7 +355,7 @@ class TestStockRecommendationPipeline(unittest.TestCase):
         self.assertEqual(result["review"]["run"]["status"], "failed")
         self.assertIn("不是当日盘前报告", "".join(result["review"]["quality_gate"]["blocking_reasons"]))
 
-    def test_post_market_uses_saved_reference_price_for_same_day_close(self):
+    def test_post_market_separates_reference_move_from_future_validation(self):
         from ah_recommendation_system.backend.stock_recommend.run import run_post_market
 
         class FakeFetcher:
@@ -367,8 +394,9 @@ class TestStockRecommendationPipeline(unittest.TestCase):
                 )
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["review"]["items"][0]["return_pct"], 2.0)
-        self.assertEqual(result["review"]["summary"]["completed_count"], 1)
+        self.assertEqual(result["review"]["items"][0]["reference_return_pct"], 2.0)
+        self.assertIsNone(result["review"]["items"][0]["return_pct"])
+        self.assertEqual(result["review"]["summary"]["completed_count"], 0)
 
     def test_post_market_direction_outcomes_use_close_confirmed_industry_data(self):
         from ah_recommendation_system.backend.stock_recommend.run import _build_direction_outcomes
@@ -751,6 +779,8 @@ class TestStockRecommendationPipeline(unittest.TestCase):
         with patch("ah_recommendation_system.backend.stock_recommend.run.collect_all", return_value=empty), patch(
             "ah_recommendation_system.backend.stock_recommend.run.collect_focused_market",
             return_value=empty,
+        ), patch("ah_recommendation_system.backend.stock_recommend.run.load_last_snapshot", return_value=[]), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.prefetch_market_snapshot"
         ), patch("ah_recommendation_system.backend.stock_recommend.run.persist_snapshot"), patch(
             "ah_recommendation_system.backend.stock_recommend.run.save_report", return_value={}
         ), patch(
@@ -862,7 +892,7 @@ class TestStockRecommendationPipeline(unittest.TestCase):
             hithink.return_value.probe.return_value = {"available": False, "capabilities": {}}
             result = run_pipeline(mock=False, top_n_pick=1, push=False)
 
-        self.assertEqual(build.call_count, 1)
+        self.assertEqual(build.call_count, 2)  # provisional ranking, then same-pool evidence rerank
         self.assertTrue(scan_focus_inputs and scan_focus_inputs[0])
         self.assertIn("科技", scan_focus_inputs[0])
         self.assertEqual(len(hotspot_inputs), 1)

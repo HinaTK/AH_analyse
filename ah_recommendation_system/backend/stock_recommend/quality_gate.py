@@ -86,6 +86,29 @@ def evaluate_report_quality(report: Mapping[str, Any]) -> Dict[str, Any]:
     if not etf_fields_valid:
         blockers.append("正式ETF缺少真实评分或行情质量证据")
 
+    panel = list(report.get("candidate_panel") or report.get("candidates_top") or [])
+    valuation_missing = 0
+    for item in panel:
+        reasons = [str(reason) for reason in (item.get("rejection_reasons") or [])]
+        if item.get("pe") is None or any("估值缺失" in reason for reason in reasons):
+            valuation_missing += 1
+    valuation_complete = True
+    if len(panel) >= 5 and valuation_missing / len(panel) >= 0.8:
+        valuation_complete = False
+        blockers.append("候选估值字段大面积缺失，数据不完整，推荐结论受限")
+    checks.append({"name": "candidate_valuation_coverage", "passed": valuation_complete})
+
+    quote_missing = 0
+    for item in panel:
+        reasons = [str(reason) for reason in (item.get("rejection_reasons") or [])]
+        if item.get("price") is None or any("价格缺失" in reason or "涨跌幅缺失" in reason for reason in reasons):
+            quote_missing += 1
+    quote_complete = True
+    if len(panel) >= 5 and quote_missing / len(panel) >= 0.8:
+        quote_complete = False
+        blockers.append("候选价格或涨跌幅大面积缺失，数据不完整，推荐结论受限")
+    checks.append({"name": "candidate_quote_coverage", "passed": quote_complete})
+
     llm = dict(report.get("llm") or {})
     if llm.get("hotspot_status") == "failed":
         detail = str(llm.get("hotspot_error") or "未知错误")

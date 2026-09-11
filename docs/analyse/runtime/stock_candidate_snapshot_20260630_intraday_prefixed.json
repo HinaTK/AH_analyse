@@ -1,0 +1,134 @@
+{
+  "generated_at": "2026-06-30 14:22:15",
+  "sources": [
+    "Sina realtime quotes",
+    "EastMoney board data via AkShare"
+  ],
+  "universe": {
+    "a_quotes": {
+      "sz300308": "中际旭创",
+      "sz300502": "新易盛",
+      "sz300394": "天孚通信",
+      "sh688728": "格科微"
+    },
+    "hk_quotes": {
+      "rt_hk00700": "腾讯控股",
+      "rt_hk09868": "小鹏汽车-W",
+      "rt_hk02269": "药明生物"
+    }
+  },
+  "a_quotes": [
+    {
+      "code": "sz300308",
+      "configured_name": "中际旭创",
+      "name": "中际旭创",
+      "price": 1266.11,
+      "pct": 3.779508196721303,
+      "open": 1223.01,
+      "prev_close": 1220.0,
+      "high": 1295.6,
+      "low": 1218.21,
+      "amount_yi": 310.7305777176,
+      "quote_date": "2026-06-30",
+      "quote_time": "14:22:12",
+      "note": ""
+    },
+    {
+      "code": "sz300502",
+      "configured_name": "新易盛",
+      "name": "新易盛",
+      "price": 605.86,
+      "pct": 8.7798046538351,
+      "open": 565.43,
+      "prev_close": 556.96,
+      "high": 612.86,
+      "low": 555.78,
+      "amount_yi": 302.7951504081,
+      "quote_date": "2026-06-30",
+      "quote_time": "14:22:12",
+      "note": ""
+    },
+    {
+      "code": "sz300394",
+      "configured_name": "天孚通信",
+      "name": "天孚通信",
+      "price": 303.72,
+      "pct": 2.903608334745062,
+      "open": 295.0,
+      "prev_close": 295.15,
+      "high": 309.89,
+      "low": 290.02,
+      "amount_yi": 110.20831821,
+      "quote_date": "2026-06-30",
+      "quote_time": "14:22:12",
+      "note": ""
+    },
+    {
+      "code": "sh688728",
+      "configured_name": "格科微",
+      "name": "格科微",
+      "price": 21.04,
+      "pct": 20.022818026240717,
+      "open": 18.06,
+      "prev_close": 17.53,
+      "high": 21.04,
+      "low": 17.89,
+      "amount_yi": 16.159178,
+      "quote_date": "2026-06-30",
+      "quote_time": "14:22:11",
+      "note": ""
+    }
+  ],
+  "a_quote_error": null,
+  "hk_quotes": [
+    {
+      "code": "rt_hk00700",
+      "configured_name": "腾讯控股",
+      "name": "腾讯控股",
+      "price": 433.2,
+      "pct": 3.094,
+      "open": 421.2,
+      "prev_close": 420.2,
+      "high": 434.8,
+      "low": 418.4,
+      "amount_yi": 87.54832823832001,
+      "quote_date": "",
+      "quote_time": "",
+      "note": ""
+    },
+    {
+      "code": "rt_hk09868",
+      "configured_name": "小鹏汽车-W",
+      "name": "小鹏集团－Ｗ",
+      "price": 50.85,
+      "pct": 7.278,
+      "open": 49.5,
+      "prev_close": 47.4,
+      "high": 50.9,
+      "low": 48.58,
+      "amount_yi": 8.0365209932,
+      "quote_date": "",
+      "quote_time": "",
+      "note": ""
+    },
+    {
+      "code": "rt_hk02269",
+      "configured_name": "药明生物",
+      "name": "药明生物",
+      "price": 34.46,
+      "pct": -2.324,
+      "open": 35.28,
+      "prev_close": 35.28,
+      "high": 35.8,
+      "low": 34.4,
+      "amount_yi": 4.3137351212,
+      "quote_date": "",
+      "quote_time": "",
+      "note": ""
+    }
+  ],
+  "hk_quote_error": null,
+  "boards": {},
+  "stock_candidates": [],
+  "stock_candidate_error": null
+}

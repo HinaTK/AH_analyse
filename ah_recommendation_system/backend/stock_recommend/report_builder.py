@@ -12,6 +12,7 @@ from loguru import logger
 
 from ah_recommendation_system.backend.stock_recommend.market_hotspots import build_market_hotspots
 from ah_recommendation_system.backend.stock_recommend.decision_engine import build_market_decision
+from ah_recommendation_system.backend.stock_recommend.cross_market import build_cross_market_conclusion
 from ah_recommendation_system.backend.stock_recommend.quality_gate import evaluate_report_quality
 
 
@@ -164,6 +165,16 @@ def build_report(
     ))
     directions = dict(decision.get("directions") or {})
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cross_market_data = dict(cross_market or {})
+    if not cross_market_data:
+        cross_market_data = {
+            "status": "unavailable",
+            "risk_level": "unknown",
+            "markets": {},
+            "conclusion": build_cross_market_conclusion({"status": "unavailable"}),
+        }
+    else:
+        cross_market_data.setdefault("conclusion", build_cross_market_conclusion(cross_market_data))
     report = {
         "schema_version": "decision-report-v2",
         "generated_at": generated_at,
@@ -220,7 +231,7 @@ def build_report(
             "coverage": coverage,
             "errors": snap_errors,
         },
-        "cross_market": dict(cross_market or {}),
+        "cross_market": cross_market_data,
         "research_audit": {
             "market_data": dict(coverage.get("provider_health") or {}),
             "news": dict((coverage.get("provider_health") or {}).get("news") or {}),
@@ -264,6 +275,7 @@ def build_markdown(report: Dict[str, Any]) -> str:
         lines.append(
             f"- **姿态**：{market.get('label', market.get('regime', '待确认'))}"
             f"｜状态 `{market.get('status', '需确认')}`｜环境分 {market.get('score', '-')}"
+            f"｜{market.get('position_guidance', '仓位待定')}"
         )
         for item in market.get("evidence") or []:
             lines.append(f"- 证据：{item.get('statement', '')}（{item.get('source', '-')}，{item.get('as_of', '-') }）")
@@ -302,9 +314,19 @@ def build_markdown(report: Dict[str, Any]) -> str:
             f"- 状态：{cross_market.get('status', '待确认')}｜风险等级：{cross_market.get('risk_level', 'unknown')}"
             f"｜时间：{cross_market.get('observed_at', '-')}"
         )
+        if cross_market.get("conclusion"):
+            lines.append(f"- **对A股结论**：{cross_market['conclusion']}")
         lines.append("")
     if report.get("market_view"):
         lines.append(f"**大盘看法**: {report['market_view']}")
+        lines.append("")
+    audit = report.get("evidence_audit") or {}
+    if audit:
+        regime = audit.get("market_regime") or {}
+        lines.append(f"**证据覆盖**：财务 {audit.get('financial_count', 0)}/{audit.get('attempted_count', 0)}；"
+                     f"相对基准 {audit.get('relative_strength_count', 0)}/{audit.get('attempted_count', 0)}。"
+                     f"基准状态：{regime.get('regime', 'unknown')}，行情截止 {regime.get('price_as_of', '缺失')}。")
+        lines.append("财务覆盖为候选子集年报；历史接口不是修订版本档案。权重晋级需通过滚动样本外及组合风险验证。")
         lines.append("")
     market_hotspots = report.get("market_hotspots") or []
     lines.append("## 市场热点")
@@ -314,7 +336,7 @@ def build_markdown(report: Dict[str, Any]) -> str:
             status = item.get("status_label") or item.get("status") or "需确认"
             drivers = "、".join(item.get("drivers") or []) or "暂无明确驱动"
             industries = "、".join(item.get("industries") or []) or "待映射"
-            reps = "、".join(item.get("representatives") or []) or "暂无代表标的"
+            reps = "、".join(item.get("representatives") or []) or item.get("mapping_gap") or "行业成员数据缺失"
             lines.append(f"- **{item.get('theme', '未知')}**｜{status}｜驱动：{drivers}｜行业：{industries}｜代表：{reps}")
     else:
         lines.append("> 暂无已验证市场热点（新闻与盘面信号均不足）")
@@ -352,7 +374,8 @@ def build_markdown(report: Dict[str, Any]) -> str:
         lines.append("")
         for item in observation_pool[:6]:
             reasons = "；".join(item.get("rejection_reasons") or []) or "等待更多证据"
-            lines.append(f"- {item.get('name', '')} ({item.get('code', '')})：{reasons}")
+            role = item.get("role") or "观察"
+            lines.append(f"- {role}｜{item.get('name', '')} ({item.get('code', '')})：{reasons}")
     warns = report.get("data_warnings") or []
     if warns:
         lines.append("---")
@@ -438,12 +461,10 @@ def save_review_report(review: Dict[str, Any], root_dir: Path) -> Dict[str, str]
             if evidence:
                 lines.append(f"  - 证据：{evidence}")
         lines.append("")
+    from ah_recommendation_system.backend.stock_recommend.post_market import format_review_item
+    lines.append("?????T+1/T+5/T+20????????????????????")
     for item in review.get("items") or []:
-        lines.append(
-            f"- {item.get('name', '')} ({item.get('code', '')})："
-            f"{item.get('status', 'pending')}，收益 {item.get('return_pct', '-') }%，"
-            f"修正 {item.get('correction', 'confirm')}"
-        )
+        lines.append(format_review_item(item))
     markdown = "\n".join(lines) + "\n"
     payload = json.dumps(review, ensure_ascii=False, indent=2)
     json_path.write_text(payload, encoding="utf-8")

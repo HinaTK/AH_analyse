@@ -1,0 +1,68 @@
+{
+  "generated_at": "2026-06-03 13:53:23",
+  "sources": [
+    "Sina realtime quotes",
+    "EastMoney board data via AkShare"
+  ],
+  "universe": {
+    "a_quotes": {
+      "sz300502": "新易盛",
+      "sz300308": "中际旭创",
+      "sz300394": "天孚通信"
+    },
+    "hk_quotes": {}
+  },
+  "a_quotes": [
+    {
+      "code": "sz300502",
+      "configured_name": "新易盛",
+      "name": "新易盛",
+      "price": 795.01,
+      "pct": 6.427041499330654,
+      "open": 760.0,
+      "prev_close": 747.0,
+      "high": 815.98,
+      "low": 758.07,
+      "amount_yi": 250.2457279815,
+      "quote_date": "2026-06-03",
+      "quote_time": "13:53:21",
+      "note": ""
+    },
+    {
+      "code": "sz300308",
+      "configured_name": "中际旭创",
+      "name": "中际旭创",
+      "price": 1292.0,
+      "pct": 8.406541311115031,
+      "open": 1220.0,
+      "prev_close": 1191.81,
+      "high": 1320.0,
+      "low": 1220.0,
+      "amount_yi": 328.7798420867,
+      "quote_date": "2026-06-03",
+      "quote_time": "13:53:21",
+      "note": ""
+    },
+    {
+      "code": "sz300394",
+      "configured_name": "天孚通信",
+      "name": "天孚通信",
+      "price": 507.94,
+      "pct": 11.146608315098467,
+      "open": 501.0,
+      "prev_close": 457.0,
+      "high": 525.0,
+      "low": 488.0,
+      "amount_yi": 236.5403037589,
+      "quote_date": "2026-06-03",
+      "quote_time": "13:53:21",
+      "note": ""
+    }
+  ],
+  "a_quote_error": null,
+  "hk_quotes": [],
+  "hk_quote_error": null,
+  "boards": {},
+  "stock_candidates": [],
+  "stock_candidate_error": null
+}

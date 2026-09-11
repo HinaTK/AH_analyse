@@ -40,6 +40,34 @@ DEFAULT_FOCUS_UNIVERSE: Dict[str, List[Dict[str, str]]] = {
         {"code": "300760", "name": "迈瑞医疗"},
         {"code": "603259", "name": "药明康德"},
     ],
+    "银行": [
+        {"code": "002142", "name": "宁波银行"},
+        {"code": "600036", "name": "招商银行"},
+    ],
+    "油轮运输": [
+        {"code": "601872", "name": "招商轮船"},
+        {"code": "600026", "name": "中远海能"},
+    ],
+    "油运": [
+        {"code": "601872", "name": "招商轮船"},
+        {"code": "600026", "name": "中远海能"},
+    ],
+    "集装箱航运": [
+        {"code": "601919", "name": "中远海控"},
+        {"code": "601866", "name": "中远海发"},
+    ],
+    "石油开采": [
+        {"code": "600028", "name": "中国石化"},
+        {"code": "601857", "name": "中国石油"},
+    ],
+    "功率半导体": [
+        {"code": "600584", "name": "长电科技"},
+        {"code": "603501", "name": "韦尔股份"},
+    ],
+    "人形机器人": [
+        {"code": "002050", "name": "三花智控"},
+        {"code": "002008", "name": "大族激光"},
+    ],
 }
 
 
@@ -194,6 +222,12 @@ def build_focused_snapshot(
         (str(row.get("quote_source")) for row in rows if row.get("quote_source")),
         "tencent",
     )
+    cross_market: Dict[str, Any] = {}
+    try:
+        from ah_recommendation_system.backend.stock_recommend.cross_market import collect_cross_market
+        cross_market = collect_cross_market()
+    except Exception as exc:
+        errors.append(f"cross_market:{type(exc).__name__}")
     return CollectedSnapshot(
         date=datetime.now().strftime("%Y-%m-%d"),
         fundamental={"generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "source": f"focused_{quote_source}_quotes", "rows": rows, "count": len(rows), "universe_size": requested_count, "requested_count": requested_count},
@@ -209,6 +243,7 @@ def build_focused_snapshot(
             ],
         },
         events={"source": "focused", "stock_news": [], "macro_news": {}},
+        cross_market=cross_market,
         errors=errors,
     )
 

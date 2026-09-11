@@ -21,9 +21,7 @@ _DEFAULT_SOURCES: List[RssSource] = [
     RssSource(name="金融界-大盘资讯", url="https://rss.jrj.com.cn/stock/673.xml"),
     RssSource(name="金融界-综合", url="https://rss.jrj.com.cn/stock/734.xml"),
     RssSource(name="金融界-行业新闻", url="https://rss.jrj.com.cn/stock/740.xml"),
-    # Keep other providers as best-effort (some feeds may be empty depending on region/network).
-    RssSource(name="凤凰-股市要闻", url="https://finance.ifeng.com/rss/stocknews.xml"),
-    RssSource(name="凤凰-基金要闻", url="https://finance.ifeng.com/rss/fundnews.xml"),
+    # The former ifeng RSS URLs return permanent HTTP 404 (live verified).
 ]
 
 

@@ -1,0 +1,223 @@
+{
+  "schema_version": "1.0",
+  "updated_at": "2026-05-22",
+  "purpose": "X/Twitter early-radar watchlist for China-market sector analysis. Signals here are pre-confirmation inputs and must be verified with ETF/index price action and official/media sources before scoring.",
+  "source_quality_rule": {
+    "official_company_regulator_exchange": "tier_1_or_near_tier_1",
+    "data_research_institution": "tier_2_high",
+    "market_news_wire_or_known_market_commentator": "tier_2_or_tier_3_depending_on_evidence",
+    "anonymous_screenshot_chatroom_or_unverifiable_claim": "noise_only"
+  },
+  "accounts": [
+    {
+      "handle": "Sino_Market",
+      "name": "Sino Market",
+      "category": "china_market_news",
+      "coverage": ["A股", "港股", "政策", "板块异动", "中概"],
+      "priority": "P1",
+      "default_weight": "medium_high",
+      "use_case": "快速发现A股/港股突发消息和异动方向",
+      "verification_required": ["ETF/指数价格确认", "主流财经媒体或官方源交叉验证"]
+    },
+    {
+      "handle": "YuanTalks",
+      "name": "Yuan Talks",
+      "category": "china_market_news",
+      "coverage": ["中国市场", "港股", "中概", "政策", "公司新闻"],
+      "priority": "P1",
+      "default_weight": "medium_high",
+      "use_case": "捕捉中国资产相关新闻和市场解释",
+      "verification_required": ["ETF/指数价格确认", "公告/主流财经媒体交叉验证"]
+    },
+    {
+      "handle": "SemiAnalysis_",
+      "name": "SemiAnalysis",
+      "category": "semiconductor_ai_hardware",
+      "coverage": ["AI算力", "GPU", "半导体", "数据中心", "先进封装"],
+      "priority": "P1",
+      "default_weight": "high_for_global_ai_chain",
+      "use_case": "验证AI硬件、GPU、半导体产业链逻辑",
+      "verification_required": ["A股/H股映射ETF确认", "公司公告/财报/产业数据交叉验证"]
+    },
+    {
+      "handle": "dylan522p",
+      "name": "Dylan Patel",
+      "category": "semiconductor_ai_hardware",
+      "coverage": ["AI芯片", "GPU", "半导体供需", "英伟达链"],
+      "priority": "P1",
+      "default_weight": "high_for_global_ai_chain",
+      "use_case": "识别海外AI硬件变化对A股科技链的映射",
+      "verification_required": ["SemiAnalysis原文或会议/财报来源", "A股ETF价格确认"]
+    },
+    {
+      "handle": "TrendForce",
+      "name": "TrendForce",
+      "category": "industry_data",
+      "coverage": ["存储", "面板", "半导体", "价格", "供需"],
+      "priority": "P1",
+      "default_weight": "high_for_data",
+      "use_case": "存储、面板、半导体价格和供需验证",
+      "verification_required": ["报告原文/新闻稿", "对应行业ETF确认"]
+    },
+    {
+      "handle": "TechInsightsInc",
+      "name": "TechInsights",
+      "category": "industry_data",
+      "coverage": ["芯片", "终端拆解", "半导体", "智能手机", "电子"],
+      "priority": "P2",
+      "default_weight": "medium_high",
+      "use_case": "电子、芯片和终端产业验证",
+      "verification_required": ["报告原文", "相关ETF/个股链条确认"]
+    },
+    {
+      "handle": "Canalys",
+      "name": "Canalys",
+      "category": "industry_data",
+      "coverage": ["手机", "PC", "AI终端", "消费电子"],
+      "priority": "P2",
+      "default_weight": "medium_high",
+      "use_case": "消费电子、AI终端出货数据验证",
+      "verification_required": ["报告原文", "消费电子/港股科技价格确认"]
+    },
+    {
+      "handle": "CnEVPost",
+      "name": "CnEVPost",
+      "category": "ev_auto",
+      "coverage": ["中国新能源车", "车企", "销量", "港股汽车", "电池"],
+      "priority": "P1",
+      "default_weight": "high_for_ev_news",
+      "use_case": "新能源车、智能驾驶、港股汽车快讯和数据",
+      "verification_required": ["车企公告/销量数据", "新能源车ETF/港股汽车确认"]
+    },
+    {
+      "handle": "tphuang",
+      "name": "tphuang",
+      "category": "china_tech_ev_energy",
+      "coverage": ["中国EV", "能源", "科技", "供应链"],
+      "priority": "P2",
+      "default_weight": "medium",
+      "use_case": "中国科技、新能源和供应链观点补充",
+      "verification_required": ["数据来源确认", "ETF/行业指数确认"]
+    },
+    {
+      "handle": "BloombergNEF",
+      "name": "BloombergNEF",
+      "category": "energy_transition",
+      "coverage": ["新能源", "储能", "电力", "碳市场", "电池"],
+      "priority": "P2",
+      "default_weight": "medium_high",
+      "use_case": "新能源、储能、电力和碳市场慢变量验证",
+      "verification_required": ["报告/数据原文", "新能源ETF价格确认"]
+    },
+    {
+      "handle": "BioCentury",
+      "name": "BioCentury",
+      "category": "biotech_pharma",
+      "coverage": ["创新药", "BD", "监管", "融资", "海外药企"],
+      "priority": "P2",
+      "default_weight": "medium_high",
+      "use_case": "创新药出海、BD和海外医药事件验证",
+      "verification_required": ["公司公告/监管文件", "创新药ETF/港股医疗确认"]
+    },
+    {
+      "handle": "endpts",
+      "name": "Endpoints News",
+      "category": "biotech_pharma",
+      "coverage": ["生物科技", "药企新闻", "FDA", "BD"],
+      "priority": "P2",
+      "default_weight": "medium",
+      "use_case": "海外创新药和生物科技快讯",
+      "verification_required": ["公司公告/监管文件", "医药ETF确认"]
+    },
+    {
+      "handle": "FierceBiotech",
+      "name": "Fierce Biotech",
+      "category": "biotech_pharma",
+      "coverage": ["生物科技", "临床", "并购", "监管"],
+      "priority": "P2",
+      "default_weight": "medium",
+      "use_case": "海外医药产业事件补充",
+      "verification_required": ["公司公告/监管文件", "A/H医疗价格确认"]
+    },
+    {
+      "handle": "triviumchina",
+      "name": "Trivium China",
+      "category": "china_policy_macro",
+      "coverage": ["中国政策", "监管", "宏观", "产业政策"],
+      "priority": "P2",
+      "default_weight": "medium_high",
+      "use_case": "政策和监管解释，辅助P0事件理解",
+      "verification_required": ["官方文件原文", "行业ETF确认"]
+    },
+    {
+      "handle": "ChinaBeigeBook",
+      "name": "China Beige Book",
+      "category": "china_macro",
+      "coverage": ["中国宏观", "企业调查", "信用", "消费", "就业"],
+      "priority": "P2",
+      "default_weight": "medium",
+      "use_case": "宏观景气和企业调查背景",
+      "verification_required": ["报告摘要/数据", "宽基/风格确认"]
+    },
+    {
+      "handle": "liqian_ren",
+      "name": "Liqian Ren",
+      "category": "china_strategy",
+      "coverage": ["中国资产", "ETF", "宏观", "配置"],
+      "priority": "P3",
+      "default_weight": "medium",
+      "use_case": "中国资产配置与跨市场观点参考",
+      "verification_required": ["数据来源", "市场价格确认"]
+    },
+    {
+      "handle": "DeItaone",
+      "name": "DeItaone",
+      "category": "global_news_wire",
+      "coverage": ["全球宏观", "央行", "突发", "市场快讯"],
+      "priority": "P2",
+      "default_weight": "medium",
+      "use_case": "海外宏观、地缘和商品突发预警",
+      "verification_required": ["官方/主流媒体交叉验证", "资产价格确认"]
+    },
+    {
+      "handle": "LiveSquawk",
+      "name": "LiveSquawk",
+      "category": "global_news_wire",
+      "coverage": ["宏观", "央行", "商品", "利率", "突发"],
+      "priority": "P2",
+      "default_weight": "medium",
+      "use_case": "海外市场和宏观事件快讯",
+      "verification_required": ["官方/主流媒体交叉验证", "资产价格确认"]
+    },
+    {
+      "handle": "FirstSquawk",
+      "name": "First Squawk",
+      "category": "global_news_wire",
+      "coverage": ["宏观", "央行", "突发", "市场快讯"],
+      "priority": "P3",
+      "default_weight": "medium_low",
+      "use_case": "高频突发新闻雷达",
+      "verification_required": ["至少一个主流/官方来源确认", "价格确认"]
+    },
+    {
+      "handle": "zerohedge",
+      "name": "ZeroHedge",
+      "category": "market_sentiment",
+      "coverage": ["宏观", "地缘", "商品", "风险偏好"],
+      "priority": "P3",
+      "default_weight": "low_to_medium",
+      "use_case": "情绪和风险事件雷达，不能单独入评分",
+      "verification_required": ["必须交叉验证", "不能作为唯一依据"]
+    },
+    {
+      "handle": "JavierBlas",
+      "name": "Javier Blas",
+      "category": "commodities_energy",
+      "coverage": ["原油", "能源", "商品", "供需"],
+      "priority": "P2",
+      "default_weight": "medium_high",
+      "use_case": "油气、商品和能源冲击验证",
+      "verification_required": ["商品价格", "官方/交易所/主流媒体交叉验证"]
+    }
+  ]
+}

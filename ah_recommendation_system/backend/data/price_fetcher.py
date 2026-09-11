@@ -20,6 +20,7 @@ except Exception:  # pragma: no cover
 	bs = None  # type: ignore
 
 from ah_recommendation_system.backend.stock_recommend.hithink_client import HithinkClient
+from ah_recommendation_system.backend.stock_recommend.execution_data import _SESSION_LOCK
 
 
 _A_SHARE_SUFFIXES = (".SH", ".SZ")
@@ -89,6 +90,8 @@ class PriceFetcher:
 		self._fx_cache_ttl_seconds = 3600
 		self._ak_history_failures = 0
 		self._ak_history_open_until = 0.0
+		self._hithink_history_failures = 0
+		self._hithink_history_open_until = 0.0
 		self._ak_history_cooldown = 60.0
 		self.history_source_counts: Dict[str, int] = {}
 		self.history_errors: list[str] = []
@@ -119,25 +122,26 @@ class PriceFetcher:
 		return df
 
 	def _get_baostock_history(self, normalized: str, start: str, end: str) -> pd.DataFrame:
-		if bs is None:
+		if bs is None or normalized.startswith(("8", "43", "92")):
 			return pd.DataFrame()
-		login = bs.login()
-		if getattr(login, "error_code", "1") != "0":
-			return pd.DataFrame()
-		try:
-			code = ("sh." if normalized.startswith(("5", "6", "9")) else "sz.") + normalized
-			result = bs.query_history_k_data_plus(
-				code, "date,open,high,low,close,volume,amount", start_date=f"{start[:4]}-{start[4:6]}-{start[6:]}",
-				end_date=f"{end[:4]}-{end[4:6]}-{end[6:]}", frequency="d", adjustflag="2",
-			)
-			if getattr(result, "error_code", "1") != "0":
+		with _SESSION_LOCK:
+			login = bs.login()
+			if getattr(login, "error_code", "1") != "0":
 				return pd.DataFrame()
-			rows = []
-			while result.next():
-				rows.append(result.get_row_data())
-			return pd.DataFrame(rows, columns=result.fields)
-		finally:
-			bs.logout()
+			try:
+				code = ("sh." if normalized.startswith(("5", "6", "9")) else "sz.") + normalized
+				result = bs.query_history_k_data_plus(
+					code, "date,open,high,low,close,volume,amount", start_date=f"{start[:4]}-{start[4:6]}-{start[6:]}",
+					end_date=f"{end[:4]}-{end[4:6]}-{end[6:]}", frequency="d", adjustflag="2",
+				)
+				if getattr(result, "error_code", "1") != "0":
+					return pd.DataFrame()
+				rows = []
+				while result.next():
+					rows.append(result.get_row_data())
+				return pd.DataFrame(rows, columns=result.fields)
+			finally:
+				bs.logout()
 
 	def _get_mock_price_data(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
 		"""生成模拟价格数据"""
@@ -195,14 +199,26 @@ class PriceFetcher:
 
 		# Prefer the official Financial-API when configured, then an independent
 		# historical provider.  AKShare remains the final compatibility fallback.
-		for source, provider in (("hithink_financial_api", self._get_hithink_history), ("baostock", self._get_baostock_history)):
+		providers = []
+		if time.time() >= self._hithink_history_open_until:
+			providers.append(("hithink_financial_api", self._get_hithink_history))
+		else:
+			logger.warning("HiThink historical circuit open; skipping {}", normalized)
+		providers.append(("baostock", self._get_baostock_history))
+		for source, provider in providers:
 			try:
 				df = provider(normalized, start, end)
 				if df is not None and not df.empty:
+					if source == "hithink_financial_api":
+						self._hithink_history_failures = 0
 					self._record_history_source(source)
 					self.cache[cache_key] = (datetime.now(), df)
 					return df
 			except Exception as e:
+				if source == "hithink_financial_api":
+					self._hithink_history_failures += 1
+					if self._hithink_history_failures >= 3:
+						self._hithink_history_open_until = time.time() + 900
 				self.history_errors.append(f"{source}:{type(e).__name__}")
 				logger.warning(f"Historical provider {provider.__name__} failed for {normalized}: {e}")
 

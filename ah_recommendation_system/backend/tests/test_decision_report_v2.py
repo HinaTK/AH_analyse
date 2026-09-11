@@ -355,6 +355,28 @@ class TestDecisionReportV2(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(len(result["payload_hash"]), 64)
 
+    def test_market_decision_contains_explicit_position_guidance(self):
+        from ah_recommendation_system.backend.stock_recommend.decision_engine import build_market_decision
+
+        decision = build_market_decision(as_of="2026-09-10", market_signals=[], hotspots=[], coverage={"ratio": 1.0})
+        self.assertIn("position_guidance", decision)
+        self.assertRegex(decision["position_guidance"], r"\d+%.*\d+%")
+
+    def test_cross_market_report_contains_actionable_conclusion(self):
+        from ah_recommendation_system.backend.stock_recommend.report_builder import build_report
+
+        report = build_report(
+            selection={"as_of": "2026-09-10", "picks": [], "etf_picks": []},
+            candidates=[],
+            cross_market={
+                "status": "ok",
+                "risk_level": "normal",
+                "markets": {"united_states": [{"name": "纳斯达克", "change_pct": 1.2}]},
+            },
+        )
+        self.assertTrue(report["cross_market"].get("conclusion"))
+        self.assertIn("A股", report["cross_market"]["conclusion"])
+
     def test_ambiguous_delivery_blocks_automatic_same_session_retry(self):
         from ah_recommendation_system.backend.stock_recommend.delivery_guard import (
             record_delivery,

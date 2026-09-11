@@ -1,0 +1,150 @@
+{
+  "generated_at": "2026-06-09 09:49:59",
+  "sources": [
+    "Sina realtime quotes",
+    "EastMoney board data via AkShare"
+  ],
+  "universe": {
+    "a_quotes": {
+      "sz159992": "创新药ETF银华",
+      "sh513120": "港股创新药ETF广发",
+      "sh512170": "医疗ETF华宝",
+      "sz159828": "医疗ETF富国",
+      "sh000300": "沪深300",
+      "sh000001": "上证指数"
+    },
+    "hk_quotes": {
+      "rt_hkHSI": "恒生指数",
+      "rt_hkHSTECH": "恒生科技指数"
+    }
+  },
+  "a_quotes": [
+    {
+      "code": "sz159992",
+      "configured_name": "创新药ETF银华",
+      "name": "创新药",
+      "price": 0.698,
+      "pct": -1.2729844413012743,
+      "open": 0.706,
+      "prev_close": 0.707,
+      "high": 0.707,
+      "low": 0.696,
+      "amount_yi": 1.8333880569999998,
+      "quote_date": "2026-06-09",
+      "quote_time": "09:49:57",
+      "note": ""
+    },
+    {
+      "code": "sh513120",
+      "configured_name": "港股创新药ETF广发",
+      "name": "港股创新药ETF广发",
+      "price": 0.962,
+      "pct": -2.434077079107507,
+      "open": 0.985,
+      "prev_close": 0.986,
+      "high": 0.986,
+      "low": 0.96,
+      "amount_yi": 7.02359407,
+      "quote_date": "2026-06-09",
+      "quote_time": "09:49:58",
+      "note": ""
+    },
+    {
+      "code": "sh512170",
+      "configured_name": "医疗ETF华宝",
+      "name": "医疗ETF华宝",
+      "price": 0.29,
+      "pct": -1.0238907849829362,
+      "open": 0.292,
+      "prev_close": 0.293,
+      "high": 0.293,
+      "low": 0.288,
+      "amount_yi": 1.62682572,
+      "quote_date": "2026-06-09",
+      "quote_time": "09:49:57",
+      "note": ""
+    },
+    {
+      "code": "sz159828",
+      "configured_name": "医疗ETF富国",
+      "name": "医疗ETF",
+      "price": 0.361,
+      "pct": -1.0958904109589052,
+      "open": 0.365,
+      "prev_close": 0.365,
+      "high": 0.365,
+      "low": 0.359,
+      "amount_yi": 0.10293352300000001,
+      "quote_date": "2026-06-09",
+      "quote_time": "09:49:57",
+      "note": ""
+    },
+    {
+      "code": "sh000300",
+      "configured_name": "沪深300",
+      "name": "沪深300",
+      "price": 4742.783,
+      "pct": 0.6183591867661973,
+      "open": 4743.4505,
+      "prev_close": 4713.6358,
+      "high": 4749.7714,
+      "low": 4727.7378,
+      "amount_yi": 1709.91848049,
+      "quote_date": "2026-06-09",
+      "quote_time": "09:49:54",
+      "note": ""
+    },
+    {
+      "code": "sh000001",
+      "configured_name": "上证指数",
+      "name": "上证指数",
+      "price": 3965.7906,
+      "pct": 0.1629767482835141,
+      "open": 3977.5394,
+      "prev_close": 3959.3378,
+      "high": 3979.597,
+      "low": 3956.0472,
+      "amount_yi": 2933.22923921,
+      "quote_date": "2026-06-09",
+      "quote_time": "09:49:56",
+      "note": ""
+    }
+  ],
+  "a_quote_error": null,
+  "hk_quotes": [
+    {
+      "code": "rt_hkHSI",
+      "configured_name": "恒生指数",
+      "name": "恒生指数",
+      "price": 24539.24,
+      "pct": -0.48,
+      "open": 24551.93,
+      "prev_close": 24657.059,
+      "high": 24609.91,
+      "low": 24486.39,
+      "amount_yi": 0.5441913440999999,
+      "quote_date": "",
+      "quote_time": "",
+      "note": ""
+    },
+    {
+      "code": "rt_hkHSTECH",
+      "configured_name": "恒生科技指数",
+      "name": "恒生科技指数",
+      "price": 4764.26,
+      "pct": 0.18,
+      "open": 4743.52,
+      "prev_close": 4755.91,
+      "high": 4776.48,
+      "low": 4738.26,
+      "amount_yi": 0.11161324790999999,
+      "quote_date": "",
+      "quote_time": "",
+      "note": ""
+    }
+  ],
+  "hk_quote_error": null,
+  "boards": {},
+  "stock_candidates": [],
+  "stock_candidate_error": null
+}

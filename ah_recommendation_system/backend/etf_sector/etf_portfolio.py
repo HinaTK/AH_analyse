@@ -132,7 +132,7 @@ def _theme_match_score(row: Mapping[str, Any], hotspots: Iterable[Mapping[str, A
     return _clamp(score), reasons
 
 
-def _gate(row: Mapping[str, Any]) -> tuple[bool, List[str]]:
+def _gate(row: Mapping[str, Any], *, min_turnover: float = MIN_TURNOVER) -> tuple[bool, List[str]]:
     reasons: List[str] = []
     status = str(row.get("status") or "")
     if status not in {"ok", "history_limited"}:
@@ -141,8 +141,8 @@ def _gate(row: Mapping[str, Any]) -> tuple[bool, List[str]]:
     if history is None or history < MIN_HISTORY_DAYS:
         reasons.append("history:<60d")
     turnover = _float(row.get("turnover"))
-    if turnover is None or turnover < MIN_TURNOVER:
-        reasons.append("liquidity:<1e8")
+    if turnover is None or turnover < min_turnover:
+        reasons.append(f"liquidity:<{min_turnover:g}")
     trend = _float(row.get("trend_score"))
     if trend is None or trend < MIN_TREND_SCORE:
         reasons.append("trend:<60")
@@ -227,6 +227,7 @@ def select_etf_portfolio(
     *,
     limit: int = 3,
     min_score: float = 60.0,
+    min_turnover: float = MIN_TURNOVER,
 ) -> Dict[str, Any]:
     """Select a small diversified ETF portfolio without filling weak slots."""
     limit = max(0, min(int(limit), 3))
@@ -238,7 +239,7 @@ def select_etf_portfolio(
         if "composite_score" not in row:
             row["composite_score"] = _float(row.get("score")) or _float(row.get("trend_score")) or 0.0
         row.update(classify_etf_exposure(row))
-        passed, reasons = _gate(row)
+        passed, reasons = _gate(row, min_turnover=max(0.0, float(min_turnover)))
         if not passed or float(row.get("composite_score") or 0.0) < min_score:
             row["selection_status"] = "rejected"
             row["rejection_reasons"] = reasons or [f"score:<{min_score:g}"]

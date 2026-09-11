@@ -80,3 +80,26 @@ def collect_cross_market(*, ak_module: Any = None) -> Dict[str, Any]:
         "errors": errors,
         "source": "akshare_cross_market",
     }
+
+
+def build_cross_market_conclusion(cross_market: Optional[Dict[str, Any]]) -> str:
+    """Translate external-market observations into an A-share implication."""
+    data = dict(cross_market or {})
+    if data.get("status") in {"failed", "unavailable"}:
+        return "外部市场数据本次未采集，暂不据此调整仓位；以A股开盘后的成交与宽度为准。"
+    if str(data.get("risk_level") or "").lower() in {"high", "p0", "高"}:
+        return "外部风险偏好偏弱，对A股形成压制；建议降低进攻仓位，等待A股成交与宽度修复。"
+    changes = []
+    for group in ("united_states", "hong_kong"):
+        for row in (data.get("markets") or {}).get(group) or []:
+            try:
+                changes.append(float(row.get("change_pct")))
+            except (TypeError, ValueError):
+                continue
+    if changes:
+        average = sum(changes) / len(changes)
+        if average >= 0.5:
+            return "外部风险偏好偏正面，对A股开盘情绪有支持；仅在A股成交和上涨宽度同步确认后加仓。"
+        if average <= -0.5:
+            return "外部风险偏好偏弱，对A股开盘情绪有压制；优先轻仓，等待盘面确认后再参与。"
+    return "外部环境中性，对A股方向影响有限；以A股自身成交、宽度和行业强弱确认仓位。"

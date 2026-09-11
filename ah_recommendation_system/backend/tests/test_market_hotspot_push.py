@@ -30,7 +30,7 @@ class TestMarketHotspotPush(unittest.TestCase):
         self.assertIn("运营商资本开支增加", rendered)
         self.assertIn("光模块、数据中心", rendered)
         self.assertIn("消息验证", rendered)
-        self.assertIn("证据2条", rendered)
+        self.assertIn("报道2篇", rendered)
 
     def test_etf_trend_alone_does_not_become_market_hotspot(self):
         from ah_recommendation_system.backend.stock_recommend.feishu_pusher import build_card
@@ -88,6 +88,72 @@ class TestMarketHotspotPush(unittest.TestCase):
 
         rendered = json.dumps(build_card({"as_of": "2026-09-09", "picks": [], "etf_picks": []}), ensure_ascii=False)
         self.assertIn("市场热点", rendered)
+        self.assertIn("暂无已验证市场热点", rendered)
+
+    def test_unmapped_but_evidence_backed_hotspot_is_kept_as_early_signal(self):
+        from ah_recommendation_system.backend.stock_recommend.hotspot_mapper import validate_and_expand_hotspots
+
+        result = validate_and_expand_hotspots(
+            [{"theme": "算力扩容", "industries": ["数据中心"], "evidence_refs": ["n1", "n2"], "confidence": 0.8}],
+            focus_universe={}, rows=[],
+        )
+        self.assertEqual(result["hotspots"][0]["status"], "early_signal")
+
+    def test_candidate_industry_fallback_is_explicitly_unconfirmed(self):
+        from ah_recommendation_system.backend.stock_recommend.market_hotspots import build_market_hotspots
+
+        result = build_market_hotspots(
+            picks=[
+                {"name": "甲", "focus_industries": ["有色金属"]},
+                {"name": "乙", "focus_industries": ["有色金属"]},
+            ]
+        )
+        self.assertEqual(result[0]["source_type"], "candidate")
+        self.assertEqual(result[0]["status_label"], "候选方向待确认")
+
+    def test_feishu_card_suppresses_static_scope_and_summary_noise(self):
+        from ah_recommendation_system.backend.stock_recommend.feishu_pusher import build_card
+
+        card = build_card({
+            "schema_version": "decision-report-v2",
+            "as_of": "2026-09-10",
+            "summary": "仅保留具备可追溯趋势/量价及至少三类独立证据的候选；证据不足时不生成个股推荐。",
+            "coverage": {"label": "全市场观察池"},
+            "data_status": "ok",
+            "market": {"label": "防守", "status": "降级观察", "score": 35, "position_guidance": "轻仓 20%-30%"},
+            "recommendations": {"stocks": [], "etfs": []},
+        })
+        rendered = json.dumps(card, ensure_ascii=False)
+        self.assertNotIn("盘前总结", rendered)
+        self.assertNotIn("范围：全市场观察池", rendered)
+
+
+
+    def test_placeholder_news_theme_is_not_pushed(self):
+        from ah_recommendation_system.backend.stock_recommend.market_hotspots import build_market_hotspots
+        from ah_recommendation_system.backend.stock_recommend.feishu_pusher import build_card
+        from ah_recommendation_system.backend.stock_recommend.report_builder import build_report
+
+        hotspots = build_market_hotspots(news_hotspots=[{
+            "theme": "新闻驱动待确认",
+            "drivers": ["a", "b", "c"],
+            "status": "early_signal",
+            "confidence": 0.35,
+            "evidence_refs": ["n1", "n2"],
+        }])
+        self.assertEqual(hotspots, [])
+        report = build_report(
+            selection={"as_of": "2026-09-10", "picks": [], "etf_picks": []},
+            candidates=[],
+            llm_context={"hotspots": [{
+                "theme": "新闻驱动待确认",
+                "status": "early_signal",
+                "confidence": 0.35,
+                "evidence_refs": ["n1", "n2"],
+            }], "llm": {"hotspot_status": "failed"}},
+        )
+        rendered = json.dumps(build_card(report), ensure_ascii=False)
+        self.assertNotIn("新闻驱动待确认", rendered)
         self.assertIn("暂无已验证市场热点", rendered)
 
 

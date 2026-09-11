@@ -1,0 +1,150 @@
+{
+  "generated_at": "2026-07-14 12:17:46",
+  "sources": [
+    "Sina realtime quotes",
+    "EastMoney board data via AkShare"
+  ],
+  "universe": {
+    "a_quotes": {
+      "sh600276": "恒瑞医药",
+      "sh600900": "长江电力",
+      "sz300308": "中际旭创",
+      "sz300502": "新易盛",
+      "sh600030": "中信证券",
+      "sz300059": "东方财富"
+    },
+    "hk_quotes": {
+      "rt_hk01801": "信达生物",
+      "rt_hk09868": "小鹏汽车-W"
+    }
+  },
+  "a_quotes": [
+    {
+      "code": "sh600276",
+      "configured_name": "恒瑞医药",
+      "name": "恒瑞医药",
+      "price": 54.88,
+      "pct": -1.5605381165919237,
+      "open": 55.75,
+      "prev_close": 55.75,
+      "high": 55.98,
+      "low": 54.27,
+      "amount_yi": 31.15096564,
+      "quote_date": "2026-07-14",
+      "quote_time": "11:30:00",
+      "note": ""
+    },
+    {
+      "code": "sh600900",
+      "configured_name": "长江电力",
+      "name": "长江电力",
+      "price": 28.36,
+      "pct": -0.21111893033076098,
+      "open": 28.4,
+      "prev_close": 28.42,
+      "high": 28.73,
+      "low": 28.21,
+      "amount_yi": 26.81865022,
+      "quote_date": "2026-07-14",
+      "quote_time": "11:30:00",
+      "note": ""
+    },
+    {
+      "code": "sz300308",
+      "configured_name": "中际旭创",
+      "name": "中际旭创",
+      "price": 1142.32,
+      "pct": 3.09747292418772,
+      "open": 1108.53,
+      "prev_close": 1108.0,
+      "high": 1165.73,
+      "low": 1098.0,
+      "amount_yi": 256.5313691591,
+      "quote_date": "2026-07-14",
+      "quote_time": "11:30:00",
+      "note": ""
+    },
+    {
+      "code": "sz300502",
+      "configured_name": "新易盛",
+      "name": "新易盛",
+      "price": 537.09,
+      "pct": 4.798048780487811,
+      "open": 525.0,
+      "prev_close": 512.5,
+      "high": 548.79,
+      "low": 515.55,
+      "amount_yi": 180.3046870939,
+      "quote_date": "2026-07-14",
+      "quote_time": "11:30:00",
+      "note": ""
+    },
+    {
+      "code": "sh600030",
+      "configured_name": "中信证券",
+      "name": "中信证券",
+      "price": 27.5,
+      "pct": -2.2048364153627347,
+      "open": 28.0,
+      "prev_close": 28.12,
+      "high": 28.01,
+      "low": 27.4,
+      "amount_yi": 26.71520177,
+      "quote_date": "2026-07-14",
+      "quote_time": "11:30:00",
+      "note": ""
+    },
+    {
+      "code": "sz300059",
+      "configured_name": "东方财富",
+      "name": "东方财富",
+      "price": 19.39,
+      "pct": -2.2681451612903194,
+      "open": 19.89,
+      "prev_close": 19.84,
+      "high": 19.98,
+      "low": 19.21,
+      "amount_yi": 33.3545267112,
+      "quote_date": "2026-07-14",
+      "quote_time": "11:30:00",
+      "note": ""
+    }
+  ],
+  "a_quote_error": null,
+  "hk_quotes": [
+    {
+      "code": "rt_hk01801",
+      "configured_name": "信达生物",
+      "name": "信达生物",
+      "price": 89.75,
+      "pct": 0.73,
+      "open": 89.8,
+      "prev_close": 89.1,
+      "high": 91.45,
+      "low": 88.4,
+      "amount_yi": 6.626601685,
+      "quote_date": "",
+      "quote_time": "",
+      "note": ""
+    },
+    {
+      "code": "rt_hk09868",
+      "configured_name": "小鹏汽车-W",
+      "name": "小鹏集团－Ｗ",
+      "price": 51.25,
+      "pct": 0.886,
+      "open": 49.8,
+      "prev_close": 50.8,
+      "high": 51.9,
+      "low": 49.7,
+      "amount_yi": 2.224562911,
+      "quote_date": "",
+      "quote_time": "",
+      "note": ""
+    }
+  ],
+  "hk_quote_error": null,
+  "boards": {},
+  "stock_candidates": [],
+  "stock_candidate_error": null
+}

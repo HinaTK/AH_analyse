@@ -8,6 +8,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import sys
 import time
 from datetime import datetime, timedelta
@@ -40,13 +41,15 @@ from ah_recommendation_system.backend.stock_recommend.feishu_pusher import (
     push_to_feishu,
 )
 from ah_recommendation_system.backend.stock_recommend.rule_selector import select_by_rules
+from ah_recommendation_system.backend.stock_recommend.evidence_collection import enrich_evidence
 from ah_recommendation_system.backend.stock_recommend.report_builder import (
     build_report,
     save_report,
     save_review_report,
 )
-from ah_recommendation_system.backend.stock_recommend.post_market import build_post_market_review
+from ah_recommendation_system.backend.stock_recommend.post_market import build_post_market_review, closing_observation
 from ah_recommendation_system.backend.stock_recommend.local_store import load_last_snapshot, persist_snapshot
+from ah_recommendation_system.backend.stock_recommend.market_data import MarketDataManager, SnapshotResult
 from ah_recommendation_system.backend.stock_recommend.reweight import (
     load_event_llm_share,
     load_factor_weights,
@@ -73,6 +76,11 @@ from ah_recommendation_system.backend.stock_recommend.delivery_guard import (
 from ah_recommendation_system.backend.etf_sector.etf_portfolio import build_etf_quality_scores, select_etf_portfolio
 
 LLM_EVENT_REVIEW_CANDIDATE_LIMIT = 10
+
+
+def prefetch_market_snapshot(*, limit: int = 6000) -> SnapshotResult:
+    """Warm the shared live snapshot cache before collection starts."""
+    return MarketDataManager().prefetch_snapshot(limit=limit)
 
 
 def market_data_attempted_chain(snap: Any) -> list[str]:
@@ -212,46 +220,66 @@ def _merge_candidate_events(
     return merged
 
 
-def _enrich_with_daily_features(rows: list[Dict[str, Any]], pf: Any, *, as_of: str, limit: int = 100) -> int:
-    """Attach cached/provider daily features to the highest-value rows."""
-    enriched = 0
-    for row in rows[: max(0, limit)]:
-        code = str(row.get("code") or "")
-        if len(code) != 6:
-            continue
-        try:
-            start = (datetime.strptime(as_of, "%Y-%m-%d") - timedelta(days=220)).strftime("%Y%m%d")
-            end = datetime.strptime(as_of, "%Y-%m-%d").strftime("%Y%m%d")
-            frame = pf.get_a_share_price(code, start, end)
-            if frame is None or getattr(frame, "empty", True):
-                continue
-            bars = frame.to_dict("records")
-            features = calculate_features(bars)
-            row.update(features)
-            # During the pre-market session real-time turnover is commonly
-            # zero. Use the most recent completed daily bar as a labelled
-            # liquidity reference so quality gates do not discard valid data.
+def _apply_daily_feature_row(row: Dict[str, Any], bars: list[Dict[str, Any]]) -> bool:
+    """Mutate one candidate with multi-horizon daily features."""
+    features = calculate_features(bars)
+    row.update(features)
+    # During the pre-market session real-time turnover is commonly
+    # zero. Use the most recent completed daily bar as a labelled
+    # liquidity reference so quality gates do not discard valid data.
+    try:
+        realtime_amount = float(row.get("amount") or 0)
+    except (TypeError, ValueError):
+        realtime_amount = 0.0
+    if realtime_amount < 100_000_000:
+        completed = []
+        for bar in bars:
             try:
-                realtime_amount = float(row.get("amount") or 0)
+                value = float(bar.get("amount") or 0)
             except (TypeError, ValueError):
-                realtime_amount = 0.0
-            if realtime_amount < 100_000_000:
-                amounts = []
-                for bar in bars:
-                    try:
-                        value = float(bar.get("amount") or 0)
-                    except (TypeError, ValueError):
-                        value = 0.0
-                    if value > 0:
-                        amounts.append(value)
-                if amounts:
-                    row["amount"] = amounts[-1]
-                    row["amount_reference"] = "latest_completed_daily_bar"
-            if features.get("return_60d_pct") is not None:
-                row["change_60d_pct"] = features["return_60d_pct"]
-            enriched += 1
-        except Exception as exc:
-            row.setdefault("feature_errors", []).append(str(exc))
+                value = 0.0
+            if value >= 100_000_000:
+                completed.append(value)
+        if completed:
+            row["amount"] = completed[-1]
+            row["amount_reference"] = "latest_completed_daily_bar"
+    if features.get("return_60d_pct") is not None:
+        row["change_60d_pct"] = features["return_60d_pct"]
+    return bool(features.get("history_days"))
+
+
+def _enrich_with_daily_features(rows: list[Dict[str, Any]], pf: Any, *, as_of: str, limit: int = 100) -> int:
+    """Prefetch candidate daily bars in parallel, then attach 20/60/120d features."""
+    targets = [row for row in rows[: max(0, limit)] if len(str(row.get("code") or "")) == 6]
+    if not targets:
+        return 0
+    start = (datetime.strptime(as_of, "%Y-%m-%d") - timedelta(days=220)).strftime("%Y%m%d")
+    end = datetime.strptime(as_of, "%Y-%m-%d").strftime("%Y%m%d")
+
+    def fetch_bars(row: Dict[str, Any]):
+        code = str(row.get("code") or "")
+        frame = pf.get_a_share_price(code, start, end)
+        return row, frame
+
+    enriched = 0
+    workers = min(8, len(targets))
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        futures = {pool.submit(fetch_bars, row): row for row in targets}
+        for future in as_completed(futures):
+            row = futures[future]
+            try:
+                _, frame = future.result()
+                if frame is None or getattr(frame, "empty", True):
+                    continue
+                if "date" not in frame:
+                    continue
+                import pandas as pd
+                frame = frame[pd.to_datetime(frame["date"], errors="coerce") < pd.Timestamp(as_of)].sort_values("date")
+                bars = frame.to_dict("records")
+                if _apply_daily_feature_row(row, bars):
+                    enriched += 1
+            except Exception as exc:
+                row.setdefault("feature_errors", []).append(str(exc))
     logger.info("daily feature enrichment rows={} amount_refs={}", enriched, sum(1 for row in rows[: max(0, limit)] if row.get("amount_reference")))
     return enriched
 
@@ -328,6 +356,12 @@ def run_pipeline(
             hithink_probe = {"available": False, "capabilities": {}, "errors": {"probe": type(exc).__name__}}
             logger.warning("Financial-API probe failed: {}", type(exc).__name__)
 
+    if not mock:
+        try:
+            prefetch_market_snapshot(limit=6000)
+        except Exception as exc:
+            logger.warning("market snapshot prefetch failed: {}", type(exc).__name__)
+
     snap = collect_all(limit=6000)
     coverage_mode = "mock_sample" if mock else "full_market"
     if not mock and not (snap.fundamental.get("rows") or []):
@@ -339,16 +373,20 @@ def run_pipeline(
         coverage_mode = "focused_fallback"
     if not mock and not (snap.fundamental.get("rows") or []):
         try:
-            cached_rows = load_last_snapshot(_backend_root())
+            cached_rows = load_last_snapshot(_backend_root(), max_age_seconds=300)
             if cached_rows:
+                cache_source = str(cached_rows[0].get("source") or "last_good_snapshot")
                 snap.fundamental = {
                     "rows": cached_rows,
                     "count": len(cached_rows),
                     "universe_size": len(cached_rows),
-                    "source": "last_good_snapshot",
+                    "source": cache_source,
                 }
-                snap.errors.append("using_stale_last_good_snapshot")
-                coverage_mode = "limited_sample"
+                if cache_source == "disk_cache":
+                    snap.errors.append("using_fresh_disk_cache")
+                else:
+                    snap.errors.append("using_stale_last_good_snapshot")
+                    coverage_mode = "limited_sample"
         except Exception as exc:
             snap.errors.append(f"last_good_snapshot:{exc}")
     data_available = bool(snap.fundamental.get("rows") or []) and snap.fundamental.get("source") != "last_good_snapshot"
@@ -376,6 +414,17 @@ def run_pipeline(
     # provenance fallback; it does not bypass the normal factor gates.
     if not focus_universe:
         focus_universe = DEFAULT_FOCUS_UNIVERSE
+    else:
+        merged = {key: list(value) for key, value in DEFAULT_FOCUS_UNIVERSE.items()}
+        for key, value in focus_universe.items():
+            merged.setdefault(key, [])
+            seen = {str(item.get("code") or "") for item in merged[key]}
+            for item in value:
+                code = str(item.get("code") or "")
+                if code and code not in seen:
+                    merged[key].append(dict(item))
+                    seen.add(code)
+        focus_universe = merged
     seeds = scan_snapshot(
         raw_rows,
         focus_industries=focus_universe,
@@ -402,10 +451,11 @@ def run_pipeline(
         coverage_history_count = sum(
             1 for row in (snap.fundamental.get("rows") or []) if float(row.get("history_days") or 0) >= 60
         )
-    if snap.fundamental.get("source") != "last_good_snapshot":
+    collected_rows = list(raw_rows)
+    if not mock and snap.fundamental.get("source") not in {"mock", "disk_cache", "last_good_snapshot"}:
         try:
             persist_snapshot(
-                snap.fundamental.get("rows") or [],
+                collected_rows or (snap.fundamental.get("rows") or []),
                 _backend_root(),
                 as_of=snap.date,
             )
@@ -414,11 +464,30 @@ def run_pipeline(
         except Exception as exc:
             snap.errors.append(f"local_store:{exc}")
     weights_path = _backend_root() / "data" / "stock_recommend" / "factor_weights.json"
+    evidence_audit = {"market_regime": {"regime": "unknown", "status": "unavailable"},
+                      "coverage": "unavailable", "attempted_count": 0}
+    if not mock and data_available:
+        evidence_audit = {"market_regime": {"regime": "unknown", "status": "unavailable"},
+                          "coverage": "deferred_until_ranked_candidates", "attempted_count": 0}
     weights = load_factor_weights(weights_path)
+    from ah_recommendation_system.backend.stock_recommend.reweight import load_selection_threshold
+    minimum_score = load_selection_threshold(weights_path)
     event_llm_share = load_event_llm_share(weights_path)
     # Pass 1: deterministic ranking. LLM is deliberately not involved in
     # full-market scoring.
     initial_cands = build_candidates(snap, top_n=top_n_candidates, weights=weights)
+    if not mock and data_available and initial_cands:
+        selected_codes = {candidate.code for candidate in initial_cands}
+        evidence_rows = [row for row in (snap.fundamental.get("rows") or [])
+                         if str(row.get("code") or "") in selected_codes]
+        _enrich_with_daily_features(evidence_rows, pf, as_of=snap.date, limit=len(evidence_rows))
+        evidence_audit = enrich_evidence(evidence_rows, as_of=snap.date, limit=len(evidence_rows))
+        evidence_audit["attempted_count"] = len(evidence_rows)
+        snap.errors.extend(evidence_audit.get("errors") or [])
+        # Fix the evaluation pool before evidence enrichment; later candidates
+        # cannot jump in without passing through the same collection step.
+        snap.fundamental["rows"] = evidence_rows
+        initial_cands = build_candidates(snap, top_n=top_n_candidates, weights=weights)
     checkpoint(
         "rule_scan",
         status="ok" if initial_cands else "degraded",
@@ -453,13 +522,15 @@ def run_pipeline(
             mapped = validate_and_expand_hotspots(
                 hotspot_result.get("hotspots") or [],
                 focus_universe=focus_universe or {},
-                rows=snap.fundamental.get("rows") or [],
+                rows=collected_rows or snap.fundamental.get("rows") or [],
                 max_total=60,
             )
             llm_context["hotspots"] = mapped.get("hotspots") or []
             llm_context["llm"]["hotspot_status"] = hotspot_result.get("status")
             llm_context["llm"]["hotspot_duration_ms"] = hotspot_result.get("duration_ms", 0)
             llm_context["llm"]["hotspot_error"] = hotspot_result.get("error")
+            if hotspot_result.get("stderr"):
+                logger.warning("hotspot diagnostic: {}", hotspot_result["stderr"])
             if hotspot_result.get("status") == "failed":
                 snap.errors.append(f"llm_hotspots:{hotspot_result.get('error') or 'failed'}")
         except Exception as exc:
@@ -516,7 +587,11 @@ def run_pipeline(
     llm_context["llm"]["risk_review_status"] = risk_result.get("status")
     llm_context["llm"]["risk_reviewed_count"] = risk_result.get("reviewed_count", 0)
     llm_context["llm"]["risk_p0_count"] = risk_result.get("p0_count", 0)
-    selection = select_by_rules(cands, top_n_pick=top_n_pick, coverage_mode=coverage_mode)
+    selection = select_by_rules(cands, top_n_pick=top_n_pick, coverage_mode=coverage_mode,
+                                minimum_score=minimum_score,
+                                market_regime=evidence_audit["market_regime"] if not mock else None)
+    selection["factor_version"] = "evidence-v2"
+    selection["as_of"] = snap.date
     if not mock and data_available:
         try:
             from ah_recommendation_system.backend.etf_sector.etf_sector_report import generate_etf_sector_block
@@ -602,7 +677,7 @@ def run_pipeline(
                     "selection_reasons": row.get("selection_reasons") or [],
                     "rationale": _etf_rationale(row),
                     "trigger": "趋势评分维持优先关注或持有观察",
-                    "invalidation": "趋势转弱或数据源覆盖不足",
+                    "invalidation": "趋势转弱或数据源覆盖不足时退出观察",
                 }
                 for row in etf_result["selected"][:3]
                 if row.get("code")
@@ -622,11 +697,13 @@ def run_pipeline(
             "universe_size": int(snap.fundamental.get("universe_size") or snap.fundamental.get("count") or 0),
             "scanned_count": market_scanned_count,
             "candidate_count": len(seeds),
-            "history_target_count": min(len(seeds), max(top_n_candidates, 30), 100),
+            "history_target_count": len(cands),
             "eligible_count": len(cands),
             "mode": coverage_mode,
             "source": snap.fundamental.get("source"),
-            "history_count": coverage_history_count,
+            "history_count": sum(1 for row in (snap.fundamental.get("rows") or [])
+                                  if str(row.get("code") or "") in {c.code for c in cands}
+                                  and float(row.get("history_days") or 0) >= 60),
             "fresh_data_available": data_available,
             "stale": any(bool(row.get("stale")) for row in (snap.fundamental.get("rows") or [])),
             "sources": [snap.fundamental.get("source")] if snap.fundamental.get("source") else [],
@@ -673,6 +750,13 @@ def run_pipeline(
         blocking_count=len(report.get("quality_gate", {}).get("blocking_reasons") or []),
     )
     report.setdefault("run", {})["stages"] = stages
+    report["evidence_audit"] = evidence_audit
+    report["candidate_panel"] = to_dict_list(cands)
+    report["selection_policy_version"] = "defensive_relative_leaders_v1"
+    report["candidate_panel_scope"] = "all_saved_candidates"
+    report["candidate_panel_limit"] = top_n_candidates
+    report.setdefault("market", {}).update(regime=evidence_audit["market_regime"]["regime"],
+                                           regime_evidence=evidence_audit["market_regime"])
 
     paths = save_report(report, _backend_root())
 
@@ -708,6 +792,10 @@ def run_verify_only() -> Dict[str, Any]:
                 "verified_count": r.get("verified_count"),
                 "hit_rate_T5_pct": r.get("hit_rate_T5_pct"),
                 "avg_return_T5_pct": r.get("avg_return_T5_pct"),
+                "verification_status": r.get("verification_status"),
+                "net_verified_count": r.get("net_verified_count"),
+                "avg_net_return_T5_pct": r.get("avg_net_return_T5_pct"),
+                "avg_net_excess_T5_pct": r.get("avg_net_excess_T5_pct"),
             }
             for r in results
         ],
@@ -794,7 +882,7 @@ def run_post_market(
     import json
 
     report = json.loads(latest.read_text(encoding="utf-8"))
-    prices: Dict[str, list[float]] = {}
+    observations: Dict[str, Dict[str, Any]] = {}
     expected_date = expected_as_of or datetime.now().strftime("%Y-%m-%d")
     as_of = str(report.get("as_of") or "")
     if report.get("type") != "stock_recommend_pre_market" or as_of != expected_date:
@@ -829,19 +917,13 @@ def run_post_market(
         code = str(pick.get("code") or "")
         if not code:
             continue
-        # Pull a sufficiently long window so the review can populate T+1,
-        # T+5 and T+20 outcomes; the helper naturally leaves unavailable
-        # horizons as ``pending``.
-        end_date = (datetime.strptime(as_of, "%Y-%m-%d") + timedelta(days=30)).strftime("%Y%m%d")
-        df = pf.get_a_share_price(code, as_of.replace("-", ""), end_date)
-        if df is not None and not df.empty and "close" in df.columns:
-            closes = [float(x) for x in df["close"].tolist()]
-            reference = pick.get("reference_price", pick.get("price"))
-            try:
-                reference_value = float(reference)
-            except (TypeError, ValueError):
-                reference_value = 0.0
-            prices[code] = [reference_value, *closes] if reference_value > 0 else closes
+        start_date = (datetime.strptime(as_of, "%Y-%m-%d") - timedelta(days=30)).strftime("%Y%m%d")
+        try:
+            df = pf.get_a_share_price(code, start_date, as_of.replace("-", ""))
+            observations[code] = closing_observation(pick, df, as_of)
+        except Exception as exc:
+            observations[code] = closing_observation(pick, None, as_of)
+            observations[code]["data_reason"] = f"Historical data unavailable: {type(exc).__name__}"
     industry_rows: list[Dict[str, Any]] = []
     if not mock:
         try:
@@ -851,9 +933,16 @@ def run_post_market(
     direction_outcomes = _build_direction_outcomes(report, industry_rows)
     review = build_post_market_review(
         report,
-        prices=prices,
+        observations=observations,
         direction_outcomes=direction_outcomes,
     )
+    import hashlib
+
+    review["source_report"] = {
+        "run_id": (report.get("run") or {}).get("run_id"),
+        "generated_at": report.get("generated_at"),
+        "sha256": hashlib.sha256(latest.read_bytes()).hexdigest(),
+    }
     review["closing_market"] = {
         "source": "ths_industry_close" if industry_rows else "unavailable",
         "industry_count": len(industry_rows),

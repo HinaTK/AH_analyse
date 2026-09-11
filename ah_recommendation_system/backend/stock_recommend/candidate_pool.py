@@ -8,7 +8,9 @@ Scoring is intentionally simple and explainable:
   capital_score:     主力净流入 + 北向背景
   event_score:       是否出现在最近新闻里（标题包含代码/简称）
 
-Composite = 0.4 * fundamental + 0.35 * capital + 0.25 * event
+Composite uses versioned trend, price/volume, value/quality, capital,
+benchmark-relative strength and event weights, plus an explicit risk penalty.
+Missing benchmark or financial evidence is never replaced by synthetic quality.
 """
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional
 
 from loguru import logger
+from ah_recommendation_system.backend.stock_recommend.quality_factors import assess_quality
 
 from ah_recommendation_system.backend.stock_recommend.data_collector import (
     CollectedSnapshot,
@@ -72,6 +75,7 @@ class Candidate:
     llm_risks: List[str] = field(default_factory=list)
     llm_evidence_refs: List[str] = field(default_factory=list)
     hotspot_themes: List[str] = field(default_factory=list)
+    quality_evidence: Dict[str, Any] = field(default_factory=dict)
 
 
 def _safe_float(x: Any) -> Optional[float]:
@@ -261,22 +265,37 @@ def build_candidates(
         if amount is not None and amount >= 100_000_000 and (volume_ratio is None or volume_ratio >= 0.8):
             c.valid_dimensions.add("price_volume")
             c.evidence.append({"factor": "price_volume", "statement": f"成交额 {amount / 1e8:.2f}亿", "value": amount, "source": r.get("source") or "snapshot", "as_of": snapshot.date, "supports": amount >= 100_000_000, "falsifier": "成交额跌破1亿或量价背离"})
-        if chg is not None and chg >= 0 and chg60 is not None and chg60 > 0:
-            c.valid_dimensions.add("relative_strength")
+        # Own-price momentum is already in trend. Relative strength needs an
+        # independently aligned benchmark return, never a second copy of it.
+        relative_excess = _safe_float(r.get("benchmark_excess_60d_pct"))
+        try:
+            if not str(r.get("benchmark_end") or "") or str(r["benchmark_end"]) >= snapshot.date:
+                relative_excess = None
+        except (TypeError, KeyError):
+            relative_excess = None
+        if relative_excess is not None and r.get("benchmark_source"):
+            if relative_excess > 0:
+                c.valid_dimensions.add("relative_strength")
+            c.evidence.append({"factor": "relative_strength", "value": relative_excess,
+                               "statement": f"60日相对基准超额 {relative_excess:+.2f}%",
+                               "source": r["benchmark_source"], "as_of": snapshot.date,
+                               "supports": relative_excess > 0, "falsifier": "相对基准超额转负"})
         c.data_quality = round(len(c.valid_dimensions) / 5.0, 3)
         c.quality_grade = "A" if len(c.valid_dimensions) >= 4 else "B" if len(c.valid_dimensions) >= 3 else "C"
         if not amount or amount < 100_000_000:
             c.rejection_reasons.append("quality:成交额缺失或低于1亿")
         if chg60 is None:
             c.rejection_reasons.append("quality:缺少60日趋势")
-        if pe is None or pe <= 0:
+        if pe is None:
             c.rejection_reasons.append("quality:估值缺失或无效")
+        elif pe <= 0:
+            c.rejection_reasons.append("quality:亏损估值")
         if mc is None or mc < min_market_cap_yi * 1e8:
             c.rejection_reasons.append("quality:市值缺失或低于50亿")
         if price is None or not 3 <= price <= 300:
-            c.rejection_reasons.append("risk:价格超出3至300元范围")
+            c.rejection_reasons.append("quality:价格缺失" if price is None else "risk:价格超出3至300元范围")
         if chg is None or not -4 <= chg <= 8.5:
-            c.rejection_reasons.append("risk:当日涨跌幅超出安全范围")
+            c.rejection_reasons.append("quality:涨跌幅缺失" if chg is None else "risk:当日涨跌幅超出安全范围")
         if bool(r.get("stale")):
             c.rejection_reasons.append("stale:仅有最近一次有效快照，不得正式推荐")
         history_days = _safe_float(r.get("history_days"))
@@ -289,7 +308,14 @@ def build_candidates(
         provider_failed = str(events_payload.get("status") or events_payload.get("event_status") or "") in {"provider_failed", "failed"}
         for event_index, news in enumerate(events_payload.get("stock_news") or []):
             news_text = f"{news.get('title', '')} {news.get('content', '')}"
-            if code not in news_text and name not in news_text:
+            # News providers may return body text mentioning a custody bank or
+            # supplier.  Treat an item as this company's catalyst only when
+            # the title/explicit subject identifies the candidate.
+            title = str(news.get("title") or "")
+            subject = " ".join(str(news.get(k) or "") for k in ("subject", "stock_code", "symbol"))
+            title_hit = bool(code and code in title) or bool(name and name in title)
+            subject_hit = bool(subject and ((code and code in subject) or (name and name in subject)))
+            if not (title_hit or subject_hit):
                 continue
             p0_negative = any(word in news_text for word in ("立案", "调查", "重大处罚", "财务造假", "退市风险", "重大违约", "业绩暴雷"))
             ordinary_negative = any(word in news_text for word in ("减持", "诉讼", "亏损", "低于预期"))
@@ -338,8 +364,27 @@ def build_candidates(
         if volume_ratio is not None:
             liquidity_factor = min(1.0, liquidity_factor * min(1.0, volume_ratio / 1.5))
         value_factor = max(0.0, min(1.0, 1.0 - (pe or max_pe) / max_pe)) if pe is not None and pe > 0 else 0.0
+        industry = str(r.get("industry") or " ".join(c.focus_industries))
+        if not industry:
+            # Some upstream financial rows omit industry. Infer only the
+            # unambiguous Chinese company-name classes so bank metrics are not
+            # scored with industrial debt/cash heuristics.
+            n = str(r.get("name") or "")
+            if any(x in n for x in ("银行", "证券", "券商", "保险")):
+                industry = n
+        c.quality_evidence = assess_quality(r.get("financial_records") or [], as_of=snapshot.date,
+                                            industry=industry)
+        quality_score = c.quality_evidence.get("score")
+        if quality_score is not None:
+            # Keep the quality contribution proportional to actual coverage.
+            quality_share = 0.5 * c.quality_evidence["metric_count"] / 4
+            value_factor = value_factor * (1 - quality_share) + quality_score * quality_share
+            c.evidence.append({"factor": "quality", "value": quality_score,
+                               "statement": f"财报质量 {quality_score:.2f}，覆盖{c.quality_evidence['metric_count']}/4项",
+                               "source": c.quality_evidence["source"], "as_of": c.quality_evidence["published_at"],
+                               "supports": quality_score >= .5, "falsifier": "盈利质量或现金转换恶化"})
         capital_factor = max(0.0, min(1.0, ((main_net or 0.0) / 100_000_000 + 1.0) / 2.0)) if main_net is not None else 0.0
-        relative_factor = max(0.0, min(1.0, 0.5 + ((chg or 0.0) / 20.0) + ((chg60 or 0.0) / 100.0))) if chg is not None and chg60 is not None else 0.0
+        relative_factor = max(0.0, min(1.0, .5 + relative_excess / 40)) if relative_excess is not None and r.get("benchmark_source") else 0.0
         risk_penalty = 0.0
         volatility = _safe_float(r.get("volatility_20d_pct"))
         drawdown = _safe_float(r.get("max_drawdown_pct"))
@@ -419,6 +464,7 @@ def to_dict_list(cands: Iterable[Candidate]) -> List[Dict[str, Any]]:
                 "support": c.support,
                 "resistance": c.resistance,
                 "factor_scores": c.factor_scores,
+                "quality_evidence": c.quality_evidence,
                 "llm_review": getattr(c, "llm_review", ""),
                 "llm_catalysts": list(getattr(c, "llm_catalysts", []) or []),
                 "llm_risks": list(getattr(c, "llm_risks", []) or []),

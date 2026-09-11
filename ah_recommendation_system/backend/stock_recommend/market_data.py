@@ -26,6 +26,33 @@ from ah_recommendation_system.backend.stock_recommend.data_source_router import 
 SUPPLEMENT_FIELDS = (
     "pe", "pb", "market_cap", "float_cap", "turnover_pct", "amount", "volume",
 )
+NUMERIC_FIELDS = SUPPLEMENT_FIELDS + ("price", "change_pct", "open", "high", "low", "volume_ratio")
+
+
+def coerce_number(value: Any) -> Optional[float]:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+        return number if number == number and number not in {float("inf"), float("-inf")} else None
+    text = str(value).strip().replace(",", "")
+    if not text or text in {"-", "--", "None", "nan", "NaN"}:
+        return None
+    try:
+        number = float(text)
+    except ValueError:
+        return None
+    return number if number == number and number not in {float("inf"), float("-inf")} else None
+
+
+def _pe_kind_from_column(name: str) -> str:
+    if "动态" in name or name.lower() in {"pe_ttm", "pe_dynamic"}:
+        return "dynamic"
+    if "静态" in name or "lyr" in name.lower():
+        return "static"
+    if "ttm" in name.lower():
+        return "ttm"
+    return "unspecified"
 
 
 @dataclass
@@ -61,25 +88,35 @@ class UnifiedRealtimeQuote:
         return [name for name in fields if getattr(self, name, None) is None]
 
 
+def _missing_quote_value(name: str, value: Any) -> bool:
+    if value is None:
+        return True
+    if name in {"amount", "volume"}:
+        number = coerce_number(value)
+        return number is None or number <= 0
+    return False
+
+
 def merge_quote_fields(primary: Mapping[str, Any], secondary: Mapping[str, Any], fields: Sequence[str] = SUPPLEMENT_FIELDS) -> List[str]:
     """Fill only missing fields; primary price/change identity stays untouched."""
     filled: List[str] = []
     for name in fields:
-        if primary.get(name) is None and secondary.get(name) is not None:
+        if _missing_quote_value(name, primary.get(name)) and not _missing_quote_value(name, secondary.get(name)):
             primary[name] = secondary[name]
             filled.append(name)
     return filled
 
 
-def normalize_numeric_fields(rows: List[Dict[str, Any]], fields: Sequence[str] = SUPPLEMENT_FIELDS) -> List[Dict[str, Any]]:
+def normalize_numeric_fields(rows: List[Dict[str, Any]], fields: Sequence[str] = NUMERIC_FIELDS) -> List[Dict[str, Any]]:
     """Coerce provider placeholders such as '-' to None without changing prices."""
     for row in rows:
         for name in fields:
             value = row.get(name)
-            if isinstance(value, str):
-                text = value.strip()
-                if not text or text in {"-", "--"}:
-                    row[name] = None
+            if name not in row:
+                continue
+            coerced = coerce_number(value)
+            if value is None or coerced is not None or (isinstance(value, str) and not str(value).strip()) or str(value).strip() in {"-", "--", "None", "nan", "NaN"}:
+                row[name] = coerced
     return rows
 
 
@@ -108,11 +145,48 @@ class SnapshotResult:
         }
 
 
+class RateLimiter:
+    """Serialize and space out AKShare/Efinance snapshot calls."""
+
+    def __init__(self, min_interval_seconds: float = 0.2):
+        self.min_interval_seconds = max(0.0, float(min_interval_seconds))
+        self._lock = RLock()
+        self._last_call = 0.0
+
+    def wait(self) -> None:
+        with self._lock:
+            now = time.perf_counter()
+            remaining = self.min_interval_seconds - (now - self._last_call)
+            if remaining > 0:
+                time.sleep(remaining)
+            self._last_call = time.perf_counter()
+
+
+DEFAULT_SNAPSHOT_LIMITER = RateLimiter(min_interval_seconds=0.2)
+TRANSIENT_SNAPSHOT_ERRORS = (ConnectionError, TimeoutError, OSError)
+
+
+def retry_transient(call, *, attempts: int = 2):
+    last_exc: Optional[Exception] = None
+    for index in range(max(1, attempts)):
+        try:
+            return call()
+        except TRANSIENT_SNAPSHOT_ERRORS as exc:
+            last_exc = exc
+            if index >= attempts - 1:
+                raise
+            time.sleep(0.05 * (index + 1))
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("retry_transient exhausted")
+
+
 class AkshareSnapshotProvider:
     name = "akshare"
 
-    def __init__(self, akshare_module: Any = None):
+    def __init__(self, akshare_module: Any = None, rate_limiter: Optional[RateLimiter] = None):
         self.akshare_module = akshare_module
+        self.rate_limiter = rate_limiter or DEFAULT_SNAPSHOT_LIMITER
 
     def usable_snapshot(self, limit: int) -> List[Dict[str, Any]]:
         rows = self.snapshot(limit=limit)
@@ -127,7 +201,9 @@ class AkshareSnapshotProvider:
             with pd.option_context("future.infer_string", False):
                 return akshare.stock_zh_a_spot_em()
 
-        frame = call()
+        if self.rate_limiter is not None:
+            self.rate_limiter.wait()
+        frame = retry_transient(call)
         if frame is None or frame.empty:
             return []
         frame = frame.rename(columns={
@@ -140,7 +216,13 @@ class AkshareSnapshotProvider:
             frame["code"] = frame["code"].astype(str).str.zfill(6)
         if limit and len(frame) > limit:
             frame = frame.head(limit)
-        return normalize_numeric_fields(frame.replace({pd.NA: None}).to_dict(orient="records"))
+        rows = normalize_numeric_fields(frame.replace({pd.NA: None}).to_dict(orient="records"))
+        for row in rows:
+            row.setdefault("source", self.name)
+            if row.get("pe") is not None:
+                row.setdefault("pe_kind", "dynamic")
+                row.setdefault("pe_source", self.name)
+        return rows
 
     @staticmethod
     def usable(rows: Sequence[Mapping[str, Any]]) -> bool:
@@ -188,30 +270,51 @@ class HithinkSnapshotProvider:
 class EfinanceSnapshotProvider:
     name = "efinance"
 
-    def __init__(self, efinance_module: Any = None):
+    def __init__(self, efinance_module: Any = None, rate_limiter: Optional[RateLimiter] = None):
         self.efinance_module = efinance_module
+        self.rate_limiter = rate_limiter or DEFAULT_SNAPSHOT_LIMITER
 
     def snapshot(self, limit: int) -> List[Dict[str, Any]]:
         efinance = self.efinance_module or ef
         if efinance is None:
             return []
-        frame = efinance.stock.get_realtime_quotes()
+        if self.rate_limiter is not None:
+            self.rate_limiter.wait()
+
+        def call():
+            return efinance.stock.get_realtime_quotes()
+
+        frame = retry_transient(call)
         if frame is None or frame.empty:
             return []
         candidates = (
             ("股票代码", "code"), ("代码", "code"), ("股票名称", "name"), ("名称", "name"),
             ("最新价", "price"), ("涨跌幅", "change_pct"), ("成交量", "volume"),
             ("成交额", "amount"), ("换手率", "turnover_pct"), ("量比", "volume_ratio"),
-            ("市盈率", "pe"), ("市净率", "pb"), ("总市值", "market_cap"), ("流通市值", "float_cap"),
+            ("动态市盈率", "pe"), ("市盈率-动态", "pe"), ("市盈率", "pe"),
+            ("市净率", "pb"), ("总市值", "market_cap"), ("流通市值", "float_cap"),
             ("最高", "high"), ("最低", "low"), ("今开", "open"),
         )
-        rename = {source: target for source, target in candidates if source in frame.columns}
+        rename = {}
+        pe_kind = None
+        for source, target in candidates:
+            if source not in frame.columns or target in rename.values():
+                continue
+            rename[source] = target
+            if target == "pe" and pe_kind is None:
+                pe_kind = _pe_kind_from_column(source)
         frame = frame.rename(columns=rename)
         if "code" in frame.columns:
             frame["code"] = frame["code"].astype(str).str.zfill(6)
         if limit and len(frame) > limit:
             frame = frame.head(limit)
-        return normalize_numeric_fields(frame.replace({pd.NA: None}).to_dict(orient="records"))
+        rows = normalize_numeric_fields(frame.replace({pd.NA: None}).to_dict(orient="records"))
+        for row in rows:
+            row["source"] = self.name
+            if row.get("pe") is not None:
+                row["pe_kind"] = pe_kind or "unspecified"
+                row["pe_source"] = self.name
+        return rows
 
 
 class MarketDataManager:
@@ -323,21 +426,20 @@ class MarketDataManager:
             result.error = "; ".join(result.errors) or "all_providers_unavailable"
             return result
 
-        if primary_name != self.order[0]:
-            result.rows = [dict(row) for row in primary]
-            result.stats = self.derive_stats(result.rows)
-            self._cache_rows = [dict(row) for row in result.rows]
-            self._cache_timestamp = time.time()
-            self._cache_source = primary_name
-            return result
-
-        result.rows = [dict(row, source=primary_name) for row in primary]
-        supplement_names = [name for name in self.order if name != primary_name]
+        result.rows = [dict(row, source=row.get("source") or primary_name) for row in primary]
+        failed_or_skipped = set()
+        for item in result.errors:
+            failed_or_skipped.add(str(item).split(":", 1)[0])
+        failed_or_skipped.update(result.skipped)
+        supplement_names = [
+            name for name in self.order
+            if name != primary_name and name not in failed_or_skipped
+        ]
         missing_fields: set[str] = {
             field_name
             for row in result.rows
             for field_name in SUPPLEMENT_FIELDS
-            if row.get(field_name) is None
+            if _missing_quote_value(field_name, row.get(field_name))
         }
         if not missing_fields:
             supplement_names = []

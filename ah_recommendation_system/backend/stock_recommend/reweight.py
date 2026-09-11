@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import math
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping
@@ -139,11 +141,13 @@ def load_factor_weights(path: Path) -> Dict[str, float]:
     try:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
         stored = payload.get("weights") if isinstance(payload, Mapping) else None
-        if payload.get("factor_version") != "evidence-v1" or not isinstance(stored, Mapping):
+        if payload.get("factor_version") != "evidence-v2" or not isinstance(stored, Mapping):
             return dict(DEFAULT_WEIGHTS)
         if set(stored) != set(DEFAULT_WEIGHTS):
             return dict(DEFAULT_WEIGHTS)
         candidate = {key: float(stored[key]) for key in DEFAULT_WEIGHTS}
+        if any(not math.isfinite(value) or value < 0 for value in candidate.values()):
+            return dict(DEFAULT_WEIGHTS)
         if abs(sum(candidate.values()) - sum(DEFAULT_WEIGHTS.values())) >= 1e-6:
             return dict(DEFAULT_WEIGHTS)
         return candidate
@@ -161,17 +165,29 @@ def load_event_llm_share(path: Path) -> float:
         return 0.3
 
 
+def load_selection_threshold(path: Path) -> float:
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        value = float(payload.get("minimum_score", .55))
+        if payload.get("factor_version") == "evidence-v2" and math.isfinite(value) and .55 <= value <= .8:
+            return value
+    except (OSError, ValueError, TypeError):
+        pass
+    return .55
+
+
 def build_event_calibration_records(rows: Iterable[Mapping[str, Any]]) -> list[Dict[str, Any]]:
     records: list[Dict[str, Any]] = []
-    for row in rows:
+    for row in _latest_verifications(rows):
         for pick in row.get("per_pick") or []:
-            if not isinstance(pick, Mapping) or pick.get("return_T5_pct") is None:
+            result = _verification_return(row, pick)
+            if result is None:
                 continue
             factors = pick.get("factors") or {}
             try:
                 rule_score = float(factors.get("event_score_rule"))
                 llm_score = float(factors.get("event_score_llm"))
-                outcome = 1 if float(pick.get("return_T5_pct")) > 0 else 0
+                outcome = 1 if result > 0 else 0
             except (TypeError, ValueError):
                 continue
             risk_flags = [str(item) for item in (pick.get("risk_flags") or [])]
@@ -182,6 +198,40 @@ def build_event_calibration_records(rows: Iterable[Mapping[str, Any]]) -> list[D
                 "p0": any(flag.startswith("p0") for flag in risk_flags),
             })
     return records
+
+
+def _latest_verifications(rows: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """Latest append-only ledger entry wins per signal date and factor version."""
+    dated: dict[tuple[str, str], Mapping[str, Any]] = {}
+    legacy = []
+    for row in rows:
+        if not row.get("verification_version"):
+            legacy.append(row)
+            continue
+        key = (str(row.get("as_of", "")), str(row.get("factor_version", "")))
+        previous = dated.get(key)
+        if previous is None or str(row.get("verified_at", "")) >= str(previous.get("verified_at", "")):
+            dated[key] = row
+    return legacy + list(dated.values())
+
+
+def _verification_return(row: Mapping[str, Any], pick: Any) -> float | None:
+    if not isinstance(pick, Mapping) or row.get("verification_status") == "excluded":
+        return None
+    if row.get("verification_version"):
+        execution = (pick.get("execution") or {}).get("5") or {}
+        if execution.get("status") != "filled":
+            return None
+        value = execution.get("excess_return_pct")
+    else:
+        # Compatibility for old diagnostic consumers only. The live weekly
+        # job explicitly excludes these rows from parameter promotion.
+        value = pick.get("return_T5_pct")
+    try:
+        number = float(value)
+        return number if math.isfinite(number) else None
+    except (TypeError, ValueError):
+        return None
 
 
 def adjust_weights(
@@ -239,11 +289,9 @@ def _read_jsonl(path: Path) -> Iterable[Mapping[str, Any]]:
 def aggregate_factor_stats(rows: Iterable[Mapping[str, Any]]) -> Dict[str, Dict[str, float]]:
     """Aggregate factor hit rates from the recommendation verification ledger."""
     buckets: Dict[str, list[bool]] = {k: [] for k in DEFAULT_WEIGHTS}
-    for row in rows:
+    for row in _latest_verifications(rows):
         for pick in row.get("per_pick") or []:
-            if not isinstance(pick, Mapping):
-                continue
-            result = pick.get("return_T5_pct")
+            result = _verification_return(row, pick)
             if result is None:
                 continue
             factors = pick.get("factors") or {}
@@ -273,20 +321,43 @@ def run_weekly_reweight(
     weights_path: Path | None = None,
     max_delta: float = 0.05,
 ) -> Dict[str, Any]:
-    """Update persisted factor weights using completed T+5 ledger outcomes.
-
-    The bounded adjustment deliberately stays small and falls back to neutral
-    0.5 hit rates when a factor has no verified observations yet.
-    """
+    """Promote only dated rolling-tested weights; retain defaults without proof."""
     ledgers_dir = Path(ledgers_dir)
     ledger_path = ledgers_dir / "stock-recommend-ledger.jsonl"
     if weights_path is None:
         weights_path = ledgers_dir.parent.parent / "ah_recommendation_system" / "backend" / "data" / "stock_recommend" / "factor_weights.json"
     weights_path = Path(weights_path)
-    ledger_rows = list(_read_jsonl(ledger_path))
+    ledger_rows = [row for row in _latest_verifications(_read_jsonl(ledger_path))
+                   if row.get("verification_version") == "execution-v1"
+                   and row.get("verification_status") == "complete"
+                   and row.get("calibration_eligible") is True]
     old = load_factor_weights(weights_path) if weights_path.exists() else dict(DEFAULT_WEIGHTS)
     stats = aggregate_factor_stats(ledger_rows)
-    decision = decide_weekly_weights(old, stats, max_delta=max_delta)
+    from .rolling_calibration import rolling_calibrate
+    evidence_rows = [row for row in _latest_verifications(_read_jsonl(ledger_path))
+                    if row.get("factor_version") == "evidence-v2" and row.get("verification_status") != "excluded"]
+    panel = [candidate for row in evidence_rows
+             if row.get("candidate_panel_complete") is True
+             for candidate in row.get("candidate_outcomes", [])]
+    fingerprint = hashlib.sha256(json.dumps(panel, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+    decision = rolling_calibrate(panel, baseline=old, as_of=datetime.now().strftime("%Y-%m-%d"), max_delta=max_delta,
+                                 baseline_threshold=load_selection_threshold(weights_path))
+    # Never drop an older unresolved signal date while retaining surrounding
+    # winners. Recently unmatured reports may wait without invalidating history.
+    if any(row.get("candidate_panel_complete") is not True
+           and (datetime.now() - datetime.strptime(row["as_of"], "%Y-%m-%d")).days > 40
+           for row in evidence_rows if row.get("as_of")):
+        decision.update(applied=False, weights=old, threshold=load_selection_threshold(weights_path))
+        decision["reasons"].append("unresolved_historical_candidate_panel")
+    previous_payload = {}
+    if weights_path.exists():
+        try:
+            previous_payload = json.loads(weights_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+    if previous_payload.get("last_promoted_fingerprint") == fingerprint:
+        decision.update(applied=False, weights=old, threshold=load_selection_threshold(weights_path))
+        decision["reasons"].append("same_evidence_already_promoted")
     new = decision["weights"]
     old_calibration: Dict[str, Any] = {}
     if weights_path.exists():
@@ -304,12 +375,16 @@ def run_weekly_reweight(
     weights_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "factor_version": "evidence-v1",
+        "factor_version": "evidence-v2",
         "max_delta": max_delta,
         "weights": new,
         "stats": stats,
         "applied": decision["applied"],
-        "decision_reason": decision["reason"],
+        "decision_reason": decision["reasons"],
+        "minimum_score": decision["threshold"],
+        "rolling_validation": decision,
+        "evidence_fingerprint": fingerprint,
+        "last_promoted_fingerprint": fingerprint if decision["applied"] else previous_payload.get("last_promoted_fingerprint"),
         "event_llm_calibration": event_calibration,
     }
     weights_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -319,4 +394,5 @@ def run_weekly_reweight(
         "weights": new,
         "stats": stats,
         "event_llm_calibration": event_calibration,
+        "rolling_validation": decision,
     }

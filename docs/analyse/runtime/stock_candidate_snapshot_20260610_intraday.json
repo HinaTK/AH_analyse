@@ -1,0 +1,141 @@
+{
+  "generated_at": "2026-06-10 10:38:39",
+  "sources": [
+    "Sina realtime quotes",
+    "EastMoney board data via AkShare"
+  ],
+  "universe": {
+    "a_quotes": {
+      "002371": "北方华创",
+      "688012": "中微公司",
+      "300308": "中际旭创",
+      "300502": "新易盛",
+      "600406": "国电南瑞",
+      "000400": "许继电气",
+      "600276": "恒瑞医药",
+      "688235": "百济神州-U"
+    },
+    "hk_quotes": {
+      "rt_hk01801": "信达生物",
+      "rt_hk06160": "百济神州",
+      "rt_hk09926": "康方生物",
+      "rt_hk00700": "腾讯控股",
+      "rt_hk09988": "阿里巴巴-W",
+      "rt_hk03690": "美团-W",
+      "rt_hk01810": "小米集团-W"
+    }
+  },
+  "a_quotes": [],
+  "a_quote_error": "Sina returned no parsable quote for: 000400, 002371, 300308, 300502, 600276, 600406, 688012, 688235",
+  "hk_quotes": [
+    {
+      "code": "rt_hk01801",
+      "configured_name": "信达生物",
+      "name": "信达生物",
+      "price": 72.2,
+      "pct": -1.299,
+      "open": 72.0,
+      "prev_close": 73.15,
+      "high": 73.8,
+      "low": 71.2,
+      "amount_yi": 2.81130331,
+      "quote_date": "",
+      "quote_time": "",
+      "note": ""
+    },
+    {
+      "code": "rt_hk06160",
+      "configured_name": "百济神州",
+      "name": "百济神州",
+      "price": 159.9,
+      "pct": 0.125,
+      "open": 160.0,
+      "prev_close": 159.7,
+      "high": 162.7,
+      "low": 158.9,
+      "amount_yi": 1.9063544730000002,
+      "quote_date": "",
+      "quote_time": "",
+      "note": ""
+    },
+    {
+      "code": "rt_hk09926",
+      "configured_name": "康方生物",
+      "name": "康方生物",
+      "price": 86.2,
+      "pct": -3.633,
+      "open": 89.5,
+      "prev_close": 89.45,
+      "high": 90.85,
+      "low": 85.0,
+      "amount_yi": 5.784987478500001,
+      "quote_date": "",
+      "quote_time": "",
+      "note": ""
+    },
+    {
+      "code": "rt_hk00700",
+      "configured_name": "腾讯控股",
+      "name": "腾讯控股",
+      "price": 459.2,
+      "pct": 1.324,
+      "open": 454.8,
+      "prev_close": 453.2,
+      "high": 465.6,
+      "low": 451.6,
+      "amount_yi": 42.008479577399996,
+      "quote_date": "",
+      "quote_time": "",
+      "note": ""
+    },
+    {
+      "code": "rt_hk09988",
+      "configured_name": "阿里巴巴-W",
+      "name": "阿里巴巴－Ｗ",
+      "price": 112.0,
+      "pct": -3.507,
+      "open": 116.1,
+      "prev_close": 116.071,
+      "high": 116.6,
+      "low": 111.6,
+      "amount_yi": 39.663084866999995,
+      "quote_date": "",
+      "quote_time": "",
+      "note": ""
+    },
+    {
+      "code": "rt_hk03690",
+      "configured_name": "美团-W",
+      "name": "美团－Ｗ",
+      "price": 77.55,
+      "pct": 0.453,
+      "open": 77.1,
+      "prev_close": 77.2,
+      "high": 78.15,
+      "low": 76.45,
+      "amount_yi": 9.362493478,
+      "quote_date": "",
+      "quote_time": "",
+      "note": ""
+    },
+    {
+      "code": "rt_hk01810",
+      "configured_name": "小米集团-W",
+      "name": "小米集团－Ｗ",
+      "price": 26.04,
+      "pct": -4.265,
+      "open": 27.02,
+      "prev_close": 27.2,
+      "high": 27.02,
+      "low": 25.78,
+      "amount_yi": 25.729950647800003,
+      "quote_date": "",
+      "quote_time": "",
+      "note": ""
+    }
+  ],
+  "hk_quote_error": null,
+  "boards": {},
+  "stock_candidates": [],
+  "stock_candidate_error": null
+}

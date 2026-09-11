@@ -1,0 +1,60 @@
+{
+  "generated_at": "2026-07-16 11:48:16",
+  "sources": [
+    "Sina realtime quotes",
+    "EastMoney board data via AkShare"
+  ],
+  "universe": {
+    "a_quotes": {
+      "600276": "恒瑞医药",
+      "688235": "百济神州-U",
+      "603127": "昭衍新药",
+      "600030": "中信证券",
+      "300308": "中际旭创",
+      "002371": "北方华创",
+      "600406": "国电南瑞"
+    },
+    "hk_quotes": {
+      "rt_hk01801": "信达生物",
+      "rt_hk09926": "康方生物"
+    }
+  },
+  "a_quotes": [],
+  "a_quote_error": "Sina returned no parsable quote for: 002371, 300308, 600030, 600276, 600406, 603127, 688235",
+  "hk_quotes": [
+    {
+      "code": "rt_hk01801",
+      "configured_name": "信达生物",
+      "name": "信达生物",
+      "price": 94.35,
+      "pct": -2.782,
+      "open": 97.0,
+      "prev_close": 97.05,
+      "high": 98.75,
+      "low": 93.9,
+      "amount_yi": 11.425002996500002,
+      "quote_date": "",
+      "quote_time": "",
+      "note": ""
+    },
+    {
+      "code": "rt_hk09926",
+      "configured_name": "康方生物",
+      "name": "康方生物",
+      "price": 103.2,
+      "pct": -0.29,
+      "open": 104.0,
+      "prev_close": 103.5,
+      "high": 105.4,
+      "low": 101.1,
+      "amount_yi": 4.702270305,
+      "quote_date": "",
+      "quote_time": "",
+      "note": ""
+    }
+  ],
+  "hk_quote_error": null,
+  "boards": {},
+  "stock_candidates": [],
+  "stock_candidate_error": null
+}

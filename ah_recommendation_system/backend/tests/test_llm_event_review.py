@@ -84,7 +84,7 @@ class TestLlmEventReview(unittest.TestCase):
         self.assertIn('web_search="disabled"', captured["args"])
         self.assertEqual(captured["kwargs"]["encoding"], "utf-8")
         self.assertEqual(captured["kwargs"]["errors"], "replace")
-        self.assertEqual(captured["kwargs"]["timeout"], 90.0)
+        self.assertEqual(captured["kwargs"]["timeout"], 180.0)
         self.assertNotEqual(Path(captured["kwargs"]["cwd"]).resolve(), Path.cwd().resolve())
 
     def test_hotspot_prompt_bounds_news_summaries_and_candidate_context(self):
@@ -93,7 +93,7 @@ class TestLlmEventReview(unittest.TestCase):
         macro_news = {
             "items": [
                 {"event_id": f"news-{index}", "title": f"title-{index}", "summary": "x" * 1000}
-                for index in range(30)
+                for index in range(50)
             ]
         }
         candidates = [
@@ -107,11 +107,15 @@ class TestLlmEventReview(unittest.TestCase):
             as_of="2026-09-09",
         )
 
-        self.assertIn("news-23", prompt)
-        self.assertNotIn("news-24", prompt)
         self.assertNotIn("x" * 301, prompt)
         self.assertIn("candidate-19", prompt)
         self.assertNotIn("candidate-20", prompt)
+        self.assertIn("confidence 必须是 0 到 1 的小数", prompt)
+        self.assertIn("数字越大表示置信度越高", prompt)
+        self.assertIn("drivers 必须是字符串数组", prompt)
+        self.assertIn("evidence_refs 只能使用下列 event_id", prompt)
+        from ah_recommendation_system.backend.stock_recommend.news_ranker import DEFAULT_HOTSPOT_EVIDENCE_LIMIT
+        self.assertLessEqual(sum(1 for index in range(50) if f"news-{index}" in prompt), DEFAULT_HOTSPOT_EVIDENCE_LIMIT)
 
     def test_event_review_prompt_excludes_candidates_without_event_evidence(self):
         from ah_recommendation_system.backend.stock_recommend.candidate_pool import Candidate
@@ -299,6 +303,35 @@ class TestLlmEventReview(unittest.TestCase):
             path = Path(tmp) / "weights.json"
             path.write_text(json.dumps({"event_llm_calibration": {"llm_share": 0.4}}), encoding="utf-8")
             self.assertEqual(load_event_llm_share(path), 0.4)
+
+
+    def test_normalize_hotspots_accepts_percent_and_high_medium_low(self):
+        from ah_recommendation_system.backend.stock_recommend.hotspot_analyzer import normalize_hotspots
+
+        result = normalize_hotspots({"hotspots": [
+            {"theme": "工业硅价格", "drivers": ["供应收缩"], "industries": ["硅料"], "confidence": "high", "evidence_refs": ["n1", "n2"]},
+            {"theme": "半导体设备", "drivers": "设备招标;产能扩张", "industries": ["半导体设备"], "confidence": "78%", "evidence_refs": ["n2", "n3"]},
+        ]}, valid_refs={"n1", "n2", "n3"})
+        self.assertEqual(result[0]["confidence"], 0.8)
+        self.assertEqual(result[1]["confidence"], 0.78)
+        self.assertEqual(result[1]["drivers"], ["设备招标", "产能扩张"])
+
+    def test_analyze_hotspots_does_not_fabricate_placeholder_theme(self):
+        from ah_recommendation_system.backend.stock_recommend.hotspot_analyzer import analyze_hotspots
+
+        class Client:
+            def analyze(self, prompt):
+                return {"status": "used", "data": {"hotspots": [{"theme": "x", "confidence": "nope", "evidence_refs": ["n1"]}]}, "duration_ms": 1}
+
+        result = analyze_hotspots(
+            macro_news={"items": [{"event_id": "n1", "title": "a"}, {"event_id": "n2", "title": "b"}]},
+            candidates=[],
+            as_of="2026-09-10",
+            client=Client(),
+        )
+        self.assertEqual(result["hotspots"], [])
+        self.assertEqual(result["error"], "no_valid_hotspots")
+        self.assertNotIn("新闻驱动待确认", str(result))
 
     def test_hotspot_requires_two_existing_evidence_references(self):
         from ah_recommendation_system.backend.stock_recommend.hotspot_analyzer import normalize_hotspots

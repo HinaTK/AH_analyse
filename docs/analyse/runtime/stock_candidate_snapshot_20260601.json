@@ -1,0 +1,150 @@
+{
+  "generated_at": "2026-06-01 15:51:34",
+  "sources": [
+    "Sina realtime quotes",
+    "EastMoney board data via AkShare"
+  ],
+  "universe": {
+    "a_quotes": {
+      "sh600406": "国电南瑞",
+      "sz000539": "粤电力A",
+      "sh601991": "大唐发电",
+      "sh600030": "中信证券",
+      "sz300059": "东方财富",
+      "sh600276": "恒瑞医药"
+    },
+    "hk_quotes": {
+      "rt_hk01801": "信达生物",
+      "rt_hk09926": "康方生物"
+    }
+  },
+  "a_quotes": [
+    {
+      "code": "sh600406",
+      "configured_name": "国电南瑞",
+      "name": "国电南瑞",
+      "price": 25.22,
+      "pct": 1.2851405622489973,
+      "open": 24.96,
+      "prev_close": 24.9,
+      "high": 25.46,
+      "low": 24.92,
+      "amount_yi": 23.69917654,
+      "quote_date": "2026-06-01",
+      "quote_time": "15:00:00",
+      "note": ""
+    },
+    {
+      "code": "sz000539",
+      "configured_name": "粤电力A",
+      "name": "粤电力Ａ",
+      "price": 9.77,
+      "pct": 10.022522522522507,
+      "open": 9.77,
+      "prev_close": 8.88,
+      "high": 9.77,
+      "low": 8.5,
+      "amount_yi": 44.9465437633,
+      "quote_date": "2026-06-01",
+      "quote_time": "15:00:00",
+      "note": ""
+    },
+    {
+      "code": "sh601991",
+      "configured_name": "大唐发电",
+      "name": "大唐发电",
+      "price": 8.37,
+      "pct": -3.012746234067225,
+      "open": 8.63,
+      "prev_close": 8.63,
+      "high": 8.7,
+      "low": 7.77,
+      "amount_yi": 78.00274746,
+      "quote_date": "2026-06-01",
+      "quote_time": "15:00:01",
+      "note": ""
+    },
+    {
+      "code": "sh600030",
+      "configured_name": "中信证券",
+      "name": "中信证券",
+      "price": 25.67,
+      "pct": -1.4587332053742763,
+      "open": 26.01,
+      "prev_close": 26.05,
+      "high": 26.31,
+      "low": 25.53,
+      "amount_yi": 57.15779763,
+      "quote_date": "2026-06-01",
+      "quote_time": "15:00:03",
+      "note": ""
+    },
+    {
+      "code": "sz300059",
+      "configured_name": "东方财富",
+      "name": "东方财富",
+      "price": 18.97,
+      "pct": -0.9916492693110713,
+      "open": 19.05,
+      "prev_close": 19.16,
+      "high": 19.27,
+      "low": 18.85,
+      "amount_yi": 46.603895263000005,
+      "quote_date": "2026-06-01",
+      "quote_time": "15:35:45",
+      "note": ""
+    },
+    {
+      "code": "sh600276",
+      "configured_name": "恒瑞医药",
+      "name": "恒瑞医药",
+      "price": 49.17,
+      "pct": -2.0322773460848693,
+      "open": 50.32,
+      "prev_close": 50.19,
+      "high": 51.2,
+      "low": 49.0,
+      "amount_yi": 47.30298019,
+      "quote_date": "2026-06-01",
+      "quote_time": "15:00:00",
+      "note": ""
+    }
+  ],
+  "a_quote_error": null,
+  "hk_quotes": [
+    {
+      "code": "rt_hk01801",
+      "configured_name": "信达生物",
+      "name": "信达生物",
+      "price": 80.95,
+      "pct": -2.879,
+      "open": 83.8,
+      "prev_close": 83.35,
+      "high": 84.75,
+      "low": 80.1,
+      "amount_yi": 14.339524443,
+      "quote_date": "",
+      "quote_time": "",
+      "note": ""
+    },
+    {
+      "code": "rt_hk09926",
+      "configured_name": "康方生物",
+      "name": "康方生物",
+      "price": 116.1,
+      "pct": -1.693,
+      "open": 129.0,
+      "prev_close": 118.1,
+      "high": 132.6,
+      "low": 113.2,
+      "amount_yi": 69.49000549899999,
+      "quote_date": "",
+      "quote_time": "",
+      "note": ""
+    }
+  ],
+  "hk_quote_error": null,
+  "boards": {},
+  "stock_candidates": [],
+  "stock_candidate_error": null
+}

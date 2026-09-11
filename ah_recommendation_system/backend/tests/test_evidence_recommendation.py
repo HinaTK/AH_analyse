@@ -345,7 +345,9 @@ class TestEvidenceRecommendation(unittest.TestCase):
             {"trend", "price_volume", "value_quality", "capital", "relative_strength", "event", "risk"},
         )
         self.assertLess(candidate.factor_scores["risk"], 0)
-        self.assertAlmostEqual(candidate.composite, 0.8516, places=4)
+        # No benchmark was supplied: momentum cannot earn another 15% as RS.
+        self.assertEqual(candidate.factor_scores["relative_strength"], 0.0)
+        self.assertAlmostEqual(candidate.composite, 0.7016, places=4)
 
     def test_formal_pick_exposes_evidence_factor_scores_directly(self):
         from ah_recommendation_system.backend.stock_recommend.candidate_pool import Candidate
@@ -715,7 +717,7 @@ class TestEvidenceRecommendation(unittest.TestCase):
             current = dict(DEFAULT_WEIGHTS)
             current["trend"] += 0.02
             current["capital"] -= 0.02
-            path.write_text(json.dumps({"factor_version": "evidence-v1", "weights": current}), encoding="utf-8")
+            path.write_text(json.dumps({"factor_version": "evidence-v2", "weights": current}), encoding="utf-8")
             self.assertEqual(load_factor_weights(path), current)
             path.write_text(json.dumps({"factor_version": "legacy", "weights": current}), encoding="utf-8")
             self.assertEqual(load_factor_weights(path), DEFAULT_WEIGHTS)
@@ -751,6 +753,30 @@ class TestEvidenceRecommendation(unittest.TestCase):
         self.assertEqual(rows[0]["code"], "000001")
         self.assertTrue(rows[0]["stale"])
         self.assertEqual(rows[0]["source"], "last_good_snapshot")
+
+    def test_fresh_disk_snapshot_can_be_used_as_live_fallback(self):
+        import tempfile
+        from pathlib import Path
+        from ah_recommendation_system.backend.stock_recommend.local_store import load_last_snapshot, persist_snapshot
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            persist_snapshot(
+                [{"code": "000001", "name": "缓存", "price": 10, "amount": 200_000_000}],
+                root,
+                as_of="2026-09-10",
+            )
+            fresh = load_last_snapshot(root, max_age_seconds=300)
+            parquet = next((root / "data" / "market_store").glob("a_share_spot_*.parquet"))
+            parquet.touch()
+            import os
+            os.utime(parquet, (1_000_000_000, 1_000_000_000))
+            stale = load_last_snapshot(root, max_age_seconds=300)
+
+        self.assertEqual(fresh[0]["source"], "disk_cache")
+        self.assertFalse(fresh[0]["stale"])
+        self.assertEqual(stale[0]["source"], "last_good_snapshot")
+        self.assertTrue(stale[0]["stale"])
 
     def test_candidate_requires_sixty_daily_bars_for_formal_recommendation(self):
         from ah_recommendation_system.backend.stock_recommend.candidate_pool import build_candidates

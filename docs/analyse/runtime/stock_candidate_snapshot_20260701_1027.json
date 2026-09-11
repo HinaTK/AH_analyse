@@ -1,0 +1,28 @@
+{
+  "generated_at": "2026-07-01 10:29:55",
+  "sources": [
+    "Sina realtime quotes",
+    "EastMoney board data via AkShare"
+  ],
+  "universe": {
+    "a_quotes": {
+      "002371": "北方华创",
+      "688012": "中微公司",
+      "003043": "华亚智能",
+      "600030": "中信证券",
+      "601688": "华泰证券",
+      "300059": "东方财富",
+      "300803": "指南针",
+      "600276": "恒瑞医药",
+      "002422": "科伦药业"
+    },
+    "hk_quotes": {}
+  },
+  "a_quotes": [],
+  "a_quote_error": "Sina returned no parsable quote for: 002371, 002422, 003043, 300059, 300803, 600030, 600276, 601688, 688012",
+  "hk_quotes": [],
+  "hk_quote_error": null,
+  "boards": {},
+  "stock_candidates": [],
+  "stock_candidate_error": null
+}

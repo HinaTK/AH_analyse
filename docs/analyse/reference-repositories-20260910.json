@@ -1,0 +1,40 @@
+{
+  "recorded_at": "2026-09-10T20:30:49.299550",
+  "repositories": [
+    {
+      "name": "qlib",
+      "path": "D:\\Code\\AH_reference_repos\\qlib",
+      "remote": "https://github.com/microsoft/qlib.git",
+      "revision": "79633dd9506ea689e5400dea0197717b5b3d74b7",
+      "status": ""
+    },
+    {
+      "name": "stock-screener",
+      "path": "D:\\Code\\AH_reference_repos\\stock-screener",
+      "remote": "https://github.com/RyanJHamby/stock-screener.git",
+      "revision": "557b57c929598b5d035dd341c28a256428a7842c",
+      "status": ""
+    },
+    {
+      "name": "alphasift",
+      "path": "D:\\Code\\AH_reference_repos\\alphasift",
+      "remote": "https://github.com/ZhuLinsen/alphasift.git",
+      "revision": "9f522747caafd3c0b1ddb7e14d5cf44c8580b6cf",
+      "status": ""
+    },
+    {
+      "name": "alphaevo",
+      "path": "D:\\Code\\AH_reference_repos\\alphaevo",
+      "remote": "https://github.com/ZhuLinsen/alphaevo.git",
+      "revision": "712e60b3a79fa3835ac725e91e4f5b2c5811f652",
+      "status": ""
+    },
+    {
+      "name": "daily_stock_analysis",
+      "path": "D:\\Code\\AH_reference_repos\\daily_stock_analysis",
+      "remote": "https://github.com/ZhuLinsen/daily_stock_analysis.git",
+      "revision": "089d9d26d68f8b839ea5a74a3784e4402925f8b7",
+      "status": ""
+    }
+  ]
+}

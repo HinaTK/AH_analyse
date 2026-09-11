@@ -151,14 +151,11 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
                 "tag": "div",
                 "text": {"tag": "lark_md", "content": "\n".join(close_lines)},
             })
+        from ah_recommendation_system.backend.stock_recommend.post_market import format_review_item
         for item in report.get("items") or []:
             elements.append({
                 "tag": "div",
-                "text": {"tag": "lark_md", "content": (
-                    f"**{item.get('name', '')} ({item.get('code', '')})** · "
-                    f"状态 `{item.get('status', 'pending')}` · 收益 {item.get('return_pct', '-')}% · "
-                    f"次日修正 `{item.get('correction', 'confirm')}`"
-                )},
+                "text": {"tag": "lark_md", "content": format_review_item(item)},
             })
         direction_rows = report.get("direction_review") or []
         if direction_rows:
@@ -217,7 +214,7 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
     elements: list[Any] = []
     status = report.get("data_status")
     coverage_label = (report.get("coverage") or {}).get("label")
-    if status in {"degraded", "failed"} or coverage_label:
+    if status in {"degraded", "failed"} or (coverage_label and coverage_label != "全市场观察池"):
         status_text = {
             "degraded": "⚠️ 有限数据源：本次仅使用重点行业+龙虎榜观察池",
             "failed": "⚠️ 数据采集失败：本次不生成策略结论",
@@ -226,7 +223,8 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
             status_text = f"{status_text + ' · ' if status_text else ''}范围：{coverage_label}"
         if status_text:
             elements.append({"tag": "div", "text": {"tag": "lark_md", "content": status_text}})
-    if summary:
+    static_summary = "仅保留具备可追溯趋势/量价及至少三类独立证据的候选；证据不足时不生成个股推荐。"
+    if summary and summary.strip() != static_summary:
         elements.append(
             {
                 "tag": "div",
@@ -251,6 +249,7 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
                 "content": (
                     f"**市场姿态**：{market.get('label', market.get('regime', '待确认'))}"
                     f"｜{market.get('status', '需确认')}｜环境分 {market_score}"
+                    f"｜{market.get('position_guidance', '仓位待定')}"
                 ),
             },
         })
@@ -269,14 +268,16 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
                 suffix = "%" if item.get("change_pct") is not None else ""
                 values.append(f"{item.get('name', '')} {metric if metric is not None else '-'}{suffix}")
             cross_lines.append(f"- **{label}**：" + "、".join(values))
-        if cross_lines:
+        if cross_lines or cross_market.get("conclusion"):
+            body = "\n".join(cross_lines) if cross_lines else "- 外部市场可用数值不足"
             elements.append({
                 "tag": "div",
                 "text": {
                     "tag": "lark_md",
                     "content": (
                         f"**跨市场环境**｜风险 {cross_market.get('risk_level', 'unknown')}"
-                        f"｜{cross_market.get('observed_at', '-')}\n" + "\n".join(cross_lines)
+                        f"｜{cross_market.get('observed_at', '-')}\n" + body
+                        + (f"\n**对A股结论**：{cross_market.get('conclusion')}" if cross_market.get('conclusion') else "")
                     ),
                 },
             })
@@ -319,18 +320,20 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
     hotspot_lines = []
     for item in market_hotspots[:5]:
         status = item.get("status_label") or item.get("status") or "需确认"
-        confidence = item.get("confidence")
-        confidence_text = ""
-        try:
-            confidence_text = f"·置信{float(confidence) * 100:.0f}%"
-        except (TypeError, ValueError):
-            pass
-        evidence_text = f"·证据{int(item.get('evidence_count') or 0)}条" if item.get("source_type") == "news" else ""
+        grade = item.get("evidence_grade") or item.get("status_label") or "消息待确认"
+        reprints = int(item.get("evidence_count") or 0)
+        independent = item.get("independent_source_count")
+        evidence_text = ""
+        if item.get("source_type") == "news":
+            if independent is not None:
+                evidence_text = f"·报道{reprints}篇｜独立来源{int(independent)}个"
+            elif reprints:
+                evidence_text = f"·报道{reprints}篇｜独立性未知"
         driver = "、".join(item.get("drivers") or []) or "暂无明确驱动"
         industries = "、".join(item.get("industries") or []) or "待映射"
-        reps = "、".join(item.get("representatives") or []) or "暂无代表标的"
+        reps = "、".join(item.get("representatives") or []) or item.get("mapping_gap") or "行业成员数据缺失"
         hotspot_lines.append(
-            f"- **{item.get('theme', '未知')}**｜{status}{confidence_text}{evidence_text}\n"
+            f"- **{item.get('theme', '未知')}**｜{grade}{evidence_text}\n"
             f"  驱动：{driver}\n  行业：{industries}｜代表：{reps}"
         )
     hotspot_content = "**市场热点**\n" + ("\n".join(hotspot_lines) if hotspot_lines else "暂无已验证市场热点（新闻与盘面信号均不足）")

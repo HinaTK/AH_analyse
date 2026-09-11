@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 import pandas as pd
+import time
 
 
 class TestMarketDataManager(unittest.TestCase):
@@ -134,8 +135,11 @@ class TestMarketDataManager(unittest.TestCase):
             result = manager.fetch_snapshot(limit=10)
 
         self.assertEqual(result.source, "akshare")
-        self.assertEqual(result.rows, backup)
-        self.assertEqual(result.attempted, ["hithink_financial_api", "akshare"])
+        self.assertEqual(result.rows[0]["code"], "600519")
+        self.assertEqual(result.rows[0]["price"], 1500.0)
+        self.assertEqual(result.rows[0]["source"], "akshare")
+        self.assertEqual(result.attempted[:2], ["hithink_financial_api", "akshare"])
+        self.assertTrue(all(item.endswith(":supplement") or item in {"hithink_financial_api", "akshare"} for item in result.attempted))
         self.assertEqual(result.fallback_level, 1)
 
     def test_open_circuit_breaker_is_reported_as_skipped(self):
@@ -154,7 +158,8 @@ class TestMarketDataManager(unittest.TestCase):
 
         self.assertEqual(result.source, "akshare")
         self.assertEqual(result.skipped, ["hithink_financial_api"])
-        self.assertEqual(result.attempted, ["akshare"])
+        self.assertEqual(result.attempted[0], "akshare")
+        self.assertNotIn("hithink_financial_api", result.attempted)
 
     def test_market_stats_are_derived_from_rows(self):
         from ah_recommendation_system.backend.stock_recommend.market_data import MarketDataManager
@@ -201,4 +206,56 @@ class TestMarketDataManager(unittest.TestCase):
         self.assertIsNone(rows[0]["amount"])
         self.assertIsNone(rows[0]["turnover_pct"])
         self.assertIsNone(rows[0]["pe"])
-        self.assertEqual(rows[0]["price"], "-")
+        self.assertIsNone(rows[0]["price"])
+
+    def test_akshare_and_efinance_snapshots_are_rate_limited(self):
+        from ah_recommendation_system.backend.stock_recommend.market_data import (
+            AkshareSnapshotProvider,
+            EfinanceSnapshotProvider,
+            RateLimiter,
+        )
+
+        limiter = RateLimiter(min_interval_seconds=0.05)
+        calls = []
+
+        class FakeAkshare:
+            @staticmethod
+            def stock_zh_a_spot_em():
+                calls.append("ak")
+                return pd.DataFrame([{"代码": "600519", "名称": "Moutai", "最新价": 1500.0, "涨跌幅": 1.0}])
+
+        class FakeStock:
+            @staticmethod
+            def get_realtime_quotes():
+                calls.append("ef")
+                return pd.DataFrame([{"代码": "600519", "名称": "Moutai", "最新价": 1500.0, "涨跌幅": 1.0}])
+
+        class FakeEfinance:
+            stock = FakeStock()
+
+        akshare = AkshareSnapshotProvider(akshare_module=FakeAkshare(), rate_limiter=limiter)
+        efinance = EfinanceSnapshotProvider(efinance_module=FakeEfinance(), rate_limiter=limiter)
+        started = time.perf_counter()
+        akshare.snapshot(limit=1)
+        efinance.snapshot(limit=1)
+        elapsed = time.perf_counter() - started
+
+        self.assertEqual(calls, ["ak", "ef"])
+        self.assertGreaterEqual(elapsed, 0.05)
+
+    def test_provider_snapshot_retries_transient_failures(self):
+        from ah_recommendation_system.backend.stock_recommend.market_data import AkshareSnapshotProvider
+
+        attempts = {"count": 0}
+
+        class FlakyAkshare:
+            @staticmethod
+            def stock_zh_a_spot_em():
+                attempts["count"] += 1
+                if attempts["count"] == 1:
+                    raise ConnectionError("aborted")
+                return pd.DataFrame([{"代码": "600519", "名称": "Moutai", "最新价": 1500.0, "涨跌幅": 1.0}])
+
+        rows = AkshareSnapshotProvider(akshare_module=FlakyAkshare()).snapshot(limit=1)
+        self.assertEqual(attempts["count"], 2)
+        self.assertEqual(rows[0]["code"], "600519")

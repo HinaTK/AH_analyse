@@ -14,6 +14,8 @@ DEFAULT_BASE_URL = "https://fuyao.aicubes.cn"
 
 def _thscode(code: str) -> str:
     raw = str(code).split(".")[0].zfill(6)
+    if raw.startswith(("8", "43", "92")):
+        return f"{raw}.BJ"
     return f"{raw}.SH" if raw.startswith(("5", "6", "9")) else f"{raw}.SZ"
 
 

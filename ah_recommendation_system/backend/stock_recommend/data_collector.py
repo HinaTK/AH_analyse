@@ -28,6 +28,7 @@ from ah_recommendation_system.backend.stock_recommend.market_data import MarketD
 from ah_recommendation_system.backend.etf_sector.rss_fetcher import (
     fetch_news_digest,
 )
+from ah_recommendation_system.backend.stock_recommend.news_ranker import classify_query_bucket
 
 
 # ---------- helpers ----------
@@ -294,6 +295,38 @@ def collect_capital() -> Dict[str, Any]:
 
 # ---------- events ----------
 
+
+def select_macro_news_by_bucket(items, *, limit: int = 80, per_bucket: int = 20):
+    """Keep policy/price/industry news even if they arrive after a global tape."""
+    buckets = {
+        "policy": [],
+        "price_supply": [],
+        "industry": [],
+        "foreign_capital": [],
+        "company": [],
+        "macro_tape": [],
+    }
+    seen: set[str] = set()
+    for raw in items or []:
+        item = dict(raw)
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        key = str(item.get("url") or "") or f"{title}|{item.get('published_at') or ''}"
+        if key in seen:
+            continue
+        seen.add(key)
+        bucket = str(item.get("query_bucket") or "") or classify_query_bucket(item)
+        item["query_bucket"] = bucket
+        buckets.setdefault(bucket, []).append(item)
+    output: list[dict] = []
+    for bucket in ("policy", "price_supply", "industry", "foreign_capital", "company", "macro_tape"):
+        output.extend(buckets.get(bucket, [])[:per_bucket])
+        if len(output) >= limit:
+            return output[:limit]
+    return output[:limit]
+
+
 def _collect_news_em(limit: int = 100, codes: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     if _is_mock_mode():
         return list(_MOCK_NEWS_ITEMS)[:limit] if limit else list(_MOCK_NEWS_ITEMS)
@@ -319,7 +352,7 @@ def _collect_news_em(limit: int = 100, codes: Optional[List[str]] = None) -> Lis
             continue
         df = df.rename(columns=rename)
         keep = [column for column in dict.fromkeys(rename.values()) if column in df.columns]
-        records.extend(_df_to_records(df[keep]))
+        records.extend(_df_to_records(df[keep])[:5])
         if len(records) >= limit:
             break
     return records[:limit]
@@ -396,7 +429,7 @@ def _collect_macro_news_fallback(
         df = _safe_call(fetch, attempts=2)
         if df is None or df.empty:
             continue
-        for raw in df.head(limit).to_dict("records"):
+        for raw in df.head(max(limit * 5, limit)).to_dict("records"):
             title = str(raw.get("标题") or raw.get("新闻标题") or raw.get("title") or "").strip()
             if not title or title in seen:
                 continue
@@ -408,9 +441,7 @@ def _collect_macro_news_fallback(
                 "source": source_name,
                 "url": raw.get("链接") or raw.get("网址") or raw.get("url") or "",
             })
-            if len(output) >= limit:
-                return output
-    return output
+    return select_macro_news_by_bucket(output, limit=limit)
 
 
 def collect_events(limit: int = 100, codes: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -422,7 +453,8 @@ def collect_events(limit: int = 100, codes: Optional[List[str]] = None) -> Dict[
         item for item in notices
         if (str(item.get("title") or ""), str(item.get("published_at") or "")) not in existing_news
     )
-    news = news[:limit]
+    stock_cap = 50 if codes else limit
+    news = news[: min(limit, stock_cap)]
     macro: Dict[str, Any] = {"source": "mock", "items": []} if _is_mock_mode() else {}
     if not _is_mock_mode() and not codes:
         try:
@@ -434,7 +466,7 @@ def collect_events(limit: int = 100, codes: Optional[List[str]] = None) -> Dict[
         macro_items = list(macro.get("items") or [])
         seen_macro = {str(item.get("title") or "") for item in macro_items}
         macro_items.extend(item for item in fallback_macro if str(item.get("title") or "") not in seen_macro)
-        macro["items"] = macro_items[:80]
+        macro["items"] = select_macro_news_by_bucket(macro_items, limit=80)
         macro["count"] = len(macro["items"])
         macro["source"] = "rss+akshare_global_macro"
 

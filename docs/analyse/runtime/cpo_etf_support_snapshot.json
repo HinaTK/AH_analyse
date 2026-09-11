@@ -1,0 +1,36 @@
+{
+  "generated_at": "2026-06-03 13:53:46",
+  "sources": [
+    "Sina realtime quotes",
+    "EastMoney board data via AkShare"
+  ],
+  "universe": {
+    "a_quotes": {
+      "sh515880": "通信ETF国泰"
+    },
+    "hk_quotes": {}
+  },
+  "a_quotes": [
+    {
+      "code": "sh515880",
+      "configured_name": "通信ETF国泰",
+      "name": "通信ETF国泰",
+      "price": 1.736,
+      "pct": 6.177370030581039,
+      "open": 1.67,
+      "prev_close": 1.635,
+      "high": 1.775,
+      "low": 1.67,
+      "amount_yi": 39.26086162,
+      "quote_date": "2026-06-03",
+      "quote_time": "13:53:43",
+      "note": ""
+    }
+  ],
+  "a_quote_error": null,
+  "hk_quotes": [],
+  "hk_quote_error": null,
+  "boards": {},
+  "stock_candidates": [],
+  "stock_candidate_error": null
+}

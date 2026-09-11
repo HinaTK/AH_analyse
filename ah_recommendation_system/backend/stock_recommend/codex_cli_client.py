@@ -30,7 +30,7 @@ class CodexCliClient:
         self.timeout_seconds = float(
             timeout_seconds
             if timeout_seconds is not None
-            else os.environ.get("AH_CODEX_TIMEOUT_SECONDS", "90")
+            else os.environ.get("AH_CODEX_TIMEOUT_SECONDS", "180")
         )
         self.model = model or os.environ.get("AH_CODEX_MODEL") or ""
         requested_effort = reasoning_effort or os.environ.get("AH_CODEX_REASONING_EFFORT") or "low"

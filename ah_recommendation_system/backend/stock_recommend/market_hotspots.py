@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping
 
+PLACEHOLDER_THEMES = {"\u65b0\u95fb\u9a71\u52a8\u5f85\u786e\u8ba4", "\u70ed\u70b9\u5f85\u786e\u8ba4"}
+
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
@@ -32,7 +34,9 @@ def build_market_hotspots(
     ETF trends and stock rankings are deliberately not market hotspots by
     themselves. Market-derived rows require explicit breadth evidence.
     """
-    del picks, etf_picks  # retained for backwards-compatible call sites
+    # ETF trends alone are not sufficient evidence. Stock candidates may be
+    # used only as an explicitly labelled fallback direction when no news or
+    # breadth hotspot is available.
     limit = max(0, min(int(limit), 5))
     output: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -42,21 +46,27 @@ def build_market_hotspots(
             continue
         theme = _text(raw.get("theme"))
         status = _text(raw.get("status"))
-        if not theme or status == "discarded" or theme in seen:
+        if not theme or status == "discarded" or theme in PLACEHOLDER_THEMES or theme in seen:
             continue
         seen.add(theme)
         refs = _items(raw.get("evidence_refs"), 10)
+        reprints = int(raw.get("reprint_count") or raw.get("evidence_count") or len(refs) or 0)
+        independent = raw.get("independent_source_count")
+        evidence_grade = _text(raw.get("evidence_grade")) or _status_label(status)
         output.append({
             "theme": theme,
             "drivers": _items(raw.get("drivers"), 3),
             "industries": _items(raw.get("industries"), 5),
             "representatives": _items(raw.get("representatives"), 5),
+            "mapping_gap": _text(raw.get("mapping_gap")) or None,
             "source_type": "news",
             "status": status or "early_signal",
             "status_label": _status_label(status),
+            "evidence_grade": evidence_grade,
             "confidence": raw.get("confidence"),
             "evidence_refs": refs,
-            "evidence_count": len(refs),
+            "evidence_count": reprints or len(refs),
+            "independent_source_count": independent,
             "horizon": _text(raw.get("horizon")) or "short",
         })
         if len(output) >= limit:
@@ -89,6 +99,35 @@ def build_market_hotspots(
             "source_type": "market",
             "status": "market_confirmed",
             "status_label": "盘面确认",
+            "confidence": None,
+            "evidence_refs": [],
+            "evidence_count": 0,
+            "horizon": "short",
+        })
+        if len(output) >= limit:
+            return output
+
+    candidate_groups: dict[str, list[Mapping[str, Any]]] = {}
+    for raw in picks:
+        if not isinstance(raw, Mapping):
+            continue
+        for industry in raw.get("focus_industries") or []:
+            key = _text(industry)
+            if key:
+                candidate_groups.setdefault(key, []).append(raw)
+    for theme, members in sorted(candidate_groups.items(), key=lambda item: -len(item[1])):
+        if theme in seen or len(members) < 2:
+            continue
+        seen.add(theme)
+        representatives = [_text(row.get("name")) for row in members[:5] if _text(row.get("name"))]
+        output.append({
+            "theme": theme,
+            "drivers": [f"候选池 {len(members)} 只标的同向出现，等待行业宽度与成交确认"],
+            "industries": [theme],
+            "representatives": representatives,
+            "source_type": "candidate",
+            "status": "early_signal",
+            "status_label": "候选方向待确认",
             "confidence": None,
             "evidence_refs": [],
             "evidence_count": 0,

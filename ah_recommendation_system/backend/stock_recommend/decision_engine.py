@@ -95,8 +95,16 @@ def build_market_decision(
     else:
         regime, label, status = "defense", "防守", "降级观察"
 
+    if score >= 65:
+        position_guidance = "进攻仓位 60%-80%；主线确认后分批加仓，跌破失效位减仓"
+    elif score >= 45:
+        position_guidance = "均衡仓位 40%-60%；仅在触发条件确认后加仓，未确认不追涨"
+    else:
+        position_guidance = "轻仓 20%-30%；不主动加仓，等待市场修复后再提高仓位"
+
+    actionable_hotspots = [item for item in hotspot_rows if str(item.get("status") or "").lower() in {"confirmed", "有效", "early_signal", "消息待确认"}]
     ranked_themes = []
-    for hotspot in confirmed_hotspots:
+    for hotspot in actionable_hotspots:
         theme = str(hotspot.get("theme") or "").strip()
         if theme and theme not in ranked_themes:
             ranked_themes.append(theme)
@@ -121,8 +129,8 @@ def build_market_decision(
         f"已交叉验证热点{len(confirmed_hotspots)}项",
     ]
 
-    medium = ranked_themes[0] if confirmed_hotspots else "暂无通过慢变量门槛的中期主线"
-    medium_action = "分批观察，等待慢变量和价格结构继续确认" if confirmed_hotspots else "等待确认"
+    medium = ranked_themes[0] if actionable_hotspots else "暂无通过慢变量门槛的中期主线"
+    medium_action = "分批观察，等待慢变量和价格结构继续确认" if actionable_hotspots else "等待确认"
     early = []
     if confirmed_hotspots and positive_signals:
         early.append(
@@ -185,6 +193,7 @@ def build_market_decision(
         "regime": regime,
         "label": label,
         "status": status,
+        "position_guidance": position_guidance,
         "evidence": [
             {"statement": text, "source": "deterministic_market_engine", "as_of": as_of}
             for text in primary_evidence
