@@ -350,3 +350,45 @@ def _load_jsonl_compat(p: Path) -> Optional[Dict[str, Any]]:
         return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def label_ranking_panel(panel, bars_by_code, benchmark_calendar) -> list[Dict[str, Any]]:
+    """Attach T+1 open to T+5 close executable labels onto the tradable panel.
+
+    Membership is decided by the signal date; delayed exits stay in the
+    cohort. Incomplete horizons return status=pending and never train.
+    """
+    from ah_recommendation_system.backend.stock_recommend.execution_validation import (
+        ExecutionCosts,
+        simulate_forward_trade,
+    )
+
+    costs = ExecutionCosts()
+    labeled = []
+    for row in panel:
+        code = str(row.get("code") or "")
+        bars = bars_by_code.get(code)
+        if bars is None or getattr(bars, "empty", False):
+            labeled.append({**row, "status": "unfilled", "reason": "entry_data_missing"})
+            continue
+        outcome = simulate_forward_trade(
+            bars=bars,
+            benchmark=benchmark_calendar,
+            code=code,
+            signal_date=str(row.get("date") or ""),
+            horizon=5,
+            costs=costs,
+        )
+        if outcome.get("status") == "filled":
+            labeled.append({
+                **row,
+                "status": "filled",
+                "entry_date": outcome["entry_date"],
+                "label_end": outcome["exit_date"],
+                "net_return_pct": outcome["net_return_pct"],
+                "benchmark_return_pct": outcome["benchmark_return_pct"],
+                "excess_return_pct": outcome["excess_return_pct"],
+            })
+        else:
+            labeled.append({**row, "status": outcome.get("status"), "reason": outcome.get("reason")})
+    return labeled

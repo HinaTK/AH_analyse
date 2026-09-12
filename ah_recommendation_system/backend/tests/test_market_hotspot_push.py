@@ -27,7 +27,9 @@ class TestMarketHotspotPush(unittest.TestCase):
         self.assertEqual(report["market_hotspots"][0]["source_type"], "news")
         self.assertIn("市场热点", rendered)
         self.assertIn("算力扩容", rendered)
-        self.assertIn("运营商资本开支增加", rendered)
+        # 2026-09-12 用户要求：热点卡片不再附带驱动信息，详细驱动只在报告文件里保留
+        self.assertNotIn("驱动：", rendered)
+        self.assertNotIn("运营商资本开支增加", rendered)
         self.assertIn("光模块、数据中心", rendered)
         self.assertIn("消息验证", rendered)
         self.assertIn("报道2篇", rendered)

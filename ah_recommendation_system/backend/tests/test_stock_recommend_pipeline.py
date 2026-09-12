@@ -189,6 +189,33 @@ class TestStockRecommendationPipeline(unittest.TestCase):
         self.assertEqual(report["run"]["status"], "passed")
         self.assertTrue(all(pick.get("factor_scores") for pick in report["picks"]))
 
+    def test_mock_pipeline_persists_shadow_panel_without_overwriting_latest(self):
+        import tempfile
+        from pathlib import Path as TmpPath
+
+        from ah_recommendation_system.backend.stock_recommend import run as run_module
+
+        run_pipeline = run_module.run_pipeline
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = TmpPath(tmp)
+            with patch.object(run_module, "_backend_root", return_value=tmp_root), patch(
+                "ah_recommendation_system.backend.stock_recommend.run.save_report", return_value={}
+            ):
+                result = run_pipeline(mock=True, push=False)
+
+            panel_dir = tmp_root / "data" / "stock_recommend" / "panels"
+            files = list(panel_dir.glob("ranking_panel_*.parquet")) if panel_dir.exists() else []
+            self.assertTrue(files, "shadow panel parquet missing")
+            import polars as pl
+
+            frame = pl.read_parquet(files[0])
+            self.assertGreater(frame.height, 0)
+            row = frame.to_dicts()[0]
+            self.assertEqual(row["panel_scope"], "all_tradable")
+            self.assertEqual(row["source"], "mock")
+            self.assertTrue(row["point_in_time_snapshot"])
+            self.assertFalse((tmp_root / "data" / "daily_reports" / "latest.json").exists())
+
     def test_pipeline_clamps_requested_stock_count_to_five(self):
         from ah_recommendation_system.backend.stock_recommend.run import run_pipeline
 

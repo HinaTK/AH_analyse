@@ -469,7 +469,7 @@ class TestDecisionReportV2(unittest.TestCase):
             paths = save_review_report(review, Path(tmp))
             markdown = Path(paths["md_path"]).read_text(encoding="utf-8")
 
-        self.assertIn("direction review", markdown.lower())
+        self.assertIn("方向复盘", markdown)
         self.assertIn("semiconductor", markdown)
         self.assertIn("close-price breadth confirmed", markdown)
 
@@ -647,6 +647,27 @@ class TestDecisionReportV2(unittest.TestCase):
         self.assertEqual(push.call_count, 0)
         self.assertTrue(report["delivery"]["ambiguous"])
 
+    def test_failed_quality_delivery_does_not_block_same_session_retry(self):
+        from ah_recommendation_system.backend.stock_recommend.delivery_guard import should_deliver
+        from ah_recommendation_system.backend.stock_recommend.run import _deliver_report
+
+        report = {
+            "as_of": "2026-09-11",
+            "run": {"run_id": "bad", "session": "pre_market", "status": "failed"},
+            "quality_gate": {"passed": False, "blocking_reasons": ["候选估值字段大面积缺失，数据不完整，推荐结论受限"]},
+        }
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "ah_recommendation_system.backend.stock_recommend.run.push_to_feishu",
+            return_value={"ok": True, "payload_hash": "bad-hash", "status": 200},
+        ) as push:
+            ledger = Path(tmp) / "delivery.json"
+            first = _deliver_report(report, ledger_path=ledger)
+            can_retry = should_deliver(ledger, trade_date="2026-09-11", session="pre_market")
+
+        self.assertTrue(first["ok"])
+        self.assertEqual(push.call_count, 1)
+        self.assertFalse(report["delivery"]["accepted"])
+        self.assertTrue(can_retry)
 
 if __name__ == "__main__":
     unittest.main()

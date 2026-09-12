@@ -118,7 +118,7 @@ class PriceFetcher:
 		df = pd.DataFrame(rows)
 		if "date" in df.columns:
 			unit = "ms" if pd.api.types.is_numeric_dtype(df["date"]) else None
-			df["date"] = pd.to_datetime(df["date"], errors="coerce", unit=unit).dt.tz_localize(None)
+			df["date"] = (pd.to_datetime(df["date"], errors="coerce", unit=unit, utc=True).dt.tz_convert("Asia/Shanghai").dt.tz_localize(None))
 		return df
 
 	def _get_baostock_history(self, normalized: str, start: str, end: str) -> pd.DataFrame:

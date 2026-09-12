@@ -22,6 +22,21 @@ def _is_confirmed(hotspot: Mapping[str, Any]) -> bool:
     }
 
 
+def _medium_term_qualified(hotspot: Mapping[str, Any], positive_signals: list[Mapping[str, Any]]) -> bool:
+    """Only promote a theme to the 1--3 month bucket after real confirmation."""
+    status = str(hotspot.get("status") or "").lower()
+    refs = hotspot.get("evidence_refs") or []
+    try:
+        independent = int(hotspot.get("independent_source_count") or 0)
+    except (TypeError, ValueError):
+        independent = 0
+    drivers = " ".join(str(x) for x in (hotspot.get("drivers") or []))
+    slow_variable = any(token in drivers for token in ("\u8ba2\u5355", "\u76c8\u5229", "\u4f9b\u9700", "\u653f\u7b56", "\u4ea7\u80fd", "\u4e1a\u7ee9", "\u5e93\u5b58", "\u4ef7\u683c"))
+    price_confirmed = status in {"confirmed", "market_confirmed", "\u6709\u6548", "\u5e02\u573a\u786e\u8ba4"}
+    breadth_confirmed = any(str(signal.get("theme") or "") == str(hotspot.get("theme") or "") for signal in positive_signals)
+    return independent >= 2 and len(refs) >= 2 and slow_variable and (price_confirmed or breadth_confirmed)
+
+
 def _direction_item(
     direction: str,
     *,
@@ -54,6 +69,7 @@ def build_market_decision(
     hotspots: Optional[Iterable[Mapping[str, Any]]] = None,
     coverage: Optional[Mapping[str, Any]] = None,
     cross_market: Optional[Mapping[str, Any]] = None,
+    previous_medium_term: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build a deterministic market decision from verified evidence."""
     signals = [dict(item) for item in (market_signals or []) if isinstance(item, Mapping)]
@@ -129,8 +145,12 @@ def build_market_decision(
         f"已交叉验证热点{len(confirmed_hotspots)}项",
     ]
 
-    medium = ranked_themes[0] if actionable_hotspots else "暂无通过慢变量门槛的中期主线"
-    medium_action = "分批观察，等待慢变量和价格结构继续确认" if actionable_hotspots else "等待确认"
+    qualified_medium = next((item for item in actionable_hotspots if _medium_term_qualified(item, positive_signals)), None)
+    prior = str(previous_medium_term or "").strip()
+    # Never promote or blindly carry forward a prior theme. It must pass the
+    # current run's independent-source, slow-variable and price/breadth gates.
+    medium = str((qualified_medium or {}).get("theme") or "暂无通过慢变量门槛的中期主线")
+    medium_action = "分批观察，等待慢变量和价格结构继续确认" if qualified_medium else "等待确认"
     early = []
     if confirmed_hotspots and positive_signals:
         early.append(
@@ -168,7 +188,7 @@ def build_market_decision(
                 medium,
                 action=medium_action,
                 status="需确认",
-                evidence=["需持续验证政策、订单、业绩或供需慢变量"],
+                evidence=(["已满足独立来源、慢变量和价格/宽度确认门槛"] if qualified_medium else ["当前仅有早期信号或证据不足，未满足独立来源、慢变量和价格/宽度确认门槛"]),
                 window="1~3个月",
                 trigger="慢变量改善且趋势、相对强度转正",
                 invalidation="慢变量证伪或价格结构持续破坏",
@@ -187,6 +207,13 @@ def build_market_decision(
             )
         ],
     }
+    previous = str(previous_medium_term or "").strip()
+    if not previous:
+        direction_change_reason = "首次建立方向"
+    elif not qualified_medium:
+        direction_change_reason = "本次中期证据门槛未满足，旧方向和新热点均降为等待确认"
+    else:
+        direction_change_reason = "证据门槛通过后切换方向" if previous != medium else "方向未变化"
     return {
         "as_of": as_of,
         "score": score,
@@ -204,4 +231,10 @@ def build_market_decision(
             "出现改变风险偏好的P0事件",
         ],
         "directions": directions,
+        "direction_audit": {
+            "previous_medium_term": previous or None,
+            "current_medium_term": medium,
+            "direction_change_reason": direction_change_reason,
+            "medium_term_qualified": bool(qualified_medium),
+        },
     }

@@ -19,6 +19,7 @@ from typing import Any, Dict, Optional
 import requests
 from loguru import logger
 
+
 from ah_recommendation_system.backend.stock_recommend.market_hotspots import build_market_hotspots
 
 
@@ -42,6 +43,17 @@ def resolve_webhook(value: Optional[str] = None) -> str:
 def _format_factor_line(pick: Dict[str, Any]) -> str:
     factors = dict(pick.get("factor_scores") or {})
     factors.update(pick.get("factors") or {})
+    # 资金流数据缺失时，资金维度显示"-"而不是0分
+    has_capital_evidence = False
+    for item in pick.get("evidence") or []:
+        if item.get("factor") == "capital":
+            has_capital_evidence = True
+            if item.get("source") == "capital_unavailable":
+                factors["capital"] = None
+            break
+    if not has_capital_evidence and float(factors.get("capital") or 0) == 0.0:
+        # 旧数据没有资金evidence，资金分恰好为0视为未评估
+        factors["capital"] = None
     labels = (
         ("trend", "趋势"),
         ("price_volume", "量价"),
@@ -75,6 +87,13 @@ def _format_factor_line(pick: Dict[str, Any]) -> str:
                 return "-"
         event_detail = f"｜规则 {_event_score(rule)}｜AI {_event_score(ai)}"
     return f"综合评分 {composite_text}｜{dimensions}{event_detail}"
+
+
+def _format_capital_evidence(pick: Dict[str, Any]) -> str:
+    for item in pick.get("evidence") or []:
+        if item.get("factor") == "capital":
+            return str(item.get("statement") or "资金分未评估")
+    return "资金分未评估"
 
 
 def _format_etf_line(etf: Dict[str, Any]) -> str:
@@ -122,8 +141,9 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
                 "text": {
                     "tag": "lark_md",
                     "content": (
-                        f"**复盘结果**：完成 {summary.get('completed_count', 0)}/{summary.get('pick_count', 0)}，"
-                        f"命中 {summary.get('hit_count', 0)}"
+                        f"**收盘数据**：{summary.get('close_count', 0)}/{summary.get('pick_count', 0)}；"
+                        f"T+1已验证 {summary.get('completed_count', 0)}/{summary.get('pick_count', 0)}，"
+                        f"上涨 {summary.get('hit_count', 0)}；待验证 {summary.get('pending_count', 0)}"
                     ),
                 },
             }
@@ -151,7 +171,7 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
                 "tag": "div",
                 "text": {"tag": "lark_md", "content": "\n".join(close_lines)},
             })
-        from ah_recommendation_system.backend.stock_recommend.post_market import format_review_item
+        from ah_recommendation_system.backend.stock_recommend.post_market import format_review_item, format_direction_review
         for item in report.get("items") or []:
             elements.append({
                 "tag": "div",
@@ -161,11 +181,7 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
         if direction_rows:
             lines = []
             for item in direction_rows[:8]:
-                lines.append(
-                    f"- **{item.get('layer', '方向')}·{item.get('direction', '待确认')}**｜"
-                    f"{item.get('review_status', 'pending')}｜修正 {item.get('correction', 'confirm')}\n"
-                    f"  {item.get('evidence', '等待收盘确认')}"
-                )
+                lines.append(format_direction_review(item))
             elements.append({
                 "tag": "div",
                 "text": {"tag": "lark_md", "content": "**方向复盘**\n" + "\n".join(lines)},
@@ -313,13 +329,12 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
     if market_hotspots is None:
         market_hotspots = build_market_hotspots(
             news_hotspots=report.get("hotspots") or [],
-            picks=report.get("picks") or [],
-            etf_picks=report.get("etf_picks") or [],
+            picks=picks,
+            etf_picks=etf_picks,
             limit=5,
         )
     hotspot_lines = []
     for item in market_hotspots[:5]:
-        status = item.get("status_label") or item.get("status") or "需确认"
         grade = item.get("evidence_grade") or item.get("status_label") or "消息待确认"
         reprints = int(item.get("evidence_count") or 0)
         independent = item.get("independent_source_count")
@@ -329,12 +344,11 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
                 evidence_text = f"·报道{reprints}篇｜独立来源{int(independent)}个"
             elif reprints:
                 evidence_text = f"·报道{reprints}篇｜独立性未知"
-        driver = "、".join(item.get("drivers") or []) or "暂无明确驱动"
         industries = "、".join(item.get("industries") or []) or "待映射"
         reps = "、".join(item.get("representatives") or []) or item.get("mapping_gap") or "行业成员数据缺失"
         hotspot_lines.append(
             f"- **{item.get('theme', '未知')}**｜{grade}{evidence_text}\n"
-            f"  驱动：{driver}\n  行业：{industries}｜代表：{reps}"
+            f"  行业：{industries}｜代表：{reps}"
         )
     hotspot_content = "**市场热点**\n" + ("\n".join(hotspot_lines) if hotspot_lines else "暂无已验证市场热点（新闻与盘面信号均不足）")
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": hotspot_content}})
@@ -357,6 +371,7 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
                 f"**{i}. {name} ({code})** · `{action}` · 信心 {conf}\n"
                 f"买入 {buy}  止损 {sl}  目标 {tgt}  持有 {hd}\n"
                 f"理由: {rat}\n"
+                f"资金: {_format_capital_evidence(p)}\n"
                 f"{_format_factor_line(p)}"
             )
             llm_review = str(p.get("llm_review") or "").strip()
@@ -391,6 +406,9 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
                 for e in etf_picks[:3]
             )
         }})
+    else:
+        elements.append({"tag": "hr"})
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "**ETF观察**: 今日无合格ETF"}})
 
     fals = report.get("falsification") or []
     if fals:
@@ -412,7 +430,9 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
             "header": {
                 "title": {
                     "tag": "plain_text",
-                    "content": f"A/H市场盘前决策 · {as_of}" if report.get("schema_version") == "decision-report-v2" else f"A 股盘前推荐 · {as_of}",
+                    "content": (f"功能预览 · {as_of}" if report.get("is_preview")
+                                else f"A/H市场盘前决策 · {as_of}" if report.get("schema_version") == "decision-report-v2"
+                                else f"A 股盘前推荐 · {as_of}"),
                 },
                 "template": "blue",
             },
@@ -431,6 +451,11 @@ def push_to_feishu(
     backoff_seconds: float = 1.0,
 ) -> Dict[str, Any]:
     """Push report to Feishu webhook. Returns response info."""
+    if isinstance(report, dict) and "msg_type" in report and isinstance(report.get("card"), dict):
+        raise TypeError(
+            "push_to_feishu expects the source report, not a prebuilt card. "
+            "Call push_to_feishu(report) and let it build the card internally."
+        )
     hook = resolve_webhook(webhook)
     if not hook:
         return {"ok": False, "skipped": True, "reason": "AH_FEISHU_WEBHOOK not set"}
@@ -441,6 +466,21 @@ def push_to_feishu(
     payload_hash = hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+    content_audit = None
+    if report.get("type") == "stock_recommend_post_market":
+        from ah_recommendation_system.backend.stock_recommend.post_market import audit_review_card
+        content_audit = audit_review_card(report, payload)
+        if not content_audit["passed"]:
+            logger.error("Post-market content check blocked delivery: {}", content_audit["errors"])
+            return {"ok": False, "skipped": True, "reason": "post_market_content_check_failed",
+                    "content_audit": content_audit, "payload_hash": payload_hash}
+    elif str(report.get("type") or "").startswith("stock_recommend"):
+        from ah_recommendation_system.backend.stock_recommend.card_content_audit import audit_pre_market_card
+        content_audit = audit_pre_market_card(report, payload)
+        if not content_audit["passed"]:
+            logger.error("Pre-market content check blocked delivery: {}", content_audit["errors"])
+            return {"ok": False, "skipped": True, "reason": "pre_market_content_check_failed",
+                    "content_audit": content_audit, "payload_hash": payload_hash}
     if sec:
         ts = str(int(time.time()))
         payload["timestamp"] = ts
@@ -470,6 +510,7 @@ def push_to_feishu(
                     "response": last_data,
                     "retry_count": attempt,
                     "payload_hash": payload_hash,
+                    "content_audit": content_audit,
                 }
             last_error = f"business_{business_code}" if resp.status_code == 200 else f"http_{resp.status_code}"
             retryable = resp.status_code >= 500 or resp.status_code == 429

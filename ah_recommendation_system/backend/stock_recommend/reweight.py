@@ -176,6 +176,18 @@ def load_selection_threshold(path: Path) -> float:
     return .55
 
 
+def load_ranking_key(path: Path) -> str:
+    """Read the promoted ranking key; unknown payloads stay composite."""
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        key = str(payload.get("ranking_key") or "composite")
+        if payload.get("factor_version") == "ranker-v1" and key in {"composite", "model_score"}:
+            return key
+    except (OSError, ValueError, TypeError):
+        pass
+    return "composite"
+
+
 def build_event_calibration_records(rows: Iterable[Mapping[str, Any]]) -> list[Dict[str, Any]]:
     records: list[Dict[str, Any]] = []
     for row in _latest_verifications(rows):
@@ -198,6 +210,76 @@ def build_event_calibration_records(rows: Iterable[Mapping[str, Any]]) -> list[D
                 "p0": any(flag.startswith("p0") for flag in risk_flags),
             })
     return records
+
+
+def _rolling_ranker_evidence(*, panels_dir: Path, benchmark_path: Path) -> list[Dict[str, Any]] | None:
+    """Load persisted full-tradable panels and attach executable labels.
+
+    Parquet access is lazy because label calibration is weekly and optional.
+    A missing benchmark calendar or panel set returns no evidence rather than
+    inventing a market calendar.
+    """
+    panel_files = sorted(panels_dir.glob("ranking_panel_*.parquet"))
+    if not panel_files or not benchmark_path.exists():
+        return None
+    try:
+        import polars as pl
+
+        benchmark_rows = json.loads(benchmark_path.read_text(encoding="utf-8"))
+        if not isinstance(benchmark_rows, list):
+            return None
+        calendar = {
+            str(row.get("date")): dict(row)
+            for row in benchmark_rows
+            if isinstance(row, Mapping) and row.get("date")
+        }
+        if not calendar:
+            return None
+        rows: list[Dict[str, Any]] = []
+        for path in panel_files:
+            frame = pl.read_parquet(path)
+            data = frame.to_dicts()
+            raw_fields = next((row.get("_json_fields") for row in data if row.get("_json_fields") is not None), None)
+            if isinstance(raw_fields, str):
+                try:
+                    json_fields = set(json.loads(raw_fields or "[]"))
+                except (TypeError, ValueError):
+                    json_fields = set()
+            elif isinstance(raw_fields, list):
+                json_fields = set(raw_fields)
+            else:
+                json_fields = set()
+            for raw in data:
+                row = dict(raw)
+                row.pop("_json_fields", None)
+                for key in json_fields:
+                    if isinstance(row.get(key), str):
+                        try:
+                            row[key] = json.loads(row[key])
+                        except (TypeError, ValueError):
+                            pass
+                rows.append(row)
+    except Exception:
+        return None
+    from .backtest_verify import label_ranking_panel
+
+    dates = sorted(calendar)
+    start, end = dates[0], dates[-1]
+    bars_by_code: dict[str, Any] = {}
+    grouped: dict[str, list[Dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row.get("code") or ""), []).append(row)
+    try:
+        from .execution_data import ExecutionDataProvider
+
+        provider = ExecutionDataProvider()
+        for code in grouped:
+            bars_by_code[code] = provider.get_stock_bars(code, start, end)
+    except Exception:
+        return None
+    benchmark_frame = pl.DataFrame(calendar.values()).to_pandas()
+    labeled = label_ranking_panel(rows, bars_by_code, benchmark_frame)
+    return labeled or None
 
 
 def _latest_verifications(rows: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
@@ -320,6 +402,7 @@ def run_weekly_reweight(
     ledgers_dir: Path,
     weights_path: Path | None = None,
     max_delta: float = 0.05,
+    panels_dir: Path | None = None,
 ) -> Dict[str, Any]:
     """Promote only dated rolling-tested weights; retain defaults without proof."""
     ledgers_dir = Path(ledgers_dir)
@@ -327,6 +410,9 @@ def run_weekly_reweight(
     if weights_path is None:
         weights_path = ledgers_dir.parent.parent / "ah_recommendation_system" / "backend" / "data" / "stock_recommend" / "factor_weights.json"
     weights_path = Path(weights_path)
+    if panels_dir is None:
+        panels_dir = weights_path.parent / "panels"
+    panels_dir = Path(panels_dir)
     ledger_rows = [row for row in _latest_verifications(_read_jsonl(ledger_path))
                    if row.get("verification_version") == "execution-v1"
                    and row.get("verification_status") == "complete"
@@ -387,6 +473,44 @@ def run_weekly_reweight(
         "last_promoted_fingerprint": fingerprint if decision["applied"] else previous_payload.get("last_promoted_fingerprint"),
         "event_llm_calibration": event_calibration,
     }
+    ranker_evidence = _rolling_ranker_evidence(
+        panels_dir=panels_dir,
+        benchmark_path=weights_path.parent / "benchmark_calendar.json",
+    )
+    ranker_decision = None
+    if ranker_evidence:
+        from .rolling_calibration import rolling_calibrate_ranker
+
+        ranker_decision = rolling_calibrate_ranker(ranker_evidence, as_of=datetime.now().strftime("%Y-%m-%d"))
+    # The six-weight policy and the model ranker have separate keys. Only an
+    # accepted model decision may switch ranking_key. Absent evidence keeps
+    # the current key; ordinary not-promoted weeks disclose composite.
+    old_payload = {}
+    if weights_path.exists():
+        try:
+            old_payload = json.loads(weights_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            old_payload = {}
+    old_ranking_key = (
+        "model_score"
+        if str(old_payload.get("factor_version") or "") == "ranker-v1"
+        and str(old_payload.get("ranking_key") or "") == "model_score"
+        else "composite"
+    )
+    new_ranking_key = "model_score" if ranker_decision and ranker_decision.get("applied") else old_ranking_key
+    if new_ranking_key == "model_score":
+        payload.update(
+            ranking_key="model_score",
+            factor_version="ranker-v1",
+            minimum_score=float(ranker_decision.get("minimum_score", payload["minimum_score"])),
+            ranker_rolling_validation=ranker_decision,
+        )
+    else:
+        payload.update(ranking_key="composite", ranker_rolling_validation=ranker_decision)
+        if ranker_decision is not None and not ranker_decision.get("applied"):
+            payload["ranking_key_not_promoted"] = True
+        if old_ranking_key == "model_score":
+            payload["factor_version"] = "ranker-v1"
     weights_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
         "ok": True,

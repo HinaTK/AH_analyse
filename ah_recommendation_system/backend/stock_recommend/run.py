@@ -48,7 +48,7 @@ from ah_recommendation_system.backend.stock_recommend.report_builder import (
     save_review_report,
 )
 from ah_recommendation_system.backend.stock_recommend.post_market import build_post_market_review, closing_observation
-from ah_recommendation_system.backend.stock_recommend.local_store import load_last_snapshot, persist_snapshot
+from ah_recommendation_system.backend.stock_recommend.local_store import load_last_snapshot, persist_ranking_panel, persist_snapshot
 from ah_recommendation_system.backend.stock_recommend.market_data import MarketDataManager, SnapshotResult
 from ah_recommendation_system.backend.stock_recommend.reweight import (
     load_event_llm_share,
@@ -68,10 +68,24 @@ from ah_recommendation_system.backend.stock_recommend.hotspot_mapper import vali
 from ah_recommendation_system.backend.stock_recommend.llm_review import apply_llm_event_scores, review_candidate_events
 from ah_recommendation_system.backend.stock_recommend.decision_engine import build_market_decision
 from ah_recommendation_system.backend.stock_recommend.risk_review import review_candidate_risks
+from ah_recommendation_system.backend.stock_recommend.quality_gate import evaluate_report_quality
 from ah_recommendation_system.backend.stock_recommend.delivery_guard import (
     get_delivery,
     record_delivery,
     should_deliver,
+)
+from ah_recommendation_system.backend.stock_recommend.contracts import (
+    MarketSnapshot,
+    normalize_candidates,
+)
+from ah_recommendation_system.backend.stock_recommend.recommendation_policy import (
+    MODEL_VERSION,
+    build_decisions,
+    constrain_portfolio,
+)
+from ah_recommendation_system.backend.stock_recommend.recommendation_verification import (
+    build_verification_plan,
+    persist_verification_plan,
 )
 from ah_recommendation_system.backend.etf_sector.etf_portfolio import build_etf_quality_scores, select_etf_portfolio
 
@@ -132,8 +146,15 @@ def _deliver_report(
         })
         return {"ok": not ambiguous, "skipped": True, "reason": reason, "delivery_ambiguous": ambiguous}
     result = push_to_feishu(report)
+    if result.get("content_audit") is not None:
+        report["content_audit"] = result["content_audit"]
+    if result.get("reason") == "post_market_content_check_failed":
+        report["delivery"] = {"channel": "feishu", "accepted": False, "skipped": True,
+                              "reason": result["reason"], "payload_hash": result.get("payload_hash", "")}
+        return result
     payload_hash = str(result.get("payload_hash") or "")
-    accepted = bool(result.get("ok"))
+    quality_failed = report.get("quality_gate", {}).get("passed") is False or str((report.get("run") or {}).get("status") or "") == "failed"
+    accepted = bool(result.get("ok")) and not quality_failed
     ambiguous = bool(result.get("delivery_ambiguous"))
     report.setdefault("delivery", {})
     report["delivery"].update({
@@ -429,14 +450,13 @@ def run_pipeline(
         raw_rows,
         focus_industries=focus_universe,
         activity_rows=snap.capital.get("rows") or [],
+        limit=None,
     )
     if seeds:
         try:
             seeds = _enrich_hithink_candidates(seeds)
         except Exception as exc:
             snap.errors.append(f"hithink_enrichment:{exc}")
-        snap.fundamental["rows"] = seeds
-        snap.fundamental["candidate_count"] = len(seeds)
         if not mock and data_available:
             try:
                 from ah_recommendation_system.backend.stock_recommend.data_collector import collect_events
@@ -445,6 +465,8 @@ def run_pipeline(
                 snap.events = _merge_candidate_events(snap.events, refreshed_events)
             except Exception as exc:
                 snap.errors.append(f"candidate_news:{exc}")
+    snap.fundamental["rows"] = seeds if seeds else raw_rows
+    snap.fundamental["candidate_count"] = len(seeds) if seeds else len(raw_rows)
     if not mock and data_available:
         coverage_history_count = _enrich_with_daily_features(snap.fundamental.get("rows") or [], pf, as_of=snap.date)
     else:
@@ -472,6 +494,8 @@ def run_pipeline(
     weights = load_factor_weights(weights_path)
     from ah_recommendation_system.backend.stock_recommend.reweight import load_selection_threshold
     minimum_score = load_selection_threshold(weights_path)
+    from ah_recommendation_system.backend.stock_recommend.reweight import load_ranking_key
+    ranking_key = load_ranking_key(weights_path)
     event_llm_share = load_event_llm_share(weights_path)
     # Pass 1: deterministic ranking. LLM is deliberately not involved in
     # full-market scoring.
@@ -589,7 +613,9 @@ def run_pipeline(
     llm_context["llm"]["risk_p0_count"] = risk_result.get("p0_count", 0)
     selection = select_by_rules(cands, top_n_pick=top_n_pick, coverage_mode=coverage_mode,
                                 minimum_score=minimum_score,
-                                market_regime=evidence_audit["market_regime"] if not mock else None)
+                                market_regime=evidence_audit["market_regime"] if not mock else None,
+                                ranking_key=ranking_key)
+    selection["ranking_key"] = ranking_key
     selection["factor_version"] = "evidence-v2"
     selection["as_of"] = snap.date
     if not mock and data_available:
@@ -697,7 +723,9 @@ def run_pipeline(
             "universe_size": int(snap.fundamental.get("universe_size") or snap.fundamental.get("count") or 0),
             "scanned_count": market_scanned_count,
             "candidate_count": len(seeds),
-            "history_target_count": len(cands),
+            "history_target_count": sum(1 for row in (snap.fundamental.get("rows") or [])
+                                  if str(row.get("code") or "") in {c.code for c in cands}
+                                  and float(row.get("history_days") or 0) >= 60),
             "eligible_count": len(cands),
             "mode": coverage_mode,
             "source": snap.fundamental.get("source"),
@@ -726,14 +754,38 @@ def run_pipeline(
             "fallback_chain": market_data_attempted_chain(snap),
             "circuit_breakers": list((pf.provider_health() if hasattr(pf, "provider_health") else {}).get("history_errors") or []),
         }
+    persist_ranking_panel(
+        [
+            {**row, "date": snap.date,
+             "factors": next((c.factor_scores for c in cands if c.code == str(row.get("code"))), {}),
+             "point_in_time_snapshot": True,
+             "panel_scope": "all_tradable",
+             "source": "mock" if mock else "live_execution"}
+            for row in (seeds if seeds else raw_rows)
+        ],
+        _backend_root(),
+        as_of=snap.date,
+    )
     coverage_universe = int(coverage_payload.get("universe_size") or 0)
     coverage_payload["ratio"] = round(market_scanned_count / coverage_universe, 4) if coverage_universe else None
+    previous_medium_term = None
+    try:
+        import json
+        prior_path = _backend_root() / "data" / "stock_recommend" / "latest.json"
+        if prior_path.exists():
+            prior = json.loads(prior_path.read_text(encoding="utf-8"))
+            prior_rows = ((prior.get("directions") or {}).get("medium_term") or [])
+            if prior_rows:
+                previous_medium_term = str(prior_rows[0].get("direction") or "").strip() or None
+    except Exception:
+        previous_medium_term = None
     decision = build_market_decision(
         as_of=snap.date,
         market_signals=llm_context.get("market_signals") or [],
         hotspots=llm_context.get("hotspots") or [],
         coverage=coverage_payload,
         cross_market=snap.cross_market,
+        previous_medium_term=previous_medium_term,
     )
     report = build_report(
         selection=selection,
@@ -744,19 +796,71 @@ def run_pipeline(
         decision=decision,
         cross_market=snap.cross_market,
     )
+    # Add the reliability-first contract layer while preserving legacy report
+    # fields consumed by existing clients.
+    try:
+        contract_snapshot = MarketSnapshot(
+            as_of=f"{snap.date}T00:00:00+08:00",
+            price_timestamp=f"{snap.date}T00:00:00+08:00",
+            source=str(snap.fundamental.get("source") or "unknown"),
+            source_timestamp=f"{snap.date}T00:00:00+08:00",
+            data_quality="degraded" if coverage_payload.get("stale") else "available",
+            is_mock=bool(mock),
+        )
+        contract_candidates = normalize_candidates(cand_dicts, snapshot=contract_snapshot)
+        decisions = build_decisions(contract_candidates, as_of=contract_snapshot.as_of)
+        portfolio = constrain_portfolio(decisions, contract_candidates)
+        verification = build_verification_plan(
+            contract_candidates,
+            portfolio["decisions"],
+            as_of=contract_snapshot.as_of,
+            model_version=MODEL_VERSION,
+        )
+        verification_store = _backend_root() / "data" / "stock_recommend" / "verification"
+        verification_persistence = persist_verification_plan(verification, verification_store)
+        report["recommendation_contract"] = {
+            "snapshot": contract_snapshot.to_dict(),
+            "model_version": MODEL_VERSION,
+            "candidate_count": len(contract_candidates),
+            "data_quality": coverage_payload,
+            "decisions": portfolio["decisions"],
+            "portfolio_constraints": portfolio["constraints"],
+            "verification_plan": verification,
+            "verification_persistence": verification_persistence,
+        }
+    except Exception as exc:
+        logger.warning("recommendation contract layer failed: {}", type(exc).__name__)
+        report["recommendation_contract"] = {
+            "model_version": MODEL_VERSION,
+            "status": "unavailable",
+            "error": type(exc).__name__,
+        }
+    report.setdefault("run", {})["stages"] = stages
+    report["evidence_audit"] = evidence_audit
+    report["candidate_panel"] = to_dict_list(cands)
+    report["selection_policy_version"] = "defensive_relative_leaders_v1"
+    report["ranking_key"] = ranking_key
+    report["candidate_panel_scope"] = "all_saved_candidates"
+    report["candidate_panel_limit"] = top_n_candidates
+    report.setdefault("market", {}).update(regime=evidence_audit["market_regime"]["regime"],
+                                           regime_evidence=evidence_audit["market_regime"])
+    report["quality_gate"] = evaluate_report_quality(report)
+    if not report["quality_gate"].get("passed"):
+        report["picks"] = []
+        report["etf_picks"] = []
+        report["recommendations"] = {"stocks": [], "etfs": []}
+        report["data_status"] = "failed"
+        report.setdefault("run", {})["status"] = "failed"
+        warnings = list(report.get("data_warnings") or [])
+        for reason in report["quality_gate"].get("blocking_reasons") or []:
+            if reason not in warnings:
+                warnings.append(reason)
+        report["data_warnings"] = warnings
     checkpoint(
         "quality_gate",
         status="passed" if report.get("quality_gate", {}).get("passed") else "failed",
         blocking_count=len(report.get("quality_gate", {}).get("blocking_reasons") or []),
     )
-    report.setdefault("run", {})["stages"] = stages
-    report["evidence_audit"] = evidence_audit
-    report["candidate_panel"] = to_dict_list(cands)
-    report["selection_policy_version"] = "defensive_relative_leaders_v1"
-    report["candidate_panel_scope"] = "all_saved_candidates"
-    report["candidate_panel_limit"] = top_n_candidates
-    report.setdefault("market", {}).update(regime=evidence_audit["market_regime"]["regime"],
-                                           regime_evidence=evidence_audit["market_regime"])
 
     paths = save_report(report, _backend_root())
 
@@ -882,6 +986,16 @@ def run_post_market(
     import json
 
     report = json.loads(latest.read_text(encoding="utf-8"))
+    # Recover the quote vintage from candidate evidence when the selected pick
+    # predates the audit fields. Same-day reference prices are informational;
+    # they are never used as close-to-close returns.
+    candidate_meta = {str(item.get("code")): item for item in report.get("candidates_top") or []}
+    for pick in report.get("picks") or []:
+        meta = candidate_meta.get(str(pick.get("code"))) or {}
+        evidence_dates = [str(e.get("as_of"))[:10] for e in meta.get("evidence") or [] if e.get("as_of")]
+        if not pick.get("reference_date") and evidence_dates:
+            pick["reference_date"] = max(evidence_dates)
+        pick.setdefault("reference_source", "premarket_candidate_snapshot")
     observations: Dict[str, Dict[str, Any]] = {}
     expected_date = expected_as_of or datetime.now().strftime("%Y-%m-%d")
     as_of = str(report.get("as_of") or "")

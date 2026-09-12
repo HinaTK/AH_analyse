@@ -417,20 +417,20 @@ def save_report(report: Dict[str, Any], root_dir: Path) -> Dict[str, str]:
     md = build_markdown(report)
     md_path.write_text(md, encoding="utf-8")
 
-    # Stable latest pointer
-    latest_json.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    latest_md.write_text(md, encoding="utf-8")
-
-    logger.info(f"report saved: json={json_path} md={md_path}")
-    return {
-        "json_path": str(json_path),
-        "md_path": str(md_path),
-        "latest_json": str(latest_json),
-        "latest_md": str(latest_md),
-    }
+    run_id = str((report.get("run") or {}).get("run_id") or as_of.replace("-", ""))
+    archive_dir = target_dir / "premarket_runs"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    archive_json = archive_dir / f"{run_id}.json"
+    archive_json.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    archive_md = archive_dir / f"{run_id}.md"
+    archive_md.write_text(md, encoding="utf-8")
+    # Mock/test runs must never replace the live latest pointer.
+    is_mock = str((report.get("coverage") or {}).get("mode") or "") == "mock_sample"
+    if not is_mock:
+        latest_json.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        latest_md.write_text(md, encoding="utf-8")
+    logger.info(f"report saved: json={json_path} md={md_path} archive={archive_json}")
+    return {"json_path": str(json_path), "md_path": str(md_path), "latest_json": str(latest_json), "latest_md": str(latest_md), "archive_json": str(archive_json), "archive_md": str(archive_md)}
 
 
 def save_review_report(review: Dict[str, Any], root_dir: Path) -> Dict[str, str]:
@@ -445,24 +445,19 @@ def save_review_report(review: Dict[str, Any], root_dir: Path) -> Dict[str, str]
     lines = [f"# A股盘后复盘 · {review.get('as_of', '')}", ""]
     summary = review.get("summary") or {}
     lines.append(
-        f"完成 {summary.get('completed_count', 0)} / {summary.get('pick_count', 0)}，"
-        f"命中 {summary.get('hit_count', 0)}。"
+        f"收盘数据 {summary.get('close_count', 0)}/{summary.get('pick_count', 0)}；"
+        f"T+1已验证 {summary.get('completed_count', 0)}/{summary.get('pick_count', 0)}，"
+        f"待验证 {summary.get('pending_count', 0)}。"
     )
     lines.append("")
+    from ah_recommendation_system.backend.stock_recommend.post_market import format_review_item, format_direction_review
     direction_rows = review.get("direction_review") or []
     if direction_rows:
-        lines.extend(["## 方向复盘 / Direction review", ""])
+        lines.extend(["## 方向复盘", ""])
         for item in direction_rows:
-            lines.append(
-                f"- {item.get('layer', '方向')} · {item.get('direction', '待确认')}："
-                f"{item.get('review_status', 'pending')}；修正 {item.get('correction', 'confirm')}"
-            )
-            evidence = str(item.get("evidence") or "").strip()
-            if evidence:
-                lines.append(f"  - 证据：{evidence}")
+            lines.append(format_direction_review(item))
         lines.append("")
-    from ah_recommendation_system.backend.stock_recommend.post_market import format_review_item
-    lines.append("?????T+1/T+5/T+20????????????????????")
+    lines.append("当日涨跌与后续验证分别展示；观察价格表现不等于交易收益。")
     for item in review.get("items") or []:
         lines.append(format_review_item(item))
     markdown = "\n".join(lines) + "\n"

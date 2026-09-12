@@ -382,7 +382,8 @@ class TestLlmEventReview(unittest.TestCase):
             rows=[{"code": "688001", "name": "甲", "price": 10}],
         )
 
-        self.assertEqual(result["hotspots"][0]["status"], "confirmed")
+        # 映射到真实成分只提供观察上下文，不能把新闻热点升级为已确认
+        self.assertEqual(result["hotspots"][0]["status"], "early_signal")
         self.assertEqual({item["code"] for item in result["rows"]}, {"688001", "688002", "688003"})
         self.assertTrue(all("llm_hotspot" in item["candidate_sources"] for item in result["rows"]))
 
@@ -400,7 +401,8 @@ class TestLlmEventReview(unittest.TestCase):
             rows=rows,
         )
 
-        self.assertEqual(result["hotspots"][0]["status"], "confirmed")
+        # 行业标签匹配同样只是映射结果，不构成新闻确认
+        self.assertEqual(result["hotspots"][0]["status"], "early_signal")
         self.assertEqual({item["code"] for item in result["rows"]}, {"600001", "600002", "600003"})
 
 

@@ -82,3 +82,23 @@ def load_last_snapshot(root: Path, max_age_seconds: float | None = None) -> list
                  original_source=row.get("original_source") or row.get("source") or "unknown",
                  cache_age_seconds=age_seconds,
                  source="last_good_snapshot" if stale else "disk_cache") for row in rows]
+
+
+def persist_ranking_panel(rows: Iterable[Dict[str, Any]], root: Path, *, as_of: str) -> Dict[str, str]:
+    """Persist the daily full-tradable feature panel for walk-forward training."""
+    import polars as pl  # type: ignore
+
+    target = Path(root) / "data" / "stock_recommend" / "panels"
+    target.mkdir(parents=True, exist_ok=True)
+    parquet = target / f"ranking_panel_{as_of.replace('-', '')}.parquet"
+    data = list(rows)
+    nested = {key for row in data for key, value in row.items() if isinstance(value, (dict, list))}
+    data = [{**row, **{key: json.dumps(row.get(key), ensure_ascii=False, default=str) for key in nested},
+             "_json_fields": json.dumps(sorted(nested))} for row in data]
+    if data:
+        temporary = parquet.with_suffix(".parquet.tmp")
+        pl.DataFrame(data, infer_schema_length=None).write_parquet(temporary)
+        temporary.replace(parquet)
+    else:
+        pl.DataFrame({"code": [], "name": []}).write_parquet(parquet)
+    return {"parquet_path": str(parquet), "rows": len(data)}

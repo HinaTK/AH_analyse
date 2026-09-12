@@ -259,3 +259,18 @@ class TestMarketDataManager(unittest.TestCase):
         rows = AkshareSnapshotProvider(akshare_module=FlakyAkshare()).snapshot(limit=1)
         self.assertEqual(attempts["count"], 2)
         self.assertEqual(rows[0]["code"], "600519")
+
+    def test_missing_pe_after_supplement_rejects_snapshot(self):
+        from ah_recommendation_system.backend.stock_recommend.market_data import MarketDataManager
+
+        manager = MarketDataManager()
+        quotes = [{
+            "code": f"{i:06d}", "price": 10.0, "change_pct": 1.0, "amount": 2e8,
+        } for i in range(5)]
+        with patch.object(manager, "_snapshot", return_value=quotes):
+            result = manager.fetch_snapshot(limit=10)
+
+        self.assertEqual(result.rows, [])
+        self.assertEqual(result.source, "none")
+        self.assertTrue(any("missing_required_fields" in item for item in result.errors))
+

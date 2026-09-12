@@ -232,10 +232,26 @@ class TestEvidenceRecommendation(unittest.TestCase):
         ]
         seeds = scan_snapshot(rows, limit=10)
 
-        invalid_seed = next(seed for seed in seeds if seed["code"] == "000005")
+        codes = [seed["code"] for seed in seeds]
+        self.assertNotIn("000005", codes)
         valid_seed = next(seed for seed in seeds if seed["code"] == "000006")
-        self.assertNotIn("liquidity_leader", invalid_seed["source_tags"])
         self.assertIn("liquidity_leader", valid_seed["source_tags"])
+
+    def test_scan_snapshot_keeps_untagged_tradable_names(self):
+        from ah_recommendation_system.backend.stock_recommend.dynamic_scanner import scan_snapshot
+
+        rows = [
+            {"code": "000001", "name": "平安银行", "price": 10.0, "amount": 200_000_000, "change_pct": 0.2},
+            {"code": "000002", "name": "ST示例", "price": 10.0, "amount": 500_000_000, "change_pct": 5.0},
+            {"code": "000003", "name": "无成交", "price": 10.0, "amount": 1_000_000, "change_pct": 4.0},
+            {"code": "000004", "name": "无价格", "amount": 200_000_000, "change_pct": 4.0},
+            {"code": "bad", "name": "代码无效", "price": 10.0, "amount": 200_000_000, "change_pct": 1.0},
+        ]
+        seeds = scan_snapshot(rows, limit=None)
+
+        codes = [row["code"] for row in seeds]
+        self.assertEqual(codes, ["000001"])
+        self.assertIn("source_tags_sidecar", seeds[0])
 
     def test_missing_valuation_or_market_cap_fails_hard_screen(self):
         from ah_recommendation_system.backend.stock_recommend.candidate_pool import build_candidates

@@ -97,6 +97,47 @@ def _missing_quote_value(name: str, value: Any) -> bool:
     return False
 
 
+
+def _field_present(row: Mapping[str, Any], key: str) -> bool:
+    value = row.get(key)
+    if key == 'pe':
+        return value is not None and value != ''
+    if key in {'amount', 'volume'}:
+        number = coerce_number(value)
+        return number is not None and number > 0
+    return value is not None and value != '' and value != 0
+
+
+def snapshot_field_coverage(rows: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    total = len(rows)
+    if total <= 0:
+        return {'row_count': 0, 'price_ratio': 0.0, 'change_ratio': 0.0, 'pe_ratio': 0.0, 'activity_ratio': 0.0}
+    price_ratio = sum(_field_present(row, 'price') for row in rows) / total
+    change_ratio = sum(_field_present(row, 'change_pct') for row in rows) / total
+    pe_ratio = sum(_field_present(row, 'pe') for row in rows) / total
+    activity_ratio = sum(_field_present(row, 'change_pct') or _field_present(row, 'amount') for row in rows) / total
+    return {
+        'row_count': total,
+        'price_ratio': round(price_ratio, 4),
+        'change_ratio': round(change_ratio, 4),
+        'pe_ratio': round(pe_ratio, 4),
+        'activity_ratio': round(activity_ratio, 4),
+    }
+
+
+def snapshot_meets_field_contract(rows: Sequence[Mapping[str, Any]]) -> bool:
+    if not rows:
+        return False
+    if len(rows) == 1:
+        return _field_present(rows[0], 'price')
+    coverage = snapshot_field_coverage(rows)
+    if coverage['price_ratio'] < 0.6 or coverage['activity_ratio'] < 0.4:
+        return False
+    if len(rows) >= 5 and coverage['pe_ratio'] < 0.6:
+        return False
+    return True
+
+
 def merge_quote_fields(primary: Mapping[str, Any], secondary: Mapping[str, Any], fields: Sequence[str] = SUPPLEMENT_FIELDS) -> List[str]:
     """Fill only missing fields; primary price/change identity stays untouched."""
     filled: List[str] = []
@@ -264,7 +305,14 @@ class HithinkSnapshotProvider:
         return rows if fresh and AkshareSnapshotProvider.usable(rows) else []
 
     def snapshot(self, limit: int) -> List[Dict[str, Any]]:
-        return [dict(row) for row in self.client.market_snapshot(limit=limit)]
+        # The price snapshot has activity but no valuation fields. Merge the
+        # separately available valuation/market-cap snapshot before the field
+        # contract can reject an otherwise complete full-market panel.
+        rows = [dict(row) for row in self.client.market_snapshot(limit=limit)]
+        try:
+            return self.client.enrich_snapshot(rows)
+        except Exception:
+            return rows
 
 
 class EfinanceSnapshotProvider:
@@ -470,6 +518,21 @@ class MarketDataManager:
             except Exception as exc:
                 breaker.record_failure()
                 result.errors.append(f"{name}:supplement:{type(exc).__name__}")
+        coverage = snapshot_field_coverage(result.rows)
+        result.extra_health['field_coverage'] = coverage
+        if not snapshot_meets_field_contract(result.rows):
+            missing = []
+            if coverage.get('pe_ratio', 1) < 0.6:
+                missing.append('pe')
+            if coverage.get('price_ratio', 1) < 0.6:
+                missing.append('price')
+            label = ','.join(missing) or 'required_fields'
+            result.errors.append(f'{primary_name}:missing_required_fields:{label}')
+            result.error = '; '.join(result.errors) or 'missing_required_fields'
+            result.rows = []
+            result.source = 'none'
+            result.stats = {}
+            return result
         result.stats = self.derive_stats(result.rows)
         self._cache_rows = [dict(row) for row in result.rows]
         self._cache_timestamp = time.time()

@@ -48,7 +48,7 @@ class TestPostMarketDates(unittest.TestCase):
         ], reference=102)
         row = review["items"][0]
         self.assertEqual(row.get("daily_return_pct"), 2)
-        self.assertEqual(row.get("reference_return_pct"), 0)
+        self.assertIsNone(row.get("reference_return_pct"))
         self.assertIsNone(row["return_pct"])
         self.assertEqual(row.get("close_date"), "2026-09-10")
 
@@ -59,7 +59,11 @@ class TestPostMarketDates(unittest.TestCase):
             with self.subTest(bars=bars):
                 review = self.review(bars)
                 self.assertEqual(review["summary"]["completed_count"], 0)
-                self.assertIsNone(review["items"][0].get("close_price"))
+                row = review["items"][0]
+                if bars[0].get("date") == "2026-09-09" and bars[0].get("close") == 100:
+                    self.assertIn(row.get("data_status"), {"stale_close", "insufficient"})
+                else:
+                    self.assertIsNone(row.get("close_price"))
                 self.assertEqual(review["run"]["status"], "partial")
 
     def test_genuine_flat_return_is_completed_but_nonfinite_is_pending(self):

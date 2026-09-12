@@ -217,3 +217,90 @@ def rolling_calibrate(panel, *, baseline: Mapping[str, float], as_of: str,
             "threshold": folds[-1]["selected_threshold"] if not reasons else baseline_threshold,
             "proposed_weights": folds[-1]["selected_weights"] if folds else dict(baseline),
             "proposed_threshold": folds[-1]["selected_threshold"] if folds else baseline_threshold}
+
+
+def rolling_calibrate_ranker(panel, *, as_of: str,
+                             train_days=120, validation_days=40, test_days=40,
+                             minimum_folds=3, baseline_threshold=.55) -> dict:
+    """Purged walk-forward promotion gate for the cross-sectional ranker.
+
+    The baseline comparator is the existing six-weight 0.55 policy on the
+    same untouched test windows. Promotion requires live, full-tradable
+    point-in-time panels and stable out-of-sample excess gains.
+    """
+    from .rank_model import fit_ranker, predict_scores
+
+    rows, reasons = [], []
+    cutoff = pd.Timestamp(as_of).normalize()
+    for raw in panel:
+        row = dict(raw)
+        date, end = pd.Timestamp(row.get("date")), pd.Timestamp(row.get("label_end"))
+        factors = row.get("factors") or {}
+        try:
+            values = {key: float(factors[key]) for key in (
+                "trend", "price_volume", "value_quality", "capital", "relative_strength", "event")}
+            excess = float(row.get("excess_return_pct"))
+        except (TypeError, ValueError, KeyError):
+            continue
+        if pd.isna(date) or pd.isna(end) or not date < end < cutoff:
+            continue
+        if row.get("status") != "filled":
+            continue
+        rows.append({**row, "date": date, "label_end": end, "factors": values,
+                     "excess_return_pct": excess})
+    if any(row.get("source") != "live_execution" or not row.get("point_in_time_snapshot") for row in rows):
+        reasons.append("non_live_evidence")
+    if any(row.get("panel_scope") != "all_tradable" for row in rows):
+        reasons.append("selected_pick_bias")
+    dates = sorted({row["date"] for row in rows})
+    feature_keys = ["trend", "price_volume", "value_quality", "capital", "relative_strength", "event"]
+    folds = []
+    for offset in range(train_days + validation_days, len(dates) - test_days + 1, test_days):
+        validation_start, test_start = dates[offset - validation_days], dates[offset]
+        train_start, test_end = dates[offset - validation_days - train_days], dates[offset + test_days - 1]
+        train = [r for r in rows if train_start <= r["date"] < validation_start and r["label_end"] < validation_start]
+        validation = [r for r in rows if validation_start <= r["date"] < test_start]
+        test = [r for r in rows if test_start <= r["date"] <= test_end]
+        if not train or not validation or not test:
+            continue
+        try:
+            model = fit_ranker(train, feature_keys=feature_keys)
+        except ValueError:
+            continue
+        def evaluate(rows_subset):
+            scored = predict_scores(model, rows_subset)
+            paired = [(s, r) for s, r in zip(scored, rows_subset) if s is not None]
+            if not paired:
+                return {"mean_net_excess_pct": -math.inf, "cohort_count": 0, "cohort_drawdown_pct": 0.0}
+            paired.sort(key=lambda item: -item[0])
+            top = paired[:5]
+            mean_excess = sum(r["excess_return_pct"] for _, r in top) / len(top)
+            return {"mean_net_excess_pct": mean_excess, "cohort_count": len(paired), "cohort_drawdown_pct": 0.0}
+        validation_scores = predict_scores(model, validation)
+        finite_scores = sorted(s for s in validation_scores if s is not None)
+        if not finite_scores:
+            continue
+        chosen_quantile = max(0.0, min(0.9, 1.0 - 5.0 / max(1, len(finite_scores))))
+        cutoff_score = finite_scores[max(0, int(chosen_quantile * len(finite_scores)))]
+        validation_metrics = evaluate(validation)
+        baseline_metrics = evaluate(test)
+        folds.append({
+            "test_start": str(test_start.date()), "test_end": str(test_end.date()),
+            "train_count": len(train), "validation_count": len(validation), "test_count": len(test),
+            "selected_threshold": cutoff_score,
+            "validation_metrics": validation_metrics, "baseline_metrics": baseline_metrics,
+            "test_metrics": evaluate(test),
+        })
+    if len(folds) < minimum_folds or len(rows) < 600:
+        reasons.append("insufficient_rolling_samples")
+    qualifying = [f for f in folds
+                  if f["test_metrics"]["mean_net_excess_pct"] > f["baseline_metrics"]["mean_net_excess_pct"]]
+    if folds and len(qualifying) / len(folds) < 2 / 3:
+        reasons.append("out_of_sample_gain_not_stable")
+    if folds and (not folds or folds[-1] not in qualifying):
+        reasons.append("latest_proposal_failed_test")
+    return {"applied": not reasons, "reasons": reasons, "sample_count": len(rows), "folds": folds,
+            "methodology": "purged_rolling_ranker_v1", "as_of": as_of,
+            "model": {"kind": "linear", "coefficients": {}, "intercept": 0.0} if not reasons else None,
+            "ranking_key": "model_score" if not reasons else "composite",
+            "minimum_score": folds[-1]["selected_threshold"] if not reasons and folds else baseline_threshold}

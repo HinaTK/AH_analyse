@@ -33,6 +33,7 @@ def select_by_rules(
     minimum_score: float = 0.55,
     coverage_mode: str = "full_market",
     market_regime: Dict[str, Any] | None = None,
+    ranking_key: str = "composite",
 ) -> Dict[str, Any]:
     picks: List[Dict[str, Any]] = []
     eligible = []
@@ -73,9 +74,17 @@ def select_by_rules(
         if candidate.quality_grade not in {"A", "B"}:
             candidate.rejection_reasons.append("quality:正式推荐要求质量A或B")
             continue
-        if candidate.composite < minimum_score:
-            candidate.rejection_reasons.append(f"score:综合分低于{minimum_score:.2f}")
-            continue
+        model_score = getattr(candidate, "model_score", None)
+        if ranking_key == "model_score" and model_score is not None:
+            ranking_score = model_score
+            if ranking_score < minimum_score:
+                candidate.rejection_reasons.append(f"score:模型分低于{minimum_score:.4f}")
+                continue
+        else:
+            ranking_score = candidate.composite
+            if candidate.composite < minimum_score:
+                candidate.rejection_reasons.append(f"score:综合分低于{minimum_score:.2f}")
+                continue
         if coverage_mode in {"focused_fallback", "limited_sample"}:
             # A narrow universe cannot support a formal pick on technical and
             # valuation factors alone. Require an independent event or
@@ -104,6 +113,8 @@ def select_by_rules(
                 "code": candidate.code,
                 "name": candidate.name,
                 "reference_price": candidate.price,
+                "reference_date": getattr(candidate, "price_as_of", None),
+                "reference_source": "candidate_snapshot",
                 "action": "WATCH",
                 "confidence": round(0.45 + candidate.composite * 0.4, 2),
                 **plan,

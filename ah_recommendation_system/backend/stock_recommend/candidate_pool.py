@@ -44,6 +44,7 @@ class Candidate:
     code: str
     name: str
     price: Optional[float] = None
+    price_as_of: Optional[str] = None
     pe: Optional[float] = None
     pb: Optional[float] = None
     market_cap: Optional[float] = None
@@ -189,6 +190,7 @@ def build_candidates(
             code=code,
             name=name,
             price=price,
+            price_as_of=str(r.get("price_as_of") or r.get("quote_date") or r.get("date") or snapshot.date or "")[:10] or None,
             pe=pe,
             pb=pb,
             market_cap=mc,
@@ -252,6 +254,8 @@ def build_candidates(
             if main_net > 0:
                 c.valid_dimensions.add("capital")
             c.evidence.append({"factor": "capital", "statement": f"主力净流入 {main_net / 1e8:+.2f}亿", "value": main_net, "source": "capital", "as_of": snapshot.date, "supports": main_net > 0, "falsifier": "主力资金连续转为净流出"})
+        else:
+            c.evidence.append({"factor": "capital", "statement": "资金流数据缺失，资金分未评估", "value": None, "source": "capital_unavailable", "as_of": snapshot.date, "supports": False, "falsifier": "资金流数据恢复后可重新评估"})
         if pe is not None and pe > 0:
             if pe <= max_pe:
                 c.valid_dimensions.add("value")
@@ -438,6 +442,7 @@ def to_dict_list(cands: Iterable[Candidate]) -> List[Dict[str, Any]]:
                 "code": c.code,
                 "name": c.name,
                 "price": c.price,
+                "price_as_of": c.price_as_of,
                 "pe": c.pe,
                 "pb": c.pb,
                 "market_cap_yi": round(c.market_cap / 1e8, 1) if c.market_cap else None,

@@ -23,6 +23,46 @@ class TestRollingCalibration(unittest.TestCase):
         return rolling_calibrate(rows, baseline={"good": .5, "bad": .5}, as_of="2025-01-01",
                                  train_days=40, validation_days=20, test_days=20, minimum_folds=2)
 
+    def test_ranker_rejects_shortlist_and_mock_panels(self):
+        from ah_recommendation_system.backend.stock_recommend.rolling_calibration import rolling_calibrate_ranker
+
+        rows = []
+        dates = pd.bdate_range("2023-01-02", periods=200)
+        for day in dates:
+            for i in range(6):
+                rows.append({
+                    "date": str(day.date()), "label_end": str((day + pd.offsets.BDay(6)).date()),
+                    "code": str(i),
+                    "factors": {"trend": i / 5, "price_volume": i / 5, "value_quality": .5,
+                                "capital": .5, "relative_strength": i / 5, "event": .5},
+                    "excess_return_pct": i - 2, "status": "filled",
+                    "source": "mock", "point_in_time_snapshot": True, "panel_scope": "all_tradable",
+                })
+        result = rolling_calibrate_ranker(rows, as_of="2025-01-01",
+                                          train_days=40, validation_days=20, test_days=20, minimum_folds=2)
+        self.assertIn("non_live_evidence", result["reasons"])
+        self.assertEqual(result["ranking_key"], "composite")
+
+    def test_ranker_rejects_tagged_shortlist_scope(self):
+        from ah_recommendation_system.backend.stock_recommend.rolling_calibration import rolling_calibrate_ranker
+
+        rows = []
+        dates = pd.bdate_range("2023-01-02", periods=200)
+        for day in dates:
+            for i in range(6):
+                rows.append({
+                    "date": str(day.date()), "label_end": str((day + pd.offsets.BDay(6)).date()),
+                    "code": str(i),
+                    "factors": {"trend": i / 5, "price_volume": i / 5, "value_quality": .5,
+                                "capital": .5, "relative_strength": i / 5, "event": .5},
+                    "excess_return_pct": i - 2, "status": "filled",
+                    "source": "live_execution", "point_in_time_snapshot": True, "panel_scope": "all_saved_candidates",
+                })
+        result = rolling_calibrate_ranker(rows, as_of="2025-01-01",
+                                          train_days=40, validation_days=20, test_days=20, minimum_folds=2)
+        self.assertIn("selected_pick_bias", result["reasons"])
+        self.assertEqual(result["ranking_key"], "composite")
+
     def test_actual_folds_purge_overlapping_outcomes(self):
         result = self.run_calibration(panel())
         self.assertGreaterEqual(len(result["folds"]), 2)
