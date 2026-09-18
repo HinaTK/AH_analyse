@@ -42,6 +42,7 @@ def calculate_features(bars: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     ma60 = close.rolling(60).mean().iloc[-1] if days >= 60 else None
     atr = true_range.rolling(14).mean().iloc[-1] if days >= 14 else None
     high20 = frame["high"].tail(20).max() if days >= 20 else None
+    high60 = frame["high"].tail(60).max() if days >= 60 else None
     low20 = frame["low"].tail(20).min() if days >= 20 else None
     volume20 = volume.tail(20).mean() if days >= 20 else None
     returns = close.pct_change().dropna()
@@ -82,8 +83,10 @@ def calculate_features(bars: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
         "return_120d_pct": period_return(120),
         "volume_ratio_20d": round(float(volume.iloc[-1] / volume20), 3) if volume20 and volume20 > 0 else None,
         "high_20d": _number(high20),
+        "high_60d": _number(high60),
         "low_20d": _number(low20),
         "new_high_20d": bool(high20 is not None and latest >= float(high20) * 0.995),
+        "drawdown_from_60d_high_pct": round((latest / float(high60) - 1.0) * 100, 3) if high60 and float(high60) > 0 else None,
         "atr": round(float(atr), 4) if atr is not None and pd.notna(atr) else None,
         "volatility_20d_pct": round(float(volatility), 3) if volatility is not None and pd.notna(volatility) else None,
         "max_drawdown_pct": round(float(drawdown.min()), 3),

@@ -231,38 +231,95 @@ class TestDecisionReportV2(unittest.TestCase):
         self.assertIn("部分数据源异常", "".join(quality["warnings"]))
         self.assertIn("兜底", "".join(quality["warnings"]))
 
-    def test_observation_pool_is_never_rendered_in_feishu(self):
+    def test_unknown_market_regime_cannot_pass_quality_gate(self):
+        """Catches placeholder market output being treated as usable evidence."""
+        from ah_recommendation_system.backend.stock_recommend.quality_gate import evaluate_report_quality
+
+        quality = evaluate_report_quality({
+            "coverage": {"mode": "full_market", "ratio": 1.0, "fresh_data_available": True},
+            "market": {
+                "regime": "unknown",
+                "status": "unavailable",
+                "regime_evidence": {"status": "unavailable"},
+            },
+            "directions": {
+                "current_attack": [], "medium_term": [],
+                "early_positioning": [], "avoid_or_exit": [],
+            },
+            "picks": [],
+            "etf_picks": [],
+        })
+
+        self.assertFalse(quality["passed"])
+        self.assertIn("缺少可用市场姿态证据", quality["blocking_reasons"])
+
+    def test_focused_fallback_does_not_block_on_degraded_hithink(self):
+        from ah_recommendation_system.backend.stock_recommend.report_builder import build_report
+
+        report = build_report(
+            selection={"picks": [], "etf_picks": []},
+            candidates=[],
+            coverage={
+                "mode": "focused_fallback",
+                "source": "focused_tencent_quotes",
+                "fresh_data_available": True,
+                "universe_size": 110,
+                "scanned_count": 110,
+                "provider_health": {"hithink_financial_api": "degraded"},
+            },
+            decision={"regime": "balanced", "status": "需确认", "label": "震荡等待确认"},
+        )
+
+        self.assertIn("hithink_financial_api", report["degraded_sections"])
+        self.assertEqual(report["blocking_sections"], [])
+        self.assertNotEqual(report.get("data_status"), "failed")
+
+    def test_only_verified_observation_pool_is_rendered_in_feishu(self):
         from ah_recommendation_system.backend.stock_recommend.feishu_pusher import build_card
 
-        card = build_card(
-            {
-                "schema_version": "decision-report-v2",
-                "as_of": "2026-09-09",
-                "run": {"status": "passed", "session": "pre_market"},
-                "quality_gate": {"passed": True, "blocking_reasons": []},
-                "market": {"label": "震荡", "status": "需确认", "regime": "balanced"},
-                "directions": {
-                    "current_attack": [],
-                    "medium_term": [],
-                    "early_positioning": [],
-                    "avoid_or_exit": [],
+        report = {
+            "schema_version": "decision-report-v2",
+            "as_of": "2026-09-09",
+            "run": {"status": "passed", "session": "pre_market"},
+            "quality_gate": {"passed": True, "blocking_reasons": []},
+            "market": {"label": "震荡", "status": "需确认", "regime": "balanced"},
+            "directions": {
+                "current_attack": [],
+                "medium_term": [],
+                "early_positioning": [],
+                "avoid_or_exit": [],
+            },
+            "recommendations": {"stocks": [], "etfs": []},
+            "cross_market": {
+                "status": "ok",
+                "risk_level": "normal",
+                "observed_at": "2026-09-09 08:20:00",
+                "markets": {
+                    "united_states": [{"name": "纳斯达克", "change_pct": 1.1}],
+                    "hong_kong": [{"name": "恒生指数", "change_pct": 0.5}],
                 },
-                "recommendations": {"stocks": [], "etfs": []},
-                "cross_market": {
-                    "status": "ok",
-                    "risk_level": "normal",
-                    "observed_at": "2026-09-09 08:20:00",
-                    "markets": {
-                        "united_states": [{"name": "纳斯达克", "change_pct": 1.1}],
-                        "hong_kong": [{"name": "恒生指数", "change_pct": 0.5}],
-                    },
-                },
-                "picks": [],
-                "etf_picks": [],
-                "observation_pool": [{"code": "000001", "name": "不应推送的观察股"}],
-            }
-        )
-        self.assertNotIn("不应推送的观察股", json.dumps(card, ensure_ascii=False))
+            },
+            "picks": [],
+            "etf_picks": [],
+            "observation_pool": [{
+                "code": "000001",
+                "name": "待确认观察股",
+                "inclusion_reason": "趋势保持完整",
+                "pending_confirmation": "等待成交放大",
+                "trigger": "放量站上前高",
+                "invalidation": "收盘跌破支撑",
+                "price_as_of": "2026-09-08",
+            }],
+        }
+        unverified = json.dumps(build_card(report), ensure_ascii=False)
+        self.assertNotIn("待确认观察股", unverified)
+        self.assertIn("本次无经核验观察名单", unverified)
+
+        report["observation_pool_verified"] = True
+        verified = json.dumps(build_card(report), ensure_ascii=False)
+        self.assertIn("待确认观察股", verified)
+        self.assertIn("待确认个股观察（非正式推荐）", verified)
+        self.assertIn("等待成交放大", verified)
 
     def test_quality_gate_rejects_more_than_five_stocks_or_three_etfs(self):
         from ah_recommendation_system.backend.stock_recommend.quality_gate import evaluate_report_quality
@@ -589,6 +646,27 @@ class TestDecisionReportV2(unittest.TestCase):
         self.assertEqual(push.call_count, 1)
         self.assertTrue(report["delivery"]["accepted"])
 
+    def test_force_delivery_never_sends_mock_report_to_production_webhook(self):
+        """Catches --force-push bypassing the mock/production boundary."""
+        from ah_recommendation_system.backend.stock_recommend.run import _deliver_report
+
+        report = {
+            "as_of": "2026-09-14",
+            "run": {"run_id": "mock-run", "session": "pre_market", "status": "passed"},
+            "coverage": {"mode": "mock_sample", "source": "mock"},
+            "quality_gate": {"passed": True, "blocking_reasons": []},
+        }
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "ah_recommendation_system.backend.stock_recommend.run.push_to_feishu"
+        ) as push:
+            result = _deliver_report(report, ledger_path=Path(tmp) / "delivery.json", force=True)
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["skipped"])
+        self.assertEqual(result["reason"], "mock_delivery_blocked")
+        self.assertEqual(push.call_count, 0)
+        self.assertFalse(report["delivery"]["accepted"])
+
     def test_duplicate_delivery_restores_success_audit_on_new_report_object(self):
         from ah_recommendation_system.backend.stock_recommend.delivery_guard import record_delivery
         from ah_recommendation_system.backend.stock_recommend.run import _deliver_report
@@ -668,6 +746,35 @@ class TestDecisionReportV2(unittest.TestCase):
         self.assertEqual(push.call_count, 1)
         self.assertFalse(report["delivery"]["accepted"])
         self.assertTrue(can_retry)
+
+    def test_previous_close_full_market_is_usable_pre_market_data(self):
+        from ah_recommendation_system.backend.stock_recommend.quality_gate import evaluate_report_quality
+
+        quality = evaluate_report_quality({
+            "coverage": {
+                "mode": "full_market",
+                "ratio": 1.0,
+                "source": "previous_close",
+                "fresh_data_available": True,
+                "stale": False,
+                "quote_basis": "previous_close",
+            },
+            "market": {
+                "regime": "defense",
+                "status": "available",
+                "regime_evidence": {"status": "available"},
+            },
+            "directions": {
+                "current_attack": [],
+                "medium_term": [],
+                "early_positioning": [],
+                "avoid_or_exit": [],
+            },
+            "picks": [],
+            "etf_picks": [],
+        })
+        self.assertTrue(quality["passed"])
+        self.assertFalse(any("过期" in reason or "无法确认当日有效行情" in reason for reason in quality["blocking_reasons"]))
 
 if __name__ == "__main__":
     unittest.main()

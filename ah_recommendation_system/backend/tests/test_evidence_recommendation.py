@@ -32,19 +32,19 @@ class TestEvidenceRecommendation(unittest.TestCase):
         self.assertEqual(result["picks"], [])
         self.assertTrue(any(reason.startswith("coverage") for reason in candidate.rejection_reasons))
 
-    def test_observation_pool_assigns_distinct_roles(self):
+    def test_observation_pool_does_not_assign_synthetic_roles(self):
         from ah_recommendation_system.backend.stock_recommend.candidate_pool import Candidate
         from ah_recommendation_system.backend.stock_recommend.rule_selector import select_by_rules
 
         candidates = []
-        for idx, role in enumerate(("龙头", "弹性", "中军", "验证", "防御", "避雷"), 1):
+        for idx in range(1, 7):
             candidates.append(Candidate(
-                code=f"6000{idx:02d}", name=f"{role}候选", price=10, composite=0.5 - idx * 0.01,
+                code=f"6000{idx:02d}", name=f"候选{idx}", price=10, composite=0.5 - idx * 0.01,
                 focus_industries=["行业"], observation_only=True,
             ))
         result = select_by_rules(candidates, top_n_pick=0)
-        roles = [item.get("role") for item in result["observation_pool"]]
-        self.assertEqual(roles, ["龙头", "弹性", "中军", "验证", "防御", "避雷"])
+        self.assertEqual(result["observation_pool"], [])
+        self.assertFalse(result["observation_pool_verified"])
     def test_missing_metrics_are_not_scored_as_neutral_or_selected(self):
         from ah_recommendation_system.backend.stock_recommend.candidate_pool import Candidate
         from ah_recommendation_system.backend.stock_recommend.rule_selector import select_by_rules
@@ -363,7 +363,7 @@ class TestEvidenceRecommendation(unittest.TestCase):
         self.assertLess(candidate.factor_scores["risk"], 0)
         # No benchmark was supplied: momentum cannot earn another 15% as RS.
         self.assertEqual(candidate.factor_scores["relative_strength"], 0.0)
-        self.assertAlmostEqual(candidate.composite, 0.7016, places=4)
+        self.assertAlmostEqual(candidate.composite, 0.691, places=4)
 
     def test_formal_pick_exposes_evidence_factor_scores_directly(self):
         from ah_recommendation_system.backend.stock_recommend.candidate_pool import Candidate
@@ -457,19 +457,59 @@ class TestEvidenceRecommendation(unittest.TestCase):
         self.assertEqual(enriched[0]["pe"], 20)
         self.assertEqual(enriched[0]["market_cap"], 9e11)
 
-    def test_hithink_full_market_collection_defers_expensive_enrichment(self):
-        from ah_recommendation_system.backend.stock_recommend.data_collector import _collect_a_share_spot
+    def test_hithink_enrichment_keeps_valuations_when_ticker_names_fail(self):
+        from ah_recommendation_system.backend.stock_recommend.hithink_client import HithinkClient
 
-        with patch("ah_recommendation_system.backend.stock_recommend.data_collector._is_mock_mode", return_value=False), patch(
-            "ah_recommendation_system.backend.stock_recommend.hithink_client.HithinkClient.market_snapshot",
-            return_value=[{"code": "600519", "name": "600519", "price": 1500, "observed_at": int(datetime.now().timestamp() * 1000)}],
+        client = HithinkClient(api_key="secret")
+        rows = [{"code": "002349", "name": "精华制药", "price": 8.01}]
+        with patch.object(client, "ticker_names", side_effect=RuntimeError("timeout")), patch.object(
+            client, "valuations", return_value={"002349": {"pe_ttm": 32.57, "pb_mrq": 2.58}}
+        ), patch.object(client, "auction_metrics", return_value={"002349": {"float_market_cap": 8.5e9}}):
+            enriched = client.enrich_snapshot(rows)
+
+        self.assertEqual(enriched[0]["pe"], 32.57)
+        self.assertEqual(enriched[0]["pb"], 2.58)
+        self.assertEqual(enriched[0]["market_cap"], 8.5e9)
+        self.assertEqual(enriched[0]["name"], "精华制药")
+
+    def test_hithink_enrichment_skips_name_catalog_when_quotes_already_named(self):
+        from ah_recommendation_system.backend.stock_recommend.hithink_client import HithinkClient
+
+        client = HithinkClient(api_key="secret")
+        rows = [{"code": "300750", "name": "宁德时代", "price": 330.51, "quote_source": "tencent"}]
+        with patch.object(client, "ticker_names") as ticker_names, patch.object(
+            client, "valuations", return_value={"300750": {"pe_ttm": 18.41, "pb_mrq": 4.13}}
+        ), patch.object(client, "auction_metrics", return_value={}):
+            enriched = client.enrich_snapshot(rows)
+
+        ticker_names.assert_not_called()
+        self.assertEqual(enriched[0]["pe"], 18.41)
+        self.assertEqual(enriched[0]["pb"], 4.13)
+
+    def test_hithink_full_market_collection_keeps_enriched_snapshot(self):
+        from ah_recommendation_system.backend.stock_recommend import data_collector
+
+        quotes = [{"code": "600519", "name": "600519", "price": 1500,
+                   "observed_at": int(datetime.now().timestamp() * 1000)}]
+        enriched = [{**quotes[0], "name": "贵州茅台", "pe": 22, "pb": 8,
+                     "market_cap": 1.8e12, "float_cap": 1.8e12,
+                     "amount": 8e8, "volume": 5000, "turnover_pct": 0.4}]
+        manager = data_collector.MarketDataManager(cache_ttl_seconds=0)
+        with patch.object(data_collector, "_is_mock_mode", return_value=False), patch.object(
+            data_collector, "MarketDataManager", return_value=manager
         ), patch(
-            "ah_recommendation_system.backend.stock_recommend.hithink_client.HithinkClient.enrich_snapshot"
-        ) as enrich:
-            rows = _collect_a_share_spot(limit=6000)
+            "ah_recommendation_system.backend.stock_recommend.hithink_client.HithinkClient.market_snapshot",
+            return_value=quotes,
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.hithink_client.HithinkClient.enrich_snapshot",
+            return_value=enriched,
+        ), patch("requests.sessions.Session.request", side_effect=AssertionError("unexpected network")):
+            rows = data_collector._collect_a_share_spot(limit=6000)
 
         self.assertEqual(rows[0]["source"], "hithink_financial_api")
-        enrich.assert_not_called()
+        self.assertEqual(rows[0]["price"], 1500)
+        self.assertEqual(rows[0]["pe"], 22)
+        self.assertEqual(rows[0]["provider_health"]["attempted_sources"], ["hithink_financial_api"])
 
     def test_usable_hithink_snapshot_supplements_missing_fields_from_akshare(self):
         from ah_recommendation_system.backend.stock_recommend import data_collector
@@ -705,7 +745,7 @@ class TestEvidenceRecommendation(unittest.TestCase):
         result = select_by_rules(candidates, top_n_pick=2)
 
         self.assertEqual(len(result["picks"]), 2)
-        self.assertEqual([item["code"] for item in result["observation_pool"]], ["000002", "000003", "000004"])
+        self.assertEqual(result["observation_pool"], [])
 
     def test_invalid_support_or_resistance_does_not_create_price_plan(self):
         from ah_recommendation_system.backend.stock_recommend.candidate_pool import Candidate
@@ -919,7 +959,59 @@ class TestEvidenceRecommendation(unittest.TestCase):
         rows = _collect_macro_news_fallback(limit=10, ak_module=AkModule())
         self.assertEqual(len(rows), 2)
         self.assertEqual({row["source"] for row in rows}, {"东方财富全球财经", "百度宏观资讯"})
+    def test_notice_fallback_without_codes_keeps_stock_code(self):
+        from ah_recommendation_system.backend.stock_recommend.data_collector import _collect_notice_news
 
+        class AkModule:
+            @staticmethod
+            def stock_notice_report(*, symbol, date):
+                return pd.DataFrame([
+                    {"代码": "600036", "名称": "招商银行", "公告标题": "招商银行回购进展", "公告类型": "回购", "公告日期": "2026-09-15", "网址": "https://example.com/c"},
+                ])
+
+        rows = _collect_notice_news(limit=10, codes=None, ak_module=AkModule())
+        self.assertEqual(rows[0]["code"], "600036")
+        self.assertIn("回购", rows[0]["title"])
+
+    def test_event_evidence_matches_news_code_field(self):
+        from ah_recommendation_system.backend.stock_recommend.candidate_pool import build_candidates
+        from ah_recommendation_system.backend.stock_recommend.data_collector import CollectedSnapshot
+
+        snapshot = CollectedSnapshot(
+            date="2026-09-15",
+            fundamental={"rows": [{
+                "code": "600036", "name": "招商银行", "price": 40,
+                "change_pct": 1, "change_60d_pct": 10, "amount": 300_000_000,
+                "market_cap": 100_000_000_000, "pe": 7, "history_days": 120,
+            }]},
+            capital={"rows": []},
+            events={"stock_news": [{
+                "code": "600036",
+                "title": "公司回购部分股份",
+                "source": "巨潮资讯网",
+                "published_at": "2026-09-15",
+            }]},
+        )
+        candidate = build_candidates(snapshot)[0]
+        self.assertIn("event", candidate.valid_dimensions)
+        self.assertTrue(any(item.get("factor") == "event" and item.get("supports") for item in candidate.evidence))
+
+    def test_sina_moneyflow_rank_parses_net_inflow(self):
+        from ah_recommendation_system.backend.stock_recommend import data_collector
+
+        class Resp:
+            def raise_for_status(self):
+                return None
+            def json(self):
+                return [{"symbol": "sh600036", "name": "招商银行", "r0_net": "123456789.0", "netamount": "1"}]
+
+        with patch.object(data_collector, "_is_mock_mode", return_value=False), patch.object(
+            data_collector.requests, "get", return_value=Resp()
+        ):
+            rows = data_collector._collect_sina_moneyflow_rank(pages=1, page_size=1)
+        self.assertEqual(rows[0]["code"], "600036")
+        self.assertEqual(rows[0]["main_net"], 123456789.0)
+        self.assertEqual(rows[0]["source"], "sina.moneyflow_rank")
 
 if __name__ == "__main__":
     unittest.main()

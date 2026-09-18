@@ -21,6 +21,12 @@ from loguru import logger
 
 
 from ah_recommendation_system.backend.stock_recommend.market_hotspots import build_market_hotspots
+from ah_recommendation_system.backend.stock_recommend.report_builder import (
+    empty_stock_message,
+    format_observation,
+    presentation_diagnostics,
+    presentation_observations,
+)
 
 
 def resolve_webhook(value: Optional[str] = None) -> str:
@@ -203,7 +209,7 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
         quality_gate.get("passed") is False or run.get("status") == "failed"
     ):
         reasons = quality_gate.get("blocking_reasons") or report.get("data_warnings") or ["未知质量异常"]
-        content = "**数据采集失败或内容质量未通过，本次未生成正常推荐**\n" + "\n".join(
+        content = "**任务状态**\n数据采集失败或内容质量未通过，本次未生成正常推荐。\n" + "\n".join(
             f"- {reason}" for reason in reasons
         )
         return {
@@ -216,6 +222,15 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
                 },
                 "elements": [
                     {"tag": "div", "text": {"tag": "lark_md", "content": content}},
+                    {"tag": "hr"},
+                    {"tag": "div", "text": {"tag": "lark_md", "content":
+                        f"**正式个股推荐**\n{empty_stock_message(report)}"}},
+                    {"tag": "hr"},
+                    {"tag": "div", "text": {"tag": "lark_md", "content":
+                        "**待确认个股观察（非正式推荐）**\n本次无经核验观察名单。"}},
+                    {"tag": "hr"},
+                    {"tag": "div", "text": {"tag": "lark_md", "content":
+                        "**数据缺口 / 筛选概况**\n" + "\n".join(presentation_diagnostics(report))}},
                     {"tag": "div", "text": {"tag": "lark_md", "content": "系统已保留运行审计，下次任务将重新探测数据源。"}},
                 ],
             },
@@ -225,14 +240,12 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
     recommendations = dict(report.get("recommendations") or {})
     picks = recommendations.get("stocks") or report.get("picks") or []
     etf_picks = recommendations.get("etfs") or report.get("etf_picks") or []
-    review_items = report.get("items") or []
-
     elements: list[Any] = []
     status = report.get("data_status")
     coverage_label = (report.get("coverage") or {}).get("label")
     if status in {"degraded", "failed"} or (coverage_label and coverage_label != "全市场观察池"):
         status_text = {
-            "degraded": "⚠️ 有限数据源：本次仅使用重点行业+龙虎榜观察池",
+            "degraded": "⚠️ 部分数据降级，请结合数据范围与缺口查看结果",
             "failed": "⚠️ 数据采集失败：本次不生成策略结论",
         }.get(status, "")
         if coverage_label and status != "failed":
@@ -350,10 +363,13 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
             f"- **{item.get('theme', '未知')}**｜{grade}{evidence_text}\n"
             f"  行业：{industries}｜代表：{reps}"
         )
-    hotspot_content = "**市场热点**\n" + ("\n".join(hotspot_lines) if hotspot_lines else "暂无已验证市场热点（新闻与盘面信号均不足）")
+    hotspot_content = "**市场热点目录（非个股建议）**\n" + ("\n".join(hotspot_lines) if hotspot_lines else "暂无已验证市场热点（新闻与盘面信号均不足）")
+    hotspot_content += "\n目录中的行业代表仅用于说明热点映射，不属于正式推荐或观察名单。"
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": hotspot_content}})
 
+    elements.append({"tag": "hr"})
     if picks:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "**正式个股推荐**"}})
         for i, p in enumerate(picks, 1):
             code = p.get("code", "?")
             name = p.get("name", "?")
@@ -375,27 +391,43 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
                 f"{_format_factor_line(p)}"
             )
             llm_review = str(p.get("llm_review") or "").strip()
+            if "hotspot_match_level" in p:
+                themes = "、".join(p.get("hotspot_themes") or [])
+                bonus_points = float(p.get("hotspot_bonus") or 0) * 100
+                if themes:
+                    md += f"\n热点：{themes}｜排序加分 {bonus_points:.2f}/100"
+                else:
+                    md += "\n热点：未匹配当前热点，基础因子入选"
             if llm_review:
                 md += f"\nAI复核: {llm_review}"
             if risks:
                 md += "\n风险: " + "; ".join(risks)
-            elements.append(
-                {"tag": "hr"}
-            )
             elements.append({"tag": "div", "text": {"tag": "lark_md", "content": md}})
     else:
-        if report.get("data_status") == "failed":
-            empty_text = "⚠️ 数据采集失败，本次不生成策略结论"
-        elif report.get("data_status") == "degraded":
-            empty_text = "⚠️ 有限数据源下暂无个股通过确认条件"
-        else:
-            empty_text = "⚠️ 暂无推荐"
         elements.append(
             {
                 "tag": "div",
-                "text": {"tag": "lark_md", "content": empty_text},
+                "text": {"tag": "lark_md", "content": f"**正式个股推荐**\n{empty_stock_message(report)}"},
             }
         )
+
+    observations = presentation_observations(report)
+    elements.append({"tag": "hr"})
+    if observations:
+        observation_text = (
+            "**待确认个股观察（非正式推荐）**\n"
+            "仅作条件观察；未达到正式推荐门槛，不构成买入建议。\n"
+            + "\n".join(
+                format_observation(item, index, session=str(run.get("session") or ""))
+                for index, item in enumerate(observations, 1)
+            )
+        )
+    else:
+        observation_text = (
+            "**待确认个股观察（非正式推荐）**\n"
+            "本次无经核验观察名单。旧观察池与热点目录代表不直接沿用。"
+        )
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": observation_text}})
 
     if etf_picks:
         elements.append({"tag": "hr"})
@@ -422,6 +454,15 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
                 },
             }
         )
+
+    elements.append({"tag": "hr"})
+    elements.append({
+        "tag": "div",
+        "text": {
+            "tag": "lark_md",
+            "content": "**数据缺口 / 筛选概况**\n" + "\n".join(presentation_diagnostics(report)),
+        },
+    })
 
     return {
         "msg_type": "interactive",

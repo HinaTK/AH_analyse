@@ -76,6 +76,49 @@ class TestMarketDataManager(unittest.TestCase):
 
         self.assertEqual(snapshot.call_count, 2)
 
+    def test_recent_stale_snapshot_is_used_when_all_live_sources_fail(self):
+        from ah_recommendation_system.backend.stock_recommend.market_data import MarketDataManager
+
+        manager = MarketDataManager(cache_ttl_seconds=0, stale_cache_ttl_seconds=300)
+        manager._shared_cache = False
+        manager._cache_rows = [{"code": "600519", "price": 1500.0, "change_pct": 1.0}]
+        manager._cache_timestamp = time.time() - 90
+        manager._cache_source = "hithink_financial_api"
+        with patch.object(manager, "_snapshot", side_effect=ConnectionError("network down")):
+            result = manager.fetch_snapshot(limit=10)
+        self.assertEqual(result.source, "cache:hithink_financial_api")
+        self.assertEqual(result.health()["freshness_status"], "stale")
+        self.assertTrue(result.health()["cache_stale"])
+        self.assertGreaterEqual(result.health()["cache_age_seconds"], 90)
+
+    def test_stale_fallback_does_not_renew_cache_or_accept_expired_data(self):
+        from ah_recommendation_system.backend.stock_recommend.market_data import MarketDataManager
+
+        manager = MarketDataManager(cache_ttl_seconds=0, stale_cache_ttl_seconds=300)
+        manager._cache_rows = [{"code": "600519", "price": 1500.0, "price_as_of": "2026-09-17"}]
+        manager._cache_timestamp = 1000
+        manager._cache_source = "hithink_financial_api"
+        with patch.object(manager, "_snapshot", side_effect=ConnectionError("offline")), patch(
+            "ah_recommendation_system.backend.stock_recommend.market_data.time.time", return_value=1090
+        ) as clock:
+            cached = manager.fetch_snapshot()
+            self.assertTrue(cached.health()["cache_stale"])
+            self.assertEqual(cached.rows[0]["price_as_of"], "2026-09-17")
+            self.assertEqual(manager._cache_timestamp, 1000)
+            clock.return_value = 1301
+            self.assertEqual(manager.fetch_snapshot().rows, [])
+
+    def test_stale_fallback_rejects_future_timestamp(self):
+        from ah_recommendation_system.backend.stock_recommend.market_data import MarketDataManager
+
+        manager = MarketDataManager(cache_ttl_seconds=0, stale_cache_ttl_seconds=300)
+        manager._cache_rows = [{"code": "600519", "price": 1500.0}]
+        manager._cache_timestamp = 1100
+        with patch.object(manager, "_snapshot", side_effect=ConnectionError("offline")), patch(
+            "ah_recommendation_system.backend.stock_recommend.market_data.time.time", return_value=1000
+        ):
+            self.assertEqual(manager.fetch_snapshot().rows, [])
+
     def test_efinance_snapshot_falls_back_from_akshare(self):
         from ah_recommendation_system.backend.stock_recommend.market_data import MarketDataManager
 
@@ -273,4 +316,18 @@ class TestMarketDataManager(unittest.TestCase):
         self.assertEqual(result.rows, [])
         self.assertEqual(result.source, "none")
         self.assertTrue(any("missing_required_fields" in item for item in result.errors))
+
+    def test_hithink_snapshot_keeps_prices_when_enrichment_raises(self):
+        from ah_recommendation_system.backend.stock_recommend.market_data import HithinkSnapshotProvider
+
+        provider = object.__new__(HithinkSnapshotProvider)
+        class FakeClient:
+            def market_snapshot(self, *, limit):
+                return [{"code": "600519", "name": "贵州茅台", "price": 1500.0, "change_pct": 1.0, "amount": 8e8, "observed_at": 1}]
+            def enrich_snapshot(self, rows):
+                raise RuntimeError("ticker_names timeout")
+        provider.client = FakeClient()
+        rows = provider.snapshot(limit=1)
+        self.assertEqual(rows[0]["price"], 1500.0)
+        self.assertEqual(rows[0]["code"], "600519")
 

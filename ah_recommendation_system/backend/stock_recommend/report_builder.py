@@ -6,11 +6,11 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from loguru import logger
 
-from ah_recommendation_system.backend.stock_recommend.market_hotspots import build_market_hotspots
+from ah_recommendation_system.backend.stock_recommend.market_hotspots import build_market_hotspots, summarize_hotspot_mapping
 from ah_recommendation_system.backend.stock_recommend.decision_engine import build_market_decision
 from ah_recommendation_system.backend.stock_recommend.cross_market import build_cross_market_conclusion
 from ah_recommendation_system.backend.stock_recommend.quality_gate import evaluate_report_quality
@@ -110,6 +110,217 @@ def _format_pick_md(p: Dict[str, Any], idx: int) -> str:
     return "\n".join(lines)
 
 
+_EMPTY_REASON_TEXT = {
+    "data_insufficient": "今日无正式个股推荐：数据不足，未完成有效筛选。",
+    "awaiting_confirmation": "今日无正式个股推荐：候选仍待价格、成交或证据确认。",
+    "screened_out": "今日无正式个股推荐：数据覆盖与评估充分，但没有候选通过正式门槛。",
+}
+
+
+def _presentation_failed(report: Mapping[str, Any]) -> bool:
+    return (report.get("data_status") == "failed"
+            or (report.get("run") or {}).get("status") == "failed"
+            or (report.get("quality_gate") or {}).get("passed") is False)
+
+
+def _screening_complete(report: Mapping[str, Any]) -> bool:
+    diagnostics = report.get("selection_diagnostics") or {}
+    coverage = report.get("coverage") or {}
+    try:
+        scanned = int(diagnostics.get("scanned_count"))
+        universe = int(coverage.get("universe_size"))
+        seeds = int(diagnostics.get("candidate_count"))
+        evaluated = int(diagnostics.get("evaluated_count"))
+        eligible = int(diagnostics.get("eligible_count"))
+    except (TypeError, ValueError):
+        return False
+    gaps_known = "mapping_gaps" in diagnostics
+    rejections_known = "rejection_summary" in diagnostics
+    return (diagnostics.get("coverage_mode") == "full_market"
+            and universe > 0 and scanned / universe >= 0.8
+            and seeds > 0 and evaluated >= seeds and eligible == 0
+            and coverage.get("fresh_data_available") is True
+            and not coverage.get("stale") and report.get("data_status") == "ok"
+            and not report.get("blocking_sections") and gaps_known
+            and not diagnostics.get("mapping_gaps") and rejections_known)
+
+
+def empty_stock_message(report: Mapping[str, Any]) -> str:
+    """Explain an empty formal list without treating missing coverage as a clean screen."""
+    if _presentation_failed(report):
+        return _EMPTY_REASON_TEXT["data_insufficient"]
+    requested_code = report.get("empty_reason_code")
+    code = requested_code
+    if code == "screened_out" and not _screening_complete(report):
+        code = "data_insufficient"
+    if code not in _EMPTY_REASON_TEXT:
+        if report.get("data_status") == "degraded":
+            code = "data_insufficient"
+        elif presentation_observations(report):
+            code = "awaiting_confirmation"
+        elif _screening_complete(report):
+            code = "screened_out"
+        else:
+            code = "data_insufficient"
+    supplied = str(report.get("empty_reason") or "").strip()
+    if supplied and code == requested_code:
+        canonical = _EMPTY_REASON_TEXT[code]
+        return supplied if supplied == canonical else f"{canonical} 补充：{supplied}"
+    return _EMPTY_REASON_TEXT[code]
+
+
+def _code_key(value: Any) -> str:
+    code = str(value or "").strip().upper()
+    return code.zfill(6) if code.isdigit() and len(code) <= 6 else code
+
+
+def presentation_observations(report: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """Only a producer-verified, distinct list can appear as watch names."""
+    if report.get("observation_pool_verified") is not True or _presentation_failed(report):
+        return []
+    picks = (report.get("recommendations") or {}).get("stocks") or report.get("picks") or []
+    seen = {_code_key(item.get("code")) for item in picks if isinstance(item, Mapping)}
+    rows: List[Dict[str, Any]] = []
+    for item in report.get("observation_pool") or []:
+        if not isinstance(item, Mapping):
+            continue
+        code = _code_key(item.get("code"))
+        if not code or not str(item.get("name") or "").strip() or code in seen:
+            continue
+        rows.append(dict(item))
+        seen.add(code)
+        if len(rows) == 6:
+            break
+    return rows
+
+
+def _observation_pool_for_report(
+    selection: Mapping[str, Any],
+    *,
+    picks: List[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Normalize only the producer-approved pool; legacy candidates stay internal."""
+    if selection.get("observation_pool_verified") is not True:
+        return []
+    return presentation_observations({
+        "observation_pool_verified": True,
+        "observation_pool": selection.get("observation_pool") or [],
+        "picks": picks,
+    })
+
+
+def _display(value: Any) -> str:
+    return str(value).strip() if value is not None and str(value).strip() else "未知"
+
+
+def _display_list(value: Any) -> str:
+    if isinstance(value, (list, tuple)):
+        parts = [str(item).strip() for item in value if item is not None and str(item).strip()]
+        return "、".join(parts) if parts else "未知"
+    return _display(value)
+
+
+def _evidence_text(value: Any) -> str:
+    if not value:
+        return "未知"
+    rows = value if isinstance(value, (list, tuple)) else [value]
+    statements = []
+    for item in rows[:2]:
+        if isinstance(item, Mapping):
+            statement = item.get("statement") or item.get("summary") or item.get("title")
+        else:
+            statement = item
+        if statement:
+            statements.append(str(statement).strip())
+    return "；".join(statements) if statements else "未知"
+
+
+def format_observation(item: Mapping[str, Any], index: int, *, session: str = "") -> str:
+    """Shared wording for the Markdown report and Feishu card."""
+    themes = _display_list(item.get("hotspot_themes"))
+    level = str(item.get("hotspot_match_level") or "").strip()
+    match = {
+        "direct": "直接关联", "alias": "别名关联", "industry": "行业关联",
+        "indirect": "间接关联", "none": "未匹配",
+    }.get(level, "待确认")
+    trigger = _display(item.get("trigger"))
+    if session == "pre_market" and trigger != "未知":
+        trigger = f"{trigger}（盘中待确认）"
+    return (
+        f"- **{index}. {_display(item.get('name'))} ({_display(item.get('code'))}) · 待确认**\n"
+        f"  关联热点：{themes}（{match}）；热点依据：{_evidence_text(item.get('hotspot_evidence'))}\n"
+        f"  入选理由：{_display(item.get('inclusion_reason'))}；候选证据：{_evidence_text(item.get('evidence'))}\n"
+        f"  待确认项：{_display(item.get('pending_confirmation'))}；未进入正式推荐：{_display_list(item.get('rejection_reasons'))}\n"
+        f"  触发：{trigger}；失效：{_display(item.get('invalidation'))}\n"
+        f"  行情日：{_display(item.get('price_as_of'))}；候选来源：{_display_list(item.get('candidate_sources'))}"
+    )
+
+
+def presentation_diagnostics(report: Mapping[str, Any]) -> List[str]:
+    """Keep market coverage and rule-evaluation counts on separate denominators."""
+    diagnostics = report.get("selection_diagnostics") or {}
+    coverage = report.get("coverage") or {}
+    status = report.get("data_status")
+    if _presentation_failed(report):
+        state = "数据不足或质量未通过，未完成有效筛选"
+    elif status == "degraded":
+        state = "有限数据源或部分数据降级，不能视为完整筛选"
+    elif status == "ok" and coverage.get("fresh_data_available") is True:
+        state = "数据可用；具体覆盖以扫描分母为准"
+    elif status == "ok":
+        state = "行情新鲜度未确认，不能确认筛选完整性"
+    else:
+        state = "数据状态未提供，不能确认筛选完整性"
+    mode = diagnostics.get("coverage_mode") or coverage.get("mode")
+    scanned = diagnostics.get("scanned_count")
+    if scanned is None:
+        scanned = coverage.get("scanned_count")
+    universe = coverage.get("universe_size")
+    quote_basis = str(coverage.get("quote_basis") or coverage.get("source") or "")
+    quote_note = "；昨收行情" if quote_basis == "previous_close" else ""
+    lines = [
+        f"- 数据状态：{state}；扫描模式：{_display(mode)}{quote_note}",
+        f"- 扫描时间：{_display(diagnostics.get('scan_as_of'))}；行情日：{_display(diagnostics.get('price_as_of'))}；"
+        f"行情扫描：{_display(scanned)}/{_display(universe)}（原始行情分母，非候选评估数）",
+        "- 筛选进度：" + "；".join(
+            f"{label} {_display(diagnostics.get(key))}" for key, label in (
+                ("candidate_count", "规则种子"), ("evaluated_count", "实际评估"),
+                ("eligible_count", "规则合格"), ("selected_count", "正式选出"),
+                ("observation_count", "经核验观察"),
+            )
+        ),
+    ]
+    if report.get("observation_pool_verified") is not True:
+        lines[-1] = lines[-1].replace(
+            f"经核验观察 {_display(diagnostics.get('observation_count'))}", "经核验观察 未确认"
+        )
+    if "mapping_gaps" in diagnostics:
+        lines.append(f"- 映射缺口：{_display_list(diagnostics['mapping_gaps']) if diagnostics['mapping_gaps'] else '无已报告缺口'}")
+    else:
+        lines.append("- 映射缺口：未提供")
+    if "rejection_summary" in diagnostics:
+        reasons = diagnostics["rejection_summary"] or {}
+        text = "；".join(f"{reason} {count}" for reason, count in reasons.items()) if isinstance(reasons, Mapping) else ""
+        lines.append(f"- 未入选原因（实际评估样本）：{text or '无已报告原因'}")
+    else:
+        lines.append("- 未入选原因（实际评估样本）：未提供")
+    warnings = list(report.get("data_warnings") or [])
+    degraded = list(report.get("degraded_sections") or [])
+    blocked = list(report.get("blocking_sections") or [])
+    if degraded:
+        lines.append("- 降级模块：" + "、".join(map(str, degraded)))
+    if blocked:
+        lines.append("- 阻断模块：" + "、".join(map(str, blocked)))
+    if warnings:
+        lines.append("- 数据告警：" + "；".join(map(str, warnings)))
+    if (report.get("run") or {}).get("session") == "pre_market":
+        if quote_basis == "previous_close" and diagnostics.get("price_as_of"):
+            lines.append("- 盘前仅使用已完成日行情及最新催化；盘中触发待确认，消息热点不等于买入建议。")
+        else:
+            lines.append("- 盘前行情是否为已完成日数据待核对；盘中触发待确认，消息热点不等于买入建议。")
+    return lines
+
+
 def build_report(
     *,
     selection: Dict[str, Any],
@@ -132,11 +343,54 @@ def build_report(
         etf_picks=etf_picks[:3],
         limit=5,
     )
+    hotspot_mapping_summary = summarize_hotspot_mapping(
+        news_hotspots,
+        candidate_mappings=dict((llm_context or {}).get("candidate_hotspot_mappings") or {}),
+        picks=selection.get("picks") or [],
+    )
     coverage = dict(coverage or {})
+    provider_health = dict(coverage.get("provider_health") or {})
+    degraded_sections: list[str] = []
+    blocking_sections: list[str] = []
+    fallback_quotes_ok = str(coverage.get("mode") or "") in {"focused_fallback", "limited_sample"} and bool(coverage.get("fresh_data_available"))
+    previous_close_ok = str(coverage.get("source") or "") == "previous_close" or str(coverage.get("quote_basis") or "") == "previous_close"
+    for section, health in provider_health.items():
+        if isinstance(health, Mapping):
+            status = str(health.get("collection_status") or health.get("status") or "").lower()
+            freshness = str(health.get("freshness_status") or "").lower()
+            if status in {"timeout_pending", "capacity_exhausted", "failed", "degraded", "unavailable"} or freshness in {"stale", "expired"} or health.get("cache_stale"):
+                degraded_sections.append(str(section))
+            if (coverage.get("mode") != "mock_sample" and
+                    status in {"failed", "unavailable", "timeout_pending", "degraded"} and
+                    str(section) in {"fundamental", "market_data", "history"}):
+                blocking_sections.append(str(section))
+            if (coverage.get("mode") != "mock_sample" and not fallback_quotes_ok and not previous_close_ok and
+                    status in {"failed", "unavailable", "timeout_pending", "degraded"} and
+                    str(section) == "hithink_financial_api"):
+                blocking_sections.append(str(section))
+        elif str(health).lower() in {"degraded", "failed", "unavailable", "stale", "timeout_pending"}:
+            degraded_sections.append(str(section))
+            # Scalar provider-health entries (e.g. hithink_financial_api:
+            # "degraded") must participate in the same core-data quality
+            # gate as mapping-shaped entries.
+            if (coverage.get("mode") != "mock_sample" and
+                    str(health).lower() in {"degraded", "failed", "unavailable", "timeout_pending"} and
+                    str(section) in {"fundamental", "market_data", "history"}):
+                blocking_sections.append(str(section))
+            if (coverage.get("mode") != "mock_sample" and not fallback_quotes_ok and not previous_close_ok and
+                    str(health).lower() in {"degraded", "failed", "unavailable", "timeout_pending"} and
+                    str(section) == "hithink_financial_api"):
+                blocking_sections.append(str(section))
+    coverage["degraded_sections"] = sorted(set(coverage.get("degraded_sections") or degraded_sections))
+    coverage["blocking_sections"] = sorted(set(coverage.get("blocking_sections") or blocking_sections))
+    if coverage["blocking_sections"]:
+        coverage["core_data_blocked"] = True
     universe = int(coverage.get("universe_size") or 0)
     scanned = int(coverage.get("scanned_count") or 0)
     coverage["ratio"] = round(scanned / universe, 4) if universe else None
-    if coverage.get("mode") == "focused_fallback":
+    if previous_close_ok:
+        coverage["label"] = "昨收全市场观察池"
+    elif coverage.get("mode") == "focused_fallback":
         coverage["label"] = "重点行业+龙虎榜有限观察池"
     else:
         coverage["label"] = "全市场观察池" if universe and scanned / universe >= 0.8 else "有限样本观察池"
@@ -148,9 +402,22 @@ def build_report(
         data_status = "degraded" if scanned else "failed"
     else:
         data_status = "ok" if scanned else "failed"
-    observation_pool = selection.get("observation_pool") or [
+    internal_observation_pool = selection.get("observation_pool") or [
         item for item in candidates if item.get("observation_only")
     ][:6]
+    picks_for_report = list(selection.get("picks") or [])
+    verified = selection.get("observation_pool_verified") is True
+    observation_pool = _observation_pool_for_report(selection, picks=picks_for_report)
+    diagnostics = dict(selection.get("selection_diagnostics") or {})
+    for key, value in (("coverage_mode", coverage.get("mode")),
+                       ("scanned_count", coverage.get("scanned_count")),
+                       ("eligible_count", selection.get("eligible_count"))):
+        if key not in diagnostics and value is not None:
+            diagnostics[key] = value
+    if "picks" in selection:
+        diagnostics["selected_count"] = len(selection["picks"] or [])
+    if verified:
+        diagnostics["observation_count"] = len(observation_pool)
     rejection_reasons: Dict[str, int] = {}
     for item in candidates:
         for reason in item.get("rejection_reasons") or []:
@@ -182,9 +449,13 @@ def build_report(
         "type": "stock_recommend_pre_market",
         "summary": selection.get("summary", ""),
         "market_view": selection.get("market_view", ""),
+        "empty_reason": selection.get("empty_reason"),
+        "empty_reason_code": selection.get("empty_reason_code") if not selection.get("picks") else None,
         "falsification": selection.get("falsification", []),
         "picks": selection.get("picks", []),
+        "observation_pool_verified": verified,
         "observation_pool": observation_pool,
+        "selection_diagnostics": diagnostics,
         "etf_picks": etf_picks[:3],
         "etf_rejections": list(selection.get("etf_rejections") or []),
         "etf_deduplicated": list(selection.get("etf_deduplicated") or []),
@@ -200,7 +471,9 @@ def build_report(
         "llm_mock": selection.get("llm_mock", True),
         "data_warnings": snap_errors,
         "coverage": coverage,
-        "provider_health": dict(coverage.get("provider_health") or {}),
+        "provider_health": provider_health,
+        "degraded_sections": list(coverage.get("degraded_sections") or []),
+        "blocking_sections": list(coverage.get("blocking_sections") or []),
         "fallback_chain": list(coverage.get("fallback_chain") or []),
         "circuit_breakers": list(coverage.get("circuit_breakers") or []),
         "data_status": data_status,
@@ -213,6 +486,7 @@ def build_report(
         "factor_version": selection.get("factor_version", "evidence-v1"),
         "hotspots": news_hotspots,
         "market_hotspots": market_hotspots,
+        "hotspot_mapping_summary": hotspot_mapping_summary,
         "llm": dict((llm_context or {}).get("llm") or {}),
         "market": {key: value for key, value in decision.items() if key != "directions"},
         "directions": directions,
@@ -220,7 +494,7 @@ def build_report(
             "stocks": list(selection.get("picks") or []),
             "etfs": etf_picks[:3],
         },
-        "internal_observation_pool": observation_pool,
+        "internal_observation_pool": internal_observation_pool,
         "data_quality": {
             "coverage_mode": coverage.get("mode"),
             "providers": dict(coverage.get("provider_health") or {}),
@@ -252,6 +526,17 @@ def build_report(
         "generated_at": generated_at,
         "status": run_status,
     }
+    if not report["picks"]:
+        if _presentation_failed(report):
+            report["empty_reason_code"] = "data_insufficient"
+        elif report["empty_reason_code"] not in _EMPTY_REASON_TEXT:
+            report["empty_reason_code"] = (
+                "awaiting_confirmation" if observation_pool else
+                "screened_out" if _screening_complete(report) else "data_insufficient"
+            )
+        elif report["empty_reason_code"] == "screened_out" and not _screening_complete(report):
+            report["empty_reason_code"] = "data_insufficient"
+        report["empty_reason"] = empty_stock_message(report)
     report["delivery"] = {
         "channel": "feishu",
         "payload_hash": "",
@@ -264,7 +549,7 @@ def build_markdown(report: Dict[str, Any]) -> str:
     """Render report as Markdown for push to IM / files."""
     as_of = report.get("as_of", _today_str())
     lines: List[str] = []
-    lines.append(f"# A 股盘前推荐 · {as_of}")
+    lines.append(f"# A股盘前决策 · {as_of}")
     lines.append("")
     lines.append(f"> {report.get('summary', '')}")
     lines.append("")
@@ -329,7 +614,7 @@ def build_markdown(report: Dict[str, Any]) -> str:
         lines.append("财务覆盖为候选子集年报；历史接口不是修订版本档案。权重晋级需通过滚动样本外及组合风险验证。")
         lines.append("")
     market_hotspots = report.get("market_hotspots") or []
-    lines.append("## 市场热点")
+    lines.append("## 市场热点目录（非个股建议）")
     lines.append("")
     if market_hotspots:
         for item in market_hotspots[:5]:
@@ -340,6 +625,7 @@ def build_markdown(report: Dict[str, Any]) -> str:
             lines.append(f"- **{item.get('theme', '未知')}**｜{status}｜驱动：{drivers}｜行业：{industries}｜代表：{reps}")
     else:
         lines.append("> 暂无已验证市场热点（新闻与盘面信号均不足）")
+    lines.append("> 目录中的行业代表仅用于说明热点映射，不属于正式推荐或观察名单。")
     lines.append("")
     hotspots = report.get("hotspots") or []
     if hotspots:
@@ -354,34 +640,38 @@ def build_markdown(report: Dict[str, Any]) -> str:
         for f in fals:
             lines.append(f"- {f}")
         lines.append("")
-    picks = report.get("picks") or []
+    picks = (report.get("recommendations") or {}).get("stocks") or report.get("picks") or []
+    lines.append("## 正式个股推荐")
+    lines.append("")
     if not picks:
-        lines.append("> ⚠️ 今日无正式个股推荐：没有标的同时通过数据质量、证据数量和趋势/量价确认门槛。")
+        lines.append(f"> {empty_stock_message(report)}")
     else:
         for i, p in enumerate(picks, 1):
             lines.append(_format_pick_md(p, i))
+    observation_pool = presentation_observations(report)
+    if observation_pool:
+        lines.append("## 待确认个股观察（非正式推荐）")
+        lines.append("")
+        lines.append("> 仅作条件观察；未达到正式推荐门槛，不构成买入建议。")
+        for index, item in enumerate(observation_pool, 1):
+            lines.append(format_observation(
+                item, index, session=str((report.get("run") or {}).get("session") or "")
+            ))
+    else:
+        lines.extend([
+            "## 待确认个股观察（非正式推荐）",
+            "",
+            "> 本次无经核验观察名单。旧观察池与热点目录代表不直接沿用。",
+        ])
     etf_picks = report.get("etf_picks") or []
     if etf_picks:
-        lines.append("## ETF观察")
-        lines.append("")
+        lines.extend(["", "## ETF观察", ""])
         for e in etf_picks[:3]:
             lines.append(
                 f"- {e.get('name', '')} ({e.get('code', '')})：{_format_etf_factor_line(e)}；{e.get('rationale', '')}"
             )
-    observation_pool = report.get("observation_pool") or []
-    if observation_pool:
-        lines.append("## 观察池（未达正式推荐门槛）")
-        lines.append("")
-        for item in observation_pool[:6]:
-            reasons = "；".join(item.get("rejection_reasons") or []) or "等待更多证据"
-            role = item.get("role") or "观察"
-            lines.append(f"- {role}｜{item.get('name', '')} ({item.get('code', '')})：{reasons}")
-    warns = report.get("data_warnings") or []
-    if warns:
-        lines.append("---")
-        lines.append("**数据告警**:")
-        for w in warns:
-            lines.append(f"- {w}")
+    lines.extend(["", "## 数据缺口 / 筛选概况", ""])
+    lines.extend(presentation_diagnostics(report))
     audit = dict(report.get("research_audit") or {})
     if audit:
         lines.append("")

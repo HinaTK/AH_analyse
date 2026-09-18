@@ -380,6 +380,7 @@ class MarketDataManager:
         akshare_module: Any = None,
         efinance_module: Any = None,
         cache_ttl_seconds: float = 60.0,
+        stale_cache_ttl_seconds: float = 0.0,
     ):
         self.order = list(order or ["hithink_financial_api", "akshare", "efinance"])
         self.breakers = {
@@ -391,6 +392,7 @@ class MarketDataManager:
         self._akshare = AkshareSnapshotProvider(akshare_module=akshare_module)
         self._efinance = EfinanceSnapshotProvider(efinance_module=efinance_module)
         self.cache_ttl_seconds = max(0.0, float(cache_ttl_seconds))
+        self.stale_cache_ttl_seconds = max(0.0, float(stale_cache_ttl_seconds))
         self._cache_rows: Optional[List[Dict[str, Any]]] = None
         self._cache_timestamp: Optional[float] = None
         self._cache_source = "none"
@@ -426,7 +428,7 @@ class MarketDataManager:
             if (
                 cache_rows is not None
                 and cache_timestamp is not None
-                and now - cache_timestamp < self.cache_ttl_seconds
+                and 0 <= now - cache_timestamp < self.cache_ttl_seconds
             ):
                 cached = SnapshotResult(
                     rows=[dict(row) for row in cache_rows],
@@ -440,6 +442,27 @@ class MarketDataManager:
                 )
                 return cached
         result = self._fetch_uncached_snapshot(limit=limit)
+        if not result.rows:
+            with self._shared_cache_lock:
+                cache_rows = self._shared_cache_rows if self._shared_cache else self._cache_rows
+                cache_timestamp = self._shared_cache_timestamp if self._shared_cache else self._cache_timestamp
+                cache_source = self._shared_cache_source if self._shared_cache else self._cache_source
+            cache_age = time.time() - cache_timestamp if cache_timestamp is not None else None
+            if cache_rows and cache_age is not None and 0 <= cache_age < self.stale_cache_ttl_seconds:
+                return SnapshotResult(
+                    rows=[dict(row) for row in cache_rows],
+                    source=f"cache:{cache_source}",
+                    attempted=list(result.attempted),
+                    skipped=list(result.skipped),
+                    errors=list(result.errors),
+                    stats=self.derive_stats(cache_rows),
+                    extra_health={
+                        "cache_hit": True,
+                        "cache_stale": True,
+                        "cache_age_seconds": round(cache_age, 3),
+                        "freshness_status": "stale",
+                    },
+                )
         if result.rows and self._shared_cache:
             with self._shared_cache_lock:
                 self._shared_cache_rows = [dict(row) for row in result.rows]

@@ -21,6 +21,36 @@ def _status_label(status: str) -> str:
     return {"confirmed": "消息验证", "early_signal": "消息待确认"}.get(status, "消息待确认")
 
 
+def summarize_hotspot_mapping(
+    hotspots: Iterable[Mapping[str, Any]],
+    *,
+    candidate_mappings: Mapping[str, Mapping[str, Any]] | None = None,
+    picks: Iterable[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Aggregate auditable hotspot-to-candidate outcomes for reports."""
+    mappings = candidate_mappings or {}
+    picked_codes = {str(item.get("code") or "").zfill(6) for item in picks if item.get("code")}
+    rows = []
+    for hotspot in hotspots:
+        theme = _text(hotspot.get("theme"))
+        codes = sorted(code for code, mapping in mappings.items() if theme in (mapping.get("matched_themes") or []))
+        picked = sorted(code for code in codes if code in picked_codes)
+        rows.append({
+            "theme": theme,
+            "mapped_count": len(codes),
+            "mapped_codes": codes,
+            "recommended_codes": picked,
+            "outcome": "recommended" if picked else "mapped_observation" if codes else "unmapped",
+        })
+    return {
+        "hotspot_count": len(rows),
+        "mapped_hotspot_count": sum(row["mapped_count"] > 0 for row in rows),
+        "recommended_hotspot_count": sum(bool(row["recommended_codes"]) for row in rows),
+        "unmapped_hotspot_count": sum(row["mapped_count"] == 0 for row in rows),
+        "themes": rows,
+    }
+
+
 def build_market_hotspots(
     *,
     news_hotspots: Iterable[Mapping[str, Any]] = (),
@@ -68,6 +98,8 @@ def build_market_hotspots(
             "evidence_count": reprints or len(refs),
             "independent_source_count": independent,
             "horizon": _text(raw.get("horizon")) or "short",
+            "mapped_codes": _items(raw.get("mapped_codes"), 60),
+            "mapping_outcome": "mapped" if raw.get("mapped_count") else "unmapped",
         })
         if len(output) >= limit:
             return output

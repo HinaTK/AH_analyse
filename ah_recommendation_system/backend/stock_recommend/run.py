@@ -36,11 +36,13 @@ from ah_recommendation_system.backend.stock_recommend.candidate_pool import (
 )
 from ah_recommendation_system.backend.stock_recommend.data_collector import (
     collect_all,
+    collect_candidate_fund_history,
+    collect_fundamental,
 )
 from ah_recommendation_system.backend.stock_recommend.feishu_pusher import (
     push_to_feishu,
 )
-from ah_recommendation_system.backend.stock_recommend.rule_selector import select_by_rules
+from ah_recommendation_system.backend.stock_recommend.rule_selector import finalize_picks_against_hotspots, select_by_rules
 from ah_recommendation_system.backend.stock_recommend.evidence_collection import enrich_evidence
 from ah_recommendation_system.backend.stock_recommend.report_builder import (
     build_report,
@@ -48,7 +50,7 @@ from ah_recommendation_system.backend.stock_recommend.report_builder import (
     save_review_report,
 )
 from ah_recommendation_system.backend.stock_recommend.post_market import build_post_market_review, closing_observation
-from ah_recommendation_system.backend.stock_recommend.local_store import load_last_snapshot, persist_ranking_panel, persist_snapshot
+from ah_recommendation_system.backend.stock_recommend.local_store import load_last_snapshot, load_previous_close_snapshot, persist_ranking_panel, persist_snapshot
 from ah_recommendation_system.backend.stock_recommend.market_data import MarketDataManager, SnapshotResult
 from ah_recommendation_system.backend.stock_recommend.reweight import (
     load_event_llm_share,
@@ -56,15 +58,18 @@ from ah_recommendation_system.backend.stock_recommend.reweight import (
     run_weekly_reweight,
 )
 from ah_recommendation_system.backend.stock_recommend.focused_collector import (
-    DEFAULT_FOCUS_UNIVERSE,
+    attach_industry_tags,
     collect_focused_market,
+    industry_tag_coverage,
+    resolve_industry_universe,
 )
+from ah_recommendation_system.backend.stock_recommend.collection_runtime import DEFAULT_COLLECTION_RUNTIME
 from ah_recommendation_system.backend.stock_recommend.dynamic_scanner import scan_snapshot
 from ah_recommendation_system.backend.stock_recommend.technical_features import calculate_features
 from ah_recommendation_system.backend.stock_recommend.hithink_client import HithinkClient
 from ah_recommendation_system.backend.stock_recommend.wechat_pusher import push_to_wechat
 from ah_recommendation_system.backend.stock_recommend.hotspot_analyzer import analyze_hotspots
-from ah_recommendation_system.backend.stock_recommend.hotspot_mapper import validate_and_expand_hotspots
+from ah_recommendation_system.backend.stock_recommend.hotspot_mapper import apply_hotspot_mappings, validate_and_expand_hotspots
 from ah_recommendation_system.backend.stock_recommend.llm_review import apply_llm_event_scores, review_candidate_events
 from ah_recommendation_system.backend.stock_recommend.decision_engine import build_market_decision
 from ah_recommendation_system.backend.stock_recommend.risk_review import review_candidate_risks
@@ -131,6 +136,21 @@ def _deliver_report(
     trade_date = str(run.get("trade_date") or report.get("as_of") or "")
     session = str(run.get("session") or "pre_market")
     target = ledger_path or _delivery_ledger_path()
+    coverage = dict(report.get("coverage") or {})
+    is_mock = (
+        str(coverage.get("mode") or "") == "mock_sample"
+        or str(coverage.get("source") or "") == "mock"
+        or str(run.get("source") or "") == "mock"
+    )
+    if is_mock:
+        report.setdefault("delivery", {})
+        report["delivery"].update({
+            "channel": "feishu",
+            "accepted": False,
+            "skipped": True,
+            "reason": "mock_delivery_blocked",
+        })
+        return {"ok": False, "skipped": True, "reason": "mock_delivery_blocked"}
     if not should_deliver(target, trade_date=trade_date, session=session, force=force):
         existing = get_delivery(target, trade_date=trade_date, session=session)
         ambiguous = bool(existing.get("ambiguous"))
@@ -241,9 +261,33 @@ def _merge_candidate_events(
     return merged
 
 
-def _apply_daily_feature_row(row: Dict[str, Any], bars: list[Dict[str, Any]]) -> bool:
+def _apply_daily_feature_row(
+    row: Dict[str, Any], bars: list[Dict[str, Any]], *, as_of: str | None = None
+) -> bool:
     """Mutate one candidate with multi-horizon daily features."""
-    features = calculate_features(bars)
+    cutoff = str(as_of or row.get("as_of") or "")[:10]
+    completed_bars = [
+        bar
+        for bar in bars
+        if not cutoff
+        or (
+            str(bar.get("date") or "")[:10]
+            and str(bar.get("date") or "")[:10] < cutoff
+        )
+    ]
+    # When the session/report date is unknown, the last row may be an
+    # incomplete intraday bar. It can be excluded only with market-state
+    # evidence; turnover size alone is not proof that a bar completed.
+    if not cutoff and completed_bars:
+        last = completed_bars[-1]
+        if any(
+            last.get(key) is True
+            for key in ("is_intraday", "is_partial", "incomplete", "partial")
+        ) or str(last.get("bar_status") or "").lower() in {
+            "intraday", "partial", "incomplete", "open"
+        }:
+            completed_bars = completed_bars[:-1]
+    features = calculate_features(completed_bars)
     row.update(features)
     # During the pre-market session real-time turnover is commonly
     # zero. Use the most recent completed daily bar as a labelled
@@ -253,17 +297,27 @@ def _apply_daily_feature_row(row: Dict[str, Any], bars: list[Dict[str, Any]]) ->
     except (TypeError, ValueError):
         realtime_amount = 0.0
     if realtime_amount < 100_000_000:
-        completed = []
-        for bar in bars:
+        completed: list[tuple[float, str | None]] = []
+        for bar in completed_bars:
+            bar_date = str(bar.get("date") or "")[:10] or None
             try:
                 value = float(bar.get("amount") or 0)
             except (TypeError, ValueError):
                 value = 0.0
-            if value >= 100_000_000:
-                completed.append(value)
+            if value > 0:
+                completed.append((value, bar_date))
         if completed:
-            row["amount"] = completed[-1]
+            row["amount"] = completed[-1][0]
             row["amount_reference"] = "latest_completed_daily_bar"
+            row["amount_as_of"] = completed[-1][1]
+    if not row.get("price_as_of") and completed_bars:
+        dated_bars = [
+            str(bar.get("date") or "")[:10]
+            for bar in completed_bars
+            if str(bar.get("date") or "")[:10]
+        ]
+        if dated_bars:
+            row["price_as_of"] = max(dated_bars)
     if features.get("return_60d_pct") is not None:
         row["change_60d_pct"] = features["return_60d_pct"]
     return bool(features.get("history_days"))
@@ -297,7 +351,9 @@ def _enrich_with_daily_features(rows: list[Dict[str, Any]], pf: Any, *, as_of: s
                 import pandas as pd
                 frame = frame[pd.to_datetime(frame["date"], errors="coerce") < pd.Timestamp(as_of)].sort_values("date")
                 bars = frame.to_dict("records")
-                if _apply_daily_feature_row(row, bars):
+                for item in bars:
+                    item.setdefault("date", str(item.get("date") or "")[:10])
+                if _apply_daily_feature_row(row, bars, as_of=as_of):
                     enriched += 1
             except Exception as exc:
                 row.setdefault("feature_errors", []).append(str(exc))
@@ -330,6 +386,138 @@ def _enrich_hithink_candidates(rows: list[Dict[str, Any]], *, limit: int = 600) 
     return head + rows[max(0, limit) :]
 
 
+PREVIOUS_CLOSE_MIN_ROWS = 1000
+PREVIOUS_CLOSE_COLLECTION_TIMEOUT_SECONDS = 180.0
+PREVIOUS_CLOSE_RECLAIM_SECONDS = 60.0
+
+
+def run_previous_close_snapshot(
+    *,
+    mock: bool = False,
+    min_rows: int = PREVIOUS_CLOSE_MIN_ROWS,
+    timeout_seconds: float = PREVIOUS_CLOSE_COLLECTION_TIMEOUT_SECONDS,
+    require_window: bool = True,
+) -> Dict[str, Any]:
+    """Collect a full-market previous-close snapshot and persist it without pushing."""
+    pf = get_price_fetcher()
+    if mock:
+        pf.enable_mock_data()
+    else:
+        pf.use_mock_data = False
+
+    started = time.monotonic()
+    errors: list[str] = []
+    rows: list[Dict[str, Any]] = []
+    source = "unavailable"
+    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    as_of = datetime.now().strftime("%Y-%m-%d")
+    hour = datetime.now().hour
+    if require_window and not (17 <= hour < 20):
+        return {
+            "ok": False,
+            "as_of": as_of,
+            "generated_at": generated_at,
+            "row_count": 0,
+            "source": source,
+            "quote_basis": "previous_close",
+            "persisted": False,
+            "persist": {},
+            "errors": ["outside_previous_close_window_17_19"],
+            "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
+            "push": None,
+        }
+    if mock:
+        return {
+            "ok": False,
+            "as_of": as_of,
+            "generated_at": generated_at,
+            "row_count": 0,
+            "source": "mock",
+            "persisted": False,
+            "persist": {},
+            "errors": ["mock_previous_close_snapshot_blocked"],
+            "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
+            "push": None,
+        }
+
+    result = DEFAULT_COLLECTION_RUNTIME.run({
+        "fundamental": (lambda: collect_fundamental(limit=6000), max(1.0, float(timeout_seconds))),
+    })["fundamental"]
+    payload = result.value if result.status == "ok" and isinstance(result.value, dict) else None
+    if payload is None and result.status == "timeout_pending":
+        late = DEFAULT_COLLECTION_RUNTIME.reclaim("fundamental", extra_wait_seconds=PREVIOUS_CLOSE_RECLAIM_SECONDS)
+        if late.status == "ok" and isinstance(late.value, dict):
+            payload = late.value
+        else:
+            errors.append(f"fundamental:{late.status}:{late.error or late.error_kind or ''}")
+    elif result.status != "ok":
+        errors.append(f"fundamental:{result.status}:{result.error or result.error_kind or ''}")
+
+    if payload:
+        rows = list(payload.get("rows") or [])
+        source = str(payload.get("source") or (rows[0].get("source") if rows else "unknown") or "unknown")
+        as_of = str(payload.get("as_of") or as_of)
+
+    try:
+        from ah_recommendation_system.backend.stock_recommend.focused_collector import resolve_industry_universe
+
+        def _fetch_industry_universe() -> Dict[str, Any]:
+            client = HithinkClient()
+            return client.industry_universe() if client.enabled else {}
+
+        resolve_industry_universe(
+            fetch_live=_fetch_industry_universe,
+            store_root=_backend_root(),
+            as_of=as_of,
+            errors=errors,
+            prefer_cache=False,
+        )
+    except Exception as exc:
+        errors.append(f"industry_universe:{type(exc).__name__}")
+
+    persist_result: Dict[str, Any] = {}
+    persisted = False
+    blocked_sources = {"mock", "disk_cache", "last_good_snapshot", "previous_close"}
+    if rows and source not in blocked_sources:
+        try:
+            persist_result = persist_snapshot(
+                rows,
+                _backend_root(),
+                as_of=as_of,
+                min_rows=min_rows,
+            )
+            persisted = not persist_result.get("skipped")
+            if persist_result.get("skipped"):
+                errors.append(f"persist_skipped:{persist_result.get('skipped')}")
+        except Exception as exc:
+            errors.append(f"local_store:{type(exc).__name__}:{exc}")
+    elif len(rows) < max(1, int(min_rows)):
+        errors.append(f"below_min_rows:{len(rows)}")
+
+    ok = persisted and len(rows) >= max(1, int(min_rows))
+    logger.info(
+        "previous-close snapshot ok={} rows={} source={} persisted={} errors={}",
+        ok,
+        len(rows),
+        source,
+        persisted,
+        errors,
+    )
+    return {
+        "ok": ok,
+        "as_of": as_of,
+        "generated_at": generated_at,
+        "row_count": len(rows),
+        "source": source,
+        "quote_basis": "previous_close",
+        "persisted": persisted,
+        "persist": persist_result,
+        "errors": errors,
+        "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
+        "push": None,
+    }
+
+
 def run_pipeline(
     *,
     mock: bool = False,
@@ -337,6 +525,8 @@ def run_pipeline(
     top_n_candidates: int = 30,
     push: bool = False,
     force_push: bool = False,
+    prefer_previous_close: Optional[bool] = None,
+    require_previous_close: bool = False,
 ) -> Dict[str, Any]:
     """Run the full pipeline: collect -> candidates -> LLM select -> report -> (push)."""
     top_n_pick = min(5, max(0, int(top_n_pick)))
@@ -362,10 +552,16 @@ def run_pipeline(
 
     logger.info(f"pipeline start mock={mock} top_pick={top_n_pick} push={push}")
 
+    coverage_mode = "mock_sample" if mock else "full_market"
+    now = datetime.now()
+    if prefer_previous_close is None:
+        prefer_previous_close = (not mock) and (now.hour < 9 or now.hour >= 17)
+
     # Probe optional upstreams once at the start of a live run so a report
     # can distinguish "configured but unavailable" from a later empty result.
+    # Previous-close replay must not block on the live Financial-API socket.
     hithink_probe: Dict[str, Any] = {"available": False, "capabilities": {}, "errors": {}}
-    if not mock:
+    if not mock and not prefer_previous_close:
         try:
             hithink_probe = HithinkClient().probe()
             logger.info(
@@ -376,23 +572,115 @@ def run_pipeline(
         except Exception as exc:
             hithink_probe = {"available": False, "capabilities": {}, "errors": {"probe": type(exc).__name__}}
             logger.warning("Financial-API probe failed: {}", type(exc).__name__)
-
-    if not mock:
+    elif prefer_previous_close:
+        hithink_probe = {"available": False, "capabilities": {}, "errors": {"probe": "skipped_previous_close"}}
+    if not mock and not prefer_previous_close:
         try:
             prefetch_market_snapshot(limit=6000)
         except Exception as exc:
             logger.warning("market snapshot prefetch failed: {}", type(exc).__name__)
-
-    snap = collect_all(limit=6000)
-    coverage_mode = "mock_sample" if mock else "full_market"
-    if not mock and not (snap.fundamental.get("rows") or []):
-        previous_errors = list(snap.errors)
-        if "full_market_unavailable" not in previous_errors:
-            previous_errors.append("full_market_unavailable")
-        snap = collect_focused_market()
-        snap.errors = previous_errors + list(snap.errors)
-        coverage_mode = "focused_fallback"
-    if not mock and not (snap.fundamental.get("rows") or []):
+    include_today_close = bool(prefer_previous_close) and now.hour >= 17
+    min_mtime = datetime(now.year, now.month, now.day, 17, 0, 0) if include_today_close else None
+    previous_close_rows = [] if mock or not prefer_previous_close else load_previous_close_snapshot(
+        _backend_root(),
+        as_of=now.strftime("%Y-%m-%d"),
+        min_rows=PREVIOUS_CLOSE_MIN_ROWS,
+        include_as_of=include_today_close,
+        min_mtime=min_mtime,
+    )
+    if prefer_previous_close and not previous_close_rows and min_mtime is not None:
+        previous_close_rows = load_previous_close_snapshot(
+            _backend_root(),
+            as_of=now.strftime("%Y-%m-%d"),
+            min_rows=PREVIOUS_CLOSE_MIN_ROWS,
+            include_as_of=False,
+        )
+    if previous_close_rows:
+        snap = collect_all(limit=6000, include_fundamental=False, use_hithink=False)
+        original = str(previous_close_rows[0].get("original_source") or "unknown")
+        snap.fundamental = {
+            "rows": previous_close_rows,
+            "count": len(previous_close_rows),
+            "universe_size": len(previous_close_rows),
+            "source": "previous_close",
+            "quote_basis": "previous_close",
+            "original_source": original,
+            "price_as_of": previous_close_rows[0].get("price_as_of"),
+        }
+        snap.errors = [err for err in snap.errors if str(err) != "full_market_unavailable"]
+        snap.errors.append("using_previous_close_snapshot")
+        coverage_mode = "full_market"
+        logger.info("using previous-close snapshot rows={}", len(previous_close_rows))
+    elif require_previous_close:
+        snap = collect_all(limit=6000, include_fundamental=False, use_hithink=False)
+        snap.errors.append("previous_close_snapshot_missing")
+        coverage_mode = "full_market"
+        logger.error("previous-close snapshot missing; refusing live full-market collect")
+    else:
+        snap = collect_all(limit=6000)
+    if not mock:
+        for key, extra_wait, nonempty in (
+            ("capital", 45.0, lambda payload: bool((payload or {}).get("rows"))),
+            ("events", 45.0, lambda payload: bool((payload or {}).get("stock_news") or (payload or {}).get("macro_news"))),
+        ):
+            current = getattr(snap, key, {}) or {}
+            pending = any(f"{key}:timeout_pending" in str(err) for err in snap.errors)
+            if pending and not nonempty(current):
+                late = DEFAULT_COLLECTION_RUNTIME.reclaim(key, extra_wait_seconds=extra_wait)
+                late_value = late.value if getattr(late, "status", "") == "ok" else None
+                if isinstance(late_value, dict) and nonempty(late_value):
+                    setattr(snap, key, late_value)
+                    snap.errors = [err for err in snap.errors if f"{key}:timeout_pending" not in str(err)]
+                    logger.info("reclaimed late {} rows/items", key)
+    if not mock and not previous_close_rows and not require_previous_close and not (snap.fundamental.get("rows") or []):
+        pending_full_market = any("fundamental:timeout_pending" in str(err) for err in snap.errors)
+        if pending_full_market:
+            late = DEFAULT_COLLECTION_RUNTIME.reclaim("fundamental", extra_wait_seconds=20.0)
+            late_value = late.value if getattr(late, "status", "") == "ok" else None
+            if isinstance(late_value, dict) and (late_value.get("rows") or []):
+                snap.fundamental = late_value
+                snap.errors = [
+                    err for err in snap.errors
+                    if "fundamental:timeout_pending" not in str(err) and str(err) != "full_market_unavailable"
+                ]
+                logger.info("reclaimed late full-market rows={}", len(snap.fundamental.get("rows") or []))
+        if not (snap.fundamental.get("rows") or []):
+            recovered_previous_close = load_previous_close_snapshot(
+                _backend_root(),
+                as_of=snap.date,
+                min_rows=PREVIOUS_CLOSE_MIN_ROWS,
+                include_as_of=include_today_close,
+                min_mtime=min_mtime,
+            )
+            if recovered_previous_close:
+                original = str(recovered_previous_close[0].get("original_source") or "unknown")
+                snap.fundamental = {
+                    "rows": recovered_previous_close,
+                    "count": len(recovered_previous_close),
+                    "universe_size": len(recovered_previous_close),
+                    "source": "previous_close",
+                    "quote_basis": "previous_close",
+                    "original_source": original,
+                    "price_as_of": recovered_previous_close[0].get("price_as_of"),
+                }
+                snap.errors = [err for err in snap.errors if str(err) != "full_market_unavailable"]
+                snap.errors.append("using_previous_close_snapshot")
+                coverage_mode = "full_market"
+                logger.info("using previous-close snapshot rows={}", len(recovered_previous_close))
+        if not (snap.fundamental.get("rows") or []):
+            previous_errors = list(snap.errors)
+            previous_capital = dict(snap.capital or {})
+            previous_events = dict(snap.events or {})
+            if "full_market_unavailable" not in previous_errors:
+                previous_errors.append("full_market_unavailable")
+            snap = collect_focused_market()
+            if not (snap.capital.get("rows") or []) and (previous_capital.get("rows") or []):
+                snap.capital = previous_capital
+            if not (snap.events.get("stock_news") or snap.events.get("macro_news")) and previous_events:
+                snap.events = previous_events
+            snap.errors = previous_errors + list(snap.errors)
+            coverage_mode = "focused_fallback"
+    if not mock and not require_previous_close and not (snap.fundamental.get("rows") or []):
         try:
             cached_rows = load_last_snapshot(_backend_root(), max_age_seconds=300)
             if cached_rows:
@@ -410,7 +698,7 @@ def run_pipeline(
                     coverage_mode = "limited_sample"
         except Exception as exc:
             snap.errors.append(f"last_good_snapshot:{exc}")
-    data_available = bool(snap.fundamental.get("rows") or []) and snap.fundamental.get("source") != "last_good_snapshot"
+    data_available = bool(snap.fundamental.get("rows") or []) and snap.fundamental.get("source") not in {"last_good_snapshot"}
     if not data_available and "focused_market_unavailable" not in snap.errors:
         snap.errors.append("focused_market_unavailable")
     checkpoint(
@@ -424,39 +712,40 @@ def run_pipeline(
     # industries remain provenance tags, never a score or an investment reason.
     raw_rows = snap.fundamental.get("rows") or []
     market_scanned_count = len(raw_rows)
-    focus_universe = None
-    if raw_rows and raw_rows[0].get("source") == "hithink_financial_api":
-        try:
-            focus_universe = HithinkClient().focus_universe(["科技", "半导体", "新能源", "券商", "医疗"])
-        except Exception as exc:
-            snap.errors.append(f"hithink_industries:{exc}")
-    # Keep the hotspot/industry stage useful when the optional Financial-API
-    # catalogue is unavailable.  This small, auditable map is only a
-    # provenance fallback; it does not bypass the normal factor gates.
-    if not focus_universe:
-        focus_universe = DEFAULT_FOCUS_UNIVERSE
-    else:
-        merged = {key: list(value) for key, value in DEFAULT_FOCUS_UNIVERSE.items()}
-        for key, value in focus_universe.items():
-            merged.setdefault(key, [])
-            seen = {str(item.get("code") or "") for item in merged[key]}
-            for item in value:
-                code = str(item.get("code") or "")
-                if code and code not in seen:
-                    merged[key].append(dict(item))
-                    seen.add(code)
-        focus_universe = merged
+    prefer_cached_universe = prefer_previous_close or str(snap.fundamental.get("source") or "") in {
+        "previous_close", "disk_cache", "last_good_snapshot"
+    }
+
+    def _fetch_industry_universe() -> Dict[str, Any]:
+        client = HithinkClient()
+        return client.industry_universe() if client.enabled else {}
+
+    focus_universe = {} if mock else resolve_industry_universe(
+        fetch_live=_fetch_industry_universe,
+        store_root=_backend_root(),
+        as_of=snap.date,
+        errors=snap.errors,
+        prefer_cache=prefer_cached_universe,
+    )
+    raw_rows = attach_industry_tags(raw_rows, focus_universe or {})
+    snap.fundamental["rows"] = raw_rows
+    tag_coverage = industry_tag_coverage(raw_rows)
+    snap.fundamental["industry_tag_coverage"] = round(tag_coverage, 4)
+    if raw_rows and tag_coverage < 0.5:
+        snap.errors.append("industry_tags:sparse")
     seeds = scan_snapshot(
         raw_rows,
         focus_industries=focus_universe,
         activity_rows=snap.capital.get("rows") or [],
         limit=None,
     )
-    if seeds:
+    if not mock and seeds and str(snap.fundamental.get("source") or "") not in {"previous_close", "disk_cache", "last_good_snapshot"}:
         try:
             seeds = _enrich_hithink_candidates(seeds)
         except Exception as exc:
             snap.errors.append(f"hithink_enrichment:{exc}")
+    elif not mock and seeds:
+        snap.errors.append("hithink_enrichment:skipped_previous_close")
         if not mock and data_available:
             try:
                 from ah_recommendation_system.backend.stock_recommend.data_collector import collect_events
@@ -467,19 +756,21 @@ def run_pipeline(
                 snap.errors.append(f"candidate_news:{exc}")
     snap.fundamental["rows"] = seeds if seeds else raw_rows
     snap.fundamental["candidate_count"] = len(seeds) if seeds else len(raw_rows)
-    if not mock and data_available:
+    previous_close_replay = str(snap.fundamental.get("source") or "") in {"previous_close", "disk_cache", "last_good_snapshot"}
+    if not mock and data_available and not previous_close_replay:
         coverage_history_count = _enrich_with_daily_features(snap.fundamental.get("rows") or [], pf, as_of=snap.date)
     else:
         coverage_history_count = sum(
             1 for row in (snap.fundamental.get("rows") or []) if float(row.get("history_days") or 0) >= 60
         )
     collected_rows = list(raw_rows)
-    if not mock and snap.fundamental.get("source") not in {"mock", "disk_cache", "last_good_snapshot"}:
+    if not mock and snap.fundamental.get("source") not in {"mock", "disk_cache", "last_good_snapshot", "previous_close"}:
         try:
             persist_snapshot(
                 collected_rows or (snap.fundamental.get("rows") or []),
                 _backend_root(),
                 as_of=snap.date,
+                min_rows=PREVIOUS_CLOSE_MIN_ROWS,
             )
         except ImportError as exc:
             snap.errors.append(f"local_store_dependency:{exc}")
@@ -500,11 +791,34 @@ def run_pipeline(
     # Pass 1: deterministic ranking. LLM is deliberately not involved in
     # full-market scoring.
     initial_cands = build_candidates(snap, top_n=top_n_candidates, weights=weights)
+    if not mock and data_available and initial_cands and not previous_close_replay:
+        try:
+            history_rows = collect_candidate_fund_history(
+                [candidate.code for candidate in initial_cands],
+                days=5,
+            )
+            if history_rows:
+                by_code: Dict[str, Dict[str, Any]] = {}
+                for row in snap.capital.get("rows") or []:
+                    code = str(row.get("code") or "")
+                    if code:
+                        by_code[code] = dict(row)
+                for hist in history_rows:
+                    code = str(hist.get("code") or "")
+                    if not code:
+                        continue
+                    existing = by_code.setdefault(code, {"code": code})
+                    existing.update(hist)
+                snap.capital["rows"] = list(by_code.values())
+                initial_cands = build_candidates(snap, top_n=top_n_candidates, weights=weights)
+        except Exception as exc:
+            snap.errors.append(f"candidate_fund_history:{exc}")
     if not mock and data_available and initial_cands:
-        selected_codes = {candidate.code for candidate in initial_cands}
+        selected_codes = {str(candidate.code).zfill(6) for candidate in initial_cands}
         evidence_rows = [row for row in (snap.fundamental.get("rows") or [])
-                         if str(row.get("code") or "") in selected_codes]
-        _enrich_with_daily_features(evidence_rows, pf, as_of=snap.date, limit=len(evidence_rows))
+                         if str(row.get("code") or "").zfill(6) in selected_codes]
+        if not previous_close_replay:
+            _enrich_with_daily_features(evidence_rows, pf, as_of=snap.date, limit=len(evidence_rows))
         evidence_audit = enrich_evidence(evidence_rows, as_of=snap.date, limit=len(evidence_rows))
         evidence_audit["attempted_count"] = len(evidence_rows)
         snap.errors.extend(evidence_audit.get("errors") or [])
@@ -550,6 +864,7 @@ def run_pipeline(
                 max_total=60,
             )
             llm_context["hotspots"] = mapped.get("hotspots") or []
+            llm_context["candidate_hotspot_mappings"] = mapped.get("candidate_mappings") or {}
             llm_context["llm"]["hotspot_status"] = hotspot_result.get("status")
             llm_context["llm"]["hotspot_duration_ms"] = hotspot_result.get("duration_ms", 0)
             llm_context["llm"]["hotspot_error"] = hotspot_result.get("error")
@@ -600,6 +915,14 @@ def run_pipeline(
         except Exception as exc:
             snap.errors.append(f"llm_event_review:{type(exc).__name__}")
             llm_context["llm"]["event_status"] = "failed"
+    # Apply mappings only after all event/model scores are final. Eligibility
+    # still uses the unchanged base composite/model score.
+    apply_hotspot_mappings(
+        cands,
+        llm_context.get("candidate_hotspot_mappings") or {},
+        market_regime=evidence_audit["market_regime"] if not mock else None,
+        as_of=snap.date,
+    )
     checkpoint(
         "llm_review",
         status=str(llm_context.get("llm", {}).get("event_status") or "disabled"),
@@ -615,9 +938,17 @@ def run_pipeline(
                                 minimum_score=minimum_score,
                                 market_regime=evidence_audit["market_regime"] if not mock else None,
                                 ranking_key=ranking_key)
+    selection = finalize_picks_against_hotspots(
+        selection,
+        hotspots=llm_context.get("hotspots") or [],
+    )
     selection["ranking_key"] = ranking_key
     selection["factor_version"] = "evidence-v2"
     selection["as_of"] = snap.date
+    if not selection.get("picks") and selection.get("empty_reason_code") is None:
+        selection["empty_reason_code"] = "data_insufficient" if not data_available else (
+            "awaiting_confirmation" if selection.get("observation_pool") else "screened_out"
+        )
     if not mock and data_available:
         try:
             from ah_recommendation_system.backend.etf_sector.etf_sector_report import generate_etf_sector_block
@@ -726,9 +1057,17 @@ def run_pipeline(
             "history_target_count": sum(1 for row in (snap.fundamental.get("rows") or [])
                                   if str(row.get("code") or "") in {c.code for c in cands}
                                   and float(row.get("history_days") or 0) >= 60),
-            "eligible_count": len(cands),
+            "eligible_count": selection.get("eligible_count", 0),
             "mode": coverage_mode,
             "source": snap.fundamental.get("source"),
+            "quote_basis": snap.fundamental.get("quote_basis") or (
+                "previous_close"
+                if snap.fundamental.get("source") == "previous_close"
+                else "live" if snap.fundamental.get("price_as_of") or any(
+                    row.get("price_as_of") or row.get("quote_date")
+                    for row in (snap.fundamental.get("rows") or [])
+                ) else "unknown"
+            ),
             "history_count": sum(1 for row in (snap.fundamental.get("rows") or [])
                                   if str(row.get("code") or "") in {c.code for c in cands}
                                   and float(row.get("history_days") or 0) >= 60),
@@ -754,6 +1093,25 @@ def run_pipeline(
             "fallback_chain": market_data_attempted_chain(snap),
             "circuit_breakers": list((pf.provider_health() if hasattr(pf, "provider_health") else {}).get("history_errors") or []),
         }
+    selection_diagnostics = dict(selection.get("selection_diagnostics") or {})
+    selection_diagnostics.update({
+        "scan_as_of": snap.fundamental.get("scan_as_of") or snap.fundamental.get("generated_at") or None,
+        "price_as_of": snap.fundamental.get("price_as_of") or next(
+            (row.get("price_as_of") or row.get("quote_date") for row in (snap.fundamental.get("rows") or [])
+             if row.get("price_as_of") or row.get("quote_date")),
+            None,
+        ),
+        "coverage_mode": coverage_mode,
+        "scanned_count": market_scanned_count,
+        "candidate_count": len(seeds) if data_available else None,
+        "evaluated_count": len(cands) if data_available else None,
+        "eligible_count": selection.get("eligible_count") if data_available else None,
+        "selected_count": len(selection.get("picks") or []),
+        "observation_count": len(selection.get("observation_pool") or []) if selection.get("observation_pool_verified") is True else None,
+        "mapping_gaps": list(selection_diagnostics.get("mapping_gaps") or []),
+        "rejection_summary": dict(selection_diagnostics.get("rejection_summary") or {}),
+    })
+    selection["selection_diagnostics"] = selection_diagnostics
     persist_ranking_panel(
         [
             {**row, "date": snap.date,
@@ -786,6 +1144,11 @@ def run_pipeline(
         coverage=coverage_payload,
         cross_market=snap.cross_market,
         previous_medium_term=previous_medium_term,
+        market_regime=evidence_audit.get("market_regime") if not mock else {
+            "regime": "balanced",
+            "status": "available",
+            "source": "mock_market_fixture",
+        },
     )
     report = build_report(
         selection=selection,
@@ -799,12 +1162,21 @@ def run_pipeline(
     # Add the reliability-first contract layer while preserving legacy report
     # fields consumed by existing clients.
     try:
+        diagnostics = dict(selection.get("selection_diagnostics") or {})
+        verified_price_date = diagnostics.get("price_as_of")
+        source_timestamp = snap.fundamental.get("generated_at")
         contract_snapshot = MarketSnapshot(
             as_of=f"{snap.date}T00:00:00+08:00",
-            price_timestamp=f"{snap.date}T00:00:00+08:00",
+            # The analysis date is not a quote timestamp. Leave the price
+            # timestamp unknown until a provider supplies an explicit date.
+            price_timestamp=str(verified_price_date) if verified_price_date else None,
             source=str(snap.fundamental.get("source") or "unknown"),
-            source_timestamp=f"{snap.date}T00:00:00+08:00",
-            data_quality="degraded" if coverage_payload.get("stale") else "available",
+            source_timestamp=str(source_timestamp) if source_timestamp else None,
+            data_quality=(
+                "degraded"
+                if coverage_payload.get("stale") or not verified_price_date
+                else "available"
+            ),
             is_mock=bool(mock),
         )
         contract_candidates = normalize_candidates(cand_dicts, snapshot=contract_snapshot)
@@ -842,8 +1214,13 @@ def run_pipeline(
     report["ranking_key"] = ranking_key
     report["candidate_panel_scope"] = "all_saved_candidates"
     report["candidate_panel_limit"] = top_n_candidates
-    report.setdefault("market", {}).update(regime=evidence_audit["market_regime"]["regime"],
-                                           regime_evidence=evidence_audit["market_regime"])
+    if mock:
+        report.setdefault("market", {})["regime_evidence"] = {
+            "regime": decision["regime"], "status": "available", "source": "mock_market_fixture",
+        }
+    else:
+        report.setdefault("market", {}).update(regime=evidence_audit["market_regime"]["regime"],
+                                               regime_evidence=evidence_audit["market_regime"])
     report["quality_gate"] = evaluate_report_quality(report)
     if not report["quality_gate"].get("passed"):
         report["picks"] = []
@@ -867,8 +1244,18 @@ def run_pipeline(
     push_result: Optional[Dict[str, Any]] = None
     wechat_result: Optional[Dict[str, Any]] = None
     if push:
-        push_result = _deliver_report(report, force=force_push)
-        wechat_result = push_to_wechat(report)
+        quality_failed = report.get("quality_gate", {}).get("passed") is False or str((report.get("run") or {}).get("status") or "") == "failed"
+        if quality_failed:
+            push_result = {"ok": False, "skipped": True, "reason": "quality_gate_failed"}
+            report.setdefault("delivery", {}).update({
+                "channel": "feishu",
+                "accepted": False,
+                "skipped": True,
+                "reason": "quality_gate_failed",
+            })
+        else:
+            push_result = _deliver_report(report, force=force_push)
+            wechat_result = push_to_wechat(report)
         paths = save_report(report, _backend_root())
 
     return {
@@ -1104,6 +1491,7 @@ def main() -> int:
     )
     parser.add_argument("--post-market", action="store_true", help="Review latest pre-market report")
     parser.add_argument("--weekly-reweight", action="store_true", help="Update bounded factor weights")
+    parser.add_argument("--previous-close-snapshot", action="store_true", help="Collect and persist previous-close full-market snapshot without push")
     args = parser.parse_args()
 
     if args.verify_only:
@@ -1124,6 +1512,11 @@ def main() -> int:
         result = run_weekly_reweight_job()
         print(json_dumps(result))
         return 0
+
+    if args.previous_close_snapshot:
+        result = run_previous_close_snapshot(mock=bool(args.mock))
+        print(json_dumps(result))
+        return 0 if result.get("ok") else 1
 
     result = run_pipeline(
         mock=bool(args.mock) or not bool(args.live),

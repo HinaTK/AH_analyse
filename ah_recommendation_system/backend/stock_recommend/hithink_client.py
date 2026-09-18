@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -206,6 +207,37 @@ class HithinkClient:
         data = self._get("/api/a-share-index/constituents/ths-stock-list", {"thscode": thscode})
         return list(data.get("item") or [])
 
+    def industry_universe(self) -> Dict[str, List[Dict[str, str]]]:
+        """Return the complete THS industry catalog mapped to current constituents."""
+        catalog = [
+            (str(item.get("name") or "").strip(), str(item.get("thscode") or "").strip())
+            for item in self.industry_catalog()
+        ]
+        catalog = [(name, code) for name, code in catalog if name and code]
+        result: Dict[str, List[Dict[str, str]]] = {}
+
+        def load_members(thscode: str) -> List[Dict[str, str]]:
+            try:
+                items = self.index_constituents(thscode)
+            except Exception:
+                return []
+            members: Dict[str, Dict[str, str]] = {}
+            for item in items:
+                code = str(item.get("ticker") or item.get("thscode") or "").split(".")[0].zfill(6)
+                if len(code) == 6:
+                    members[code] = {"code": code, "name": str(item.get("name") or code)}
+            return list(members.values())
+
+        workers = min(8, max(1, len(catalog)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(load_members, thscode): label for label, thscode in catalog}
+            for future in as_completed(futures):
+                label = futures[future]
+                members = future.result()
+                if members:
+                    result[label] = members
+        return result
+
     def focus_universe(self, keywords: Iterable[str]) -> Dict[str, List[Dict[str, str]]]:
         """Resolve configured themes to current THS industry constituents."""
         catalogs = self.industry_catalog()
@@ -238,8 +270,21 @@ class HithinkClient:
         """Merge names, current valuation and market-cap fields into price rows."""
         result = [dict(row) for row in rows]
         codes = [str(row.get("code") or "").zfill(6) for row in result]
-        names = self.ticker_names()
-        valuations = self.valuations(codes)
+        names: Dict[str, str] = {}
+        needs_names = any(
+            not str(row.get("name") or "").strip()
+            or str(row.get("name") or "").strip() == str(row.get("code") or "").zfill(6)
+            for row in result
+        )
+        if needs_names:
+            try:
+                names = self.ticker_names()
+            except Exception:
+                names = {}
+        try:
+            valuations = self.valuations(codes)
+        except Exception:
+            valuations = {}
         try:
             auctions = self.auction_metrics(codes)
         except Exception:

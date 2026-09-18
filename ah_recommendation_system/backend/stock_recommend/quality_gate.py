@@ -15,6 +15,11 @@ def evaluate_report_quality(report: Mapping[str, Any]) -> Dict[str, Any]:
     warnings = []
     checks = []
 
+    blocking_sections = list(report.get("blocking_sections") or coverage.get("blocking_sections") or [])
+    checks.append({"name": "core_provider_health", "passed": not blocking_sections})
+    if blocking_sections:
+        blockers.append("核心数据源降级或超时：" + "、".join(str(item) for item in blocking_sections))
+
     stock_count_valid = len(stocks) <= 5
     checks.append({"name": "stock_count_limit", "passed": stock_count_valid})
     if not stock_count_valid:
@@ -63,6 +68,15 @@ def evaluate_report_quality(report: Mapping[str, Any]) -> Dict[str, Any]:
     checks.append({"name": "decision_complete", "passed": decision_complete})
     if not decision_complete:
         blockers.append("缺少市场姿态或方向分层")
+    regime = str(market.get("regime") or "").strip().lower()
+    status = str(market.get("status") or "").strip().lower()
+    regime_evidence = dict(market.get("regime_evidence") or {})
+    evidence_status = str(regime_evidence.get("status") or "").strip().lower()
+    usable_posture = True
+    if regime in {"unknown", "unavailable", ""} or status in {"unknown", "unavailable", ""} or evidence_status in {"unavailable", "unknown"}:
+        usable_posture = False
+        blockers.append("缺少可用市场姿态证据")
+    checks.append({"name": "market_posture_usable", "passed": usable_posture})
 
     stock_reasons_valid = all(str(item.get("rationale") or "").strip() for item in stocks)
     checks.append({"name": "stock_rationales_traceable", "passed": stock_reasons_valid})

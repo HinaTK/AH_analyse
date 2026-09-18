@@ -221,8 +221,8 @@ class TestHotspotRepresentatives(unittest.TestCase):
             focus_universe=DEFAULT_FOCUS_UNIVERSE,
         )
         reps = mapped["hotspots"][0].get("representatives") or []
-        self.assertIn("长电科技", reps)
-        self.assertIn("韦尔股份", reps)
+        self.assertNotIn("长电科技", reps)
+        self.assertNotIn("韦尔股份", reps)
         self.assertNotIn("宁德时代", reps)
         self.assertNotIn("东方财富", reps)
         self.assertNotIn("立讯精密", reps)
@@ -263,8 +263,11 @@ class TestPreMarketTurnoverReference(unittest.TestCase):
             "ah_recommendation_system.backend.stock_recommend.run.calculate_features",
             return_value={"history_days": 120, "return_60d_pct": 20.3},
         ):
-            self.assertTrue(_apply_daily_feature_row(row, bars))
-        self.assertEqual(row["amount"], 1_602_459_052)
+            self.assertTrue(_apply_daily_feature_row(row, bars, as_of="2026-09-11"))
+        # The report date proves that 9/10 is the latest completed bar. Its
+        # small turnover must remain visible so the formal 1e8 gate can reject
+        # it; turnover must not decide whether the bar completed.
+        self.assertEqual(row["amount"], 5_489_565)
         self.assertEqual(row["amount_reference"], "latest_completed_daily_bar")
 
     def test_zero_or_premarket_amount_is_treated_as_missing_for_supplement(self):

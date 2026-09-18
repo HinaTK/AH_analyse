@@ -20,6 +20,36 @@ class TestStockRecommendationPipeline(unittest.TestCase):
             "attempted_count": 0, "coverage": "test_fixture", "errors": []})
         evidence.start()
         self.addCleanup(evidence.stop)
+        previous_close = patch(
+            "ah_recommendation_system.backend.stock_recommend.run.load_previous_close_snapshot",
+            return_value=[],
+        )
+        previous_close.start()
+        self.addCleanup(previous_close.stop)
+        root = tempfile.TemporaryDirectory()
+        self.addCleanup(root.cleanup)
+        backend_root = patch(
+            "ah_recommendation_system.backend.stock_recommend.run._backend_root",
+            return_value=Path(root.name),
+        )
+        backend_root.start()
+        self.addCleanup(backend_root.stop)
+
+    def test_mock_pipeline_does_not_contact_upstreams_with_configured_key(self):
+        from ah_recommendation_system.backend.stock_recommend import run as run_module
+
+        with patch(
+            "ah_recommendation_system.backend.stock_recommend.hithink_client.resolve_api_key",
+            return_value="fixture-key",
+        ), patch(
+            "requests.sessions.Session.request", side_effect=AssertionError("mock must stay offline")
+        ) as request, patch.object(run_module, "save_report", return_value={}):
+            result = run_module.run_pipeline(mock=True, push=False)
+
+        request.assert_not_called()
+        self.assertTrue(result["report"]["quality_gate"]["passed"])
+        self.assertEqual(result["report"]["coverage"]["source"], "mock")
+        self.assertEqual(result["report"]["market"]["regime_evidence"]["source"], "mock_market_fixture")
 
     def test_collect_all_attempts_cross_market_in_focused_mode(self):
         from ah_recommendation_system.backend.stock_recommend import data_collector
@@ -70,6 +100,55 @@ class TestStockRecommendationPipeline(unittest.TestCase):
         self.assertEqual(rows[0]["amount"], 240_000_000)
         self.assertEqual(rows[0]["amount_reference"], "latest_completed_daily_bar")
 
+    def test_daily_feature_completion_is_based_on_date_not_one_yi_turnover(self):
+        from ah_recommendation_system.backend.stock_recommend.run import _apply_daily_feature_row
+
+        row = {"code": "300750", "amount": 0}
+        bars = [
+            {"date": "2026-09-08", "open": 10, "high": 11, "low": 9, "close": 10,
+             "volume": 100, "amount": 40_000_000},
+            {"date": "2026-09-09", "open": 10, "high": 12, "low": 9, "close": 11,
+             "volume": 120, "amount": 240_000_000},
+            {"date": "2026-09-10", "open": 11, "high": 12, "low": 10, "close": 11.5,
+             "volume": 20, "amount": 20_000_000},
+        ]
+        with patch(
+            "ah_recommendation_system.backend.stock_recommend.run.calculate_features",
+            return_value={"history_days": 2, "return_60d_pct": 5.0},
+        ) as calculate:
+            self.assertTrue(_apply_daily_feature_row(row, bars, as_of="2026-09-10"))
+
+        self.assertEqual(calculate.call_args.args[0], bars[:2])
+        self.assertEqual(row["amount"], 240_000_000)
+        self.assertEqual(row["amount_as_of"], "2026-09-09")
+        self.assertEqual(row["price_as_of"], "2026-09-09")
+
+    def test_tencent_compact_timestamp_provides_quote_date(self):
+        from ah_recommendation_system.backend.stock_recommend.focused_collector import _quote_tencent
+
+        class Response:
+            def __init__(self):
+                fields = [""] * 47
+                fields[1] = "测试股"
+                fields[2] = "600001"
+                fields[3] = "10.0"
+                fields[6] = "100"
+                fields[30] = "20260917153000"
+                fields[32] = "1.0"
+                fields[37] = "5000000"
+                self.content = f'v_sh600001="{"~".join(fields)}";'.encode("gbk")
+
+            def raise_for_status(self):
+                return None
+
+        with patch(
+            "ah_recommendation_system.backend.stock_recommend.focused_collector.requests.get",
+            return_value=Response(),
+        ):
+            rows = _quote_tencent(["600001"])
+
+        self.assertEqual(rows[0]["quote_date"], "2026-09-17")
+
     def test_a_share_breadth_signal_uses_full_snapshot(self):
         from ah_recommendation_system.backend.stock_recommend.run import _extract_a_share_signal
 
@@ -114,8 +193,12 @@ class TestStockRecommendationPipeline(unittest.TestCase):
             for line in script.read_text(encoding="utf-8").splitlines()
             if line.lstrip().startswith("Register-ScheduledTask")
         ]
-        self.assertEqual(len(registration_lines), 3)
+        self.assertEqual(len(registration_lines), 4)
         self.assertTrue(all('-Force' in line for line in registration_lines))
+        self.assertIn('08:06', script.read_text(encoding="utf-8"))
+        self.assertIn('17:30', script.read_text(encoding="utf-8"))
+        self.assertIn('previous_close_snapshot', script.read_text(encoding="utf-8"))
+        self.assertNotIn('previous_close_snapshot --push', script.read_text(encoding="utf-8"))
         # Windows PowerShell 5.1 reads UTF-8 files without a BOM as an ANSI
         # code page. Keep this installer ASCII-only so quoted descriptions
         # cannot be corrupted into part of the command line.
@@ -142,6 +225,36 @@ class TestStockRecommendationPipeline(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_scheduler_previous_close_snapshot_does_not_push(self):
+        from ah_recommendation_system.backend.scheduler.daily_job import main
+
+        with patch("sys.argv", ["daily_job.py", "--mode", "previous_close_snapshot"]), patch(
+            "ah_recommendation_system.backend.scheduler.daily_job.run_previous_close_snapshot",
+            return_value={"ok": True, "push": None, "persisted": True, "row_count": 5571},
+        ) as snapshot:
+            exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        snapshot.assert_called_once_with(mock=False)
+
+    def test_scheduler_evening_pre_market_forces_previous_close_push(self):
+        from ah_recommendation_system.backend.scheduler.daily_job import main
+
+        with patch("sys.argv", ["daily_job.py", "--mode", "evening_pre_market"]), patch(
+            "ah_recommendation_system.backend.scheduler.daily_job.run_pipeline",
+            return_value={"ok": True, "push": {"ok": True}},
+        ) as pipeline:
+            exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        pipeline.assert_called_once_with(
+            mock=False,
+            push=True,
+            force_push=True,
+            prefer_previous_close=True,
+            require_previous_close=True,
+        )
 
     def test_scheduler_returns_nonzero_when_analysis_fails(self):
         from ah_recommendation_system.backend.scheduler.daily_job import main
@@ -608,6 +721,128 @@ class TestStockRecommendationPipeline(unittest.TestCase):
         self.assertLessEqual(len(result["report"]["picks"]), 3)
         self.assertIn("full_market_unavailable", result["report"]["data_warnings"])
 
+    def test_focused_fallback_keeps_already_collected_capital_rows(self):
+        from ah_recommendation_system.backend.stock_recommend.data_collector import CollectedSnapshot
+        from ah_recommendation_system.backend.stock_recommend.run import run_pipeline
+
+        empty = CollectedSnapshot(
+            date="2026-09-15",
+            fundamental={"rows": [], "count": 0, "universe_size": 0},
+            capital={"rows": [{"code": "600036", "main_net": 2e8, "source": "akshare.fund_flow"}]},
+            events={"stock_news": [{"code": "600036", "title": "招行回购"}]},
+            errors=["full_market_unavailable"],
+        )
+        focused = CollectedSnapshot(
+            date="2026-09-15",
+            fundamental={
+                "rows": [{"code": "600036", "name": "招商银行", "price": 41.6, "source": "focused_tencent_quotes"}],
+                "count": 1,
+                "universe_size": 1,
+                "source": "focused_tencent_quotes",
+            },
+            capital={"rows": []},
+            events={},
+            errors=[],
+        )
+        with patch("ah_recommendation_system.backend.stock_recommend.run.collect_all", return_value=empty), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.collect_focused_market",
+            return_value=focused,
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.data_collector.collect_events",
+            return_value={"macro_news": {}, "stock_news": [], "provider_health": {}},
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run._enrich_with_daily_features",
+            return_value=1,
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.analyze_hotspots",
+            return_value={"status": "disabled", "hotspots": []},
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.review_candidate_events",
+            return_value={"status": "disabled", "reviews": {}},
+        ), patch("ah_recommendation_system.backend.stock_recommend.run.persist_snapshot"), patch(
+            "ah_recommendation_system.backend.etf_sector.etf_sector_report.generate_etf_sector_block",
+            return_value={},
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.save_report",
+            return_value={},
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.HithinkClient"
+        ) as hithink:
+            hithink.return_value.enabled = False
+            hithink.return_value.probe.return_value = {"available": False, "capabilities": {}}
+            result = run_pipeline(mock=False, push=False)
+
+        panel = result["report"].get("candidate_panel") or []
+        by_code = {str(item.get("code")): item for item in panel}
+        self.assertTrue(any(
+            evidence.get("factor") == "capital" and evidence.get("source") != "capital_unavailable"
+            for evidence in (by_code.get("600036") or {}).get("evidence") or []
+        ))
+
+    def test_pipeline_reclaims_late_full_market_instead_of_keeping_focused_fallback(self):
+        from ah_recommendation_system.backend.stock_recommend.data_collector import CollectedSnapshot
+        from ah_recommendation_system.backend.stock_recommend.run import run_pipeline
+
+        empty = CollectedSnapshot(
+            date="2026-09-15",
+            fundamental={"rows": [], "count": 0, "universe_size": 0},
+            capital={"rows": [{"code": "600036", "main_net": 2e8}]},
+            events={"stock_news": [{"code": "600036", "title": "招行回购"}]},
+            errors=["fundamental:timeout_pending:soft_timeout"],
+        )
+        focused = CollectedSnapshot(
+            date="2026-09-15",
+            fundamental={
+                "rows": [{"code": "000001", "name": "平安银行", "price": 10, "source": "focused_tencent_quotes"}],
+                "count": 1,
+                "universe_size": 1,
+                "source": "focused_tencent_quotes",
+            },
+            capital={"rows": []},
+            events={},
+            errors=[],
+        )
+        late = {
+            "rows": [{"code": "600036", "name": "招商银行", "price": 41.6, "pe": 6.9, "source": "hithink_financial_api"}],
+            "count": 1,
+            "universe_size": 5000,
+            "source": "hithink_financial_api",
+        }
+        with patch("ah_recommendation_system.backend.stock_recommend.run.collect_all", return_value=empty), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.collect_focused_market",
+            return_value=focused,
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.DEFAULT_COLLECTION_RUNTIME.reclaim",
+            return_value=type("R", (), {"status": "ok", "value": late, "error": None})(),
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.data_collector.collect_events",
+            return_value={"macro_news": {}, "stock_news": [], "provider_health": {}},
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run._enrich_with_daily_features",
+            return_value=1,
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.analyze_hotspots",
+            return_value={"status": "disabled", "hotspots": []},
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.review_candidate_events",
+            return_value={"status": "disabled", "reviews": {}},
+        ), patch("ah_recommendation_system.backend.stock_recommend.run.persist_snapshot"), patch(
+            "ah_recommendation_system.backend.etf_sector.etf_sector_report.generate_etf_sector_block",
+            return_value={},
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.save_report",
+            return_value={},
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.HithinkClient"
+        ) as hithink:
+            hithink.return_value.enabled = False
+            hithink.return_value.probe.return_value = {"available": False, "capabilities": {}}
+            result = run_pipeline(mock=False, push=False)
+
+        self.assertEqual(result["report"]["coverage"]["mode"], "full_market")
+        self.assertEqual(result["report"]["coverage"]["source"], "hithink_financial_api")
+        self.assertNotIn("full_market_unavailable", result["report"].get("data_warnings") or [])
+
     def test_focused_snapshot_drops_symbols_without_a_valid_quote(self):
         from ah_recommendation_system.backend.stock_recommend.focused_collector import build_focused_snapshot
 
@@ -648,6 +883,11 @@ class TestStockRecommendationPipeline(unittest.TestCase):
                     fields[30] = "20260908101500"
                     fields[32] = "1.2"
                     fields[37] = "1000000"
+                    while len(fields) < 47:
+                        fields.append("")
+                    fields[39] = "18.41"
+                    fields[44] = "66.93"
+                    fields[46] = "2.42"
                     lines.append(f'v_{symbol}="{"~".join(fields)}";')
                 self.content = "\n".join(lines).encode("gbk")
 
@@ -664,6 +904,10 @@ class TestStockRecommendationPipeline(unittest.TestCase):
         self.assertEqual(len(rows), 105)
         self.assertEqual(get.call_count, 3)
         self.assertTrue(all(call.args[0].count(",") < 40 for call in get.call_args_list))
+        self.assertEqual(rows[0]["pe"], 18.41)
+        self.assertEqual(rows[0]["pb"], 2.42)
+        self.assertEqual(rows[0]["market_cap"], 6693000000.0)
+        self.assertEqual(rows[0]["pe_source"], "tencent")
 
     def test_sina_quotes_are_used_as_direct_realtime_fallback(self):
         from ah_recommendation_system.backend.stock_recommend.focused_collector import _quote_sina
@@ -878,7 +1122,25 @@ class TestStockRecommendationPipeline(unittest.TestCase):
 
         def fake_mapper(hotspots, **kwargs):
             mapper_inputs.append((hotspots, list(kwargs["rows"])))
-            return {"hotspots": [{"theme": "Theme", "industries": ["Tech"], "status": "confirmed"}], "rows": [{"code": "000003", "name": "Stock-000003", "hotspot_themes": ["Theme"]}]}
+            return {
+                "hotspots": [{"theme": "Theme", "industries": ["Tech"], "status": "confirmed"}],
+                "rows": [{"code": "000003", "name": "Stock-000003", "hotspot_themes": ["Theme"]}],
+                "candidate_mappings": {
+                    "000002": {
+                        "matched_themes": ["Theme"],
+                        "matched_industries": ["Tech"],
+                        "evidence_refs": ["m1", "m2"],
+                        "mapping_sources": ["focus_universe"],
+                        "match_level": "direct",
+                        "matches": [{
+                            "status": "early_signal",
+                            "direction": "positive",
+                            "evidence_refs": ["m1", "m2"],
+                            "independent_source_count": 2,
+                        }],
+                    }
+                },
+            }
 
         def fake_review(candidates, **kwargs):
             event_inputs.append(list(candidates))
@@ -910,6 +1172,9 @@ class TestStockRecommendationPipeline(unittest.TestCase):
             "ah_recommendation_system.backend.stock_recommend.run.review_candidate_events", side_effect=fake_review
         ), patch("ah_recommendation_system.backend.stock_recommend.run.persist_snapshot"), patch(
             "ah_recommendation_system.backend.stock_recommend.run._enrich_with_daily_features", return_value=0
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.collect_candidate_fund_history",
+            return_value=[],
         ), patch("ah_recommendation_system.backend.stock_recommend.run.save_report", return_value={}), patch(
             "ah_recommendation_system.backend.stock_recommend.run.HithinkClient"
         ) as hithink, patch(
@@ -920,8 +1185,9 @@ class TestStockRecommendationPipeline(unittest.TestCase):
             result = run_pipeline(mock=False, top_n_pick=1, push=False)
 
         self.assertEqual(build.call_count, 2)  # provisional ranking, then same-pool evidence rerank
-        self.assertTrue(scan_focus_inputs and scan_focus_inputs[0])
-        self.assertIn("科技", scan_focus_inputs[0])
+        self.assertTrue(scan_focus_inputs)
+        # A missing full-market catalog is a data gap, not a silent static-theme fallback.
+        self.assertEqual(scan_focus_inputs[0], {})
         self.assertEqual(len(hotspot_inputs), 1)
         self.assertEqual(len(hotspot_inputs[0]), 2)
         self.assertEqual(len(mapper_inputs[0][1]), 1)
@@ -948,6 +1214,171 @@ class TestStockRecommendationPipeline(unittest.TestCase):
         self.assertNotIn("观察池", rendered)
         self.assertNotIn("不应推送的观察股", rendered)
 
+    def test_pre_market_uses_previous_close_full_market_instead_of_focused_fallback(self):
+        from ah_recommendation_system.backend.stock_recommend.data_collector import CollectedSnapshot
+        from ah_recommendation_system.backend.stock_recommend.run import run_pipeline
+
+        empty = CollectedSnapshot(
+            date="2026-09-15",
+            fundamental={"rows": [], "count": 0, "universe_size": 0},
+            capital={"rows": []},
+            events={"stock_news": []},
+            errors=["fundamental:timeout_pending:soft_timeout"],
+        )
+        focused = CollectedSnapshot(
+            date="2026-09-15",
+            fundamental={
+                "rows": [{"code": "000001", "name": "平安银行", "price": 10, "pe": None, "source": "focused_tencent_quotes"}],
+                "count": 1,
+                "universe_size": 1,
+                "source": "focused_tencent_quotes",
+            },
+            capital={"rows": []},
+            events={},
+            errors=[],
+        )
+        previous_close = [
+            {
+                "code": "600036",
+                "name": "招商银行",
+                "price": 41.6,
+                "pe": 6.9,
+                "change_pct": 0.5,
+                "source": "previous_close",
+                "original_source": "hithink_financial_api",
+                "stale": False,
+            }
+        ] * 1
+        previous_close = [
+            {
+                "code": str(600000 + i).zfill(6),
+                "name": f"股票{i}",
+                "price": 10 + i * 0.01,
+                "pe": 12.0,
+                "pb": 1.2,
+                "change_pct": 0.2,
+                "amount": 200_000_000,
+                "market_cap": 20_000_000_000,
+                "source": "previous_close",
+                "original_source": "hithink_financial_api",
+                "stale": False,
+            }
+            for i in range(1200)
+        ]
+        previous_close[0].update({"code": "600036", "name": "招商银行", "price": 41.6, "pe": 6.9})
+        with patch("ah_recommendation_system.backend.stock_recommend.run.collect_all", return_value=empty), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.collect_focused_market",
+            return_value=focused,
+        ) as focused_call, patch(
+            "ah_recommendation_system.backend.stock_recommend.run.load_previous_close_snapshot",
+            return_value=previous_close,
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.DEFAULT_COLLECTION_RUNTIME.reclaim",
+            return_value=type("R", (), {"status": "timeout_pending", "value": None, "error": "still pending"})(),
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.data_collector.collect_events",
+            return_value={"macro_news": {}, "stock_news": [], "provider_health": {}},
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run._enrich_with_daily_features",
+            return_value=30,
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.analyze_hotspots",
+            return_value={"status": "disabled", "hotspots": []},
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.review_candidate_events",
+            return_value={"status": "disabled", "reviews": {}},
+        ), patch("ah_recommendation_system.backend.stock_recommend.run.persist_snapshot"), patch(
+            "ah_recommendation_system.backend.etf_sector.etf_sector_report.generate_etf_sector_block",
+            return_value={},
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.save_report",
+            return_value={},
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.HithinkClient"
+        ) as hithink:
+            hithink.return_value.enabled = False
+            hithink.return_value.probe.return_value = {"available": False, "capabilities": {}}
+            result = run_pipeline(mock=False, push=False)
+
+        self.assertEqual(result["report"]["coverage"]["mode"], "full_market")
+        self.assertEqual(result["report"]["coverage"]["source"], "previous_close")
+        self.assertGreaterEqual(result["report"]["coverage"]["scanned_count"], 1000)
+        self.assertNotEqual(result["report"]["coverage"]["mode"], "focused_fallback")
+        focused_call.assert_not_called()
+
+    def test_pre_market_at_0806_skips_live_full_market_when_previous_close_exists(self):
+        from datetime import datetime
+        from ah_recommendation_system.backend.stock_recommend.data_collector import CollectedSnapshot
+        from ah_recommendation_system.backend.stock_recommend.run import run_pipeline
+
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2026, 9, 16, 8, 6, 0)
+
+        previous_close = [
+            {
+                "code": str(600000 + i).zfill(6),
+                "name": f"stock{i}",
+                "price": 10 + i * 0.01,
+                "pe": 12.0,
+                "pb": 1.2,
+                "change_pct": 0.2,
+                "amount": 200_000_000,
+                "market_cap": 20_000_000_000,
+                "source": "previous_close",
+                "original_source": "hithink_financial_api",
+                "stale": False,
+            }
+            for i in range(1200)
+        ]
+        news_only = CollectedSnapshot(
+            date="2026-09-16",
+            fundamental={"rows": [], "count": 0, "universe_size": 0},
+            capital={"rows": []},
+            events={"stock_news": []},
+            errors=[],
+        )
+        with patch("ah_recommendation_system.backend.stock_recommend.run.datetime", FrozenDateTime), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.collect_all",
+            return_value=news_only,
+        ) as collect_all, patch(
+            "ah_recommendation_system.backend.stock_recommend.run.collect_focused_market",
+        ) as focused_call, patch(
+            "ah_recommendation_system.backend.stock_recommend.run.load_previous_close_snapshot",
+            return_value=previous_close,
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.data_collector.collect_events",
+            return_value={"macro_news": {}, "stock_news": [], "provider_health": {}},
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run._enrich_with_daily_features",
+            return_value=30,
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.analyze_hotspots",
+            return_value={"status": "disabled", "hotspots": []},
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.review_candidate_events",
+            return_value={"status": "disabled", "reviews": {}},
+        ), patch("ah_recommendation_system.backend.stock_recommend.run.persist_snapshot") as persist, patch(
+            "ah_recommendation_system.backend.etf_sector.etf_sector_report.generate_etf_sector_block",
+            return_value={},
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.save_report",
+            return_value={},
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.HithinkClient"
+        ) as hithink:
+            hithink.return_value.enabled = False
+            hithink.return_value.probe.return_value = {"available": False, "capabilities": {}}
+            result = run_pipeline(mock=False, push=False)
+
+        collect_all.assert_called_once()
+        self.assertEqual(collect_all.call_args.kwargs.get("include_fundamental"), False)
+        persist.assert_not_called()
+        focused_call.assert_not_called()
+        self.assertEqual(result["report"]["coverage"]["source"], "previous_close")
+        self.assertEqual(result["report"]["coverage"]["quote_basis"], "previous_close")
+        self.assertGreaterEqual(result["report"]["coverage"]["scanned_count"], 1000)
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,67 @@ from unittest.mock import patch
 
 
 class TestDataSourceRouter(unittest.TestCase):
+    def test_retryable_provider_error_is_retried_and_attempts_are_reported(self):
+        from ah_recommendation_system.backend.stock_recommend.data_source_router import DataSourceRouter
+
+        calls = []
+
+        def provider(*args):
+            calls.append(1)
+            if len(calls) < 2:
+                raise TimeoutError("upstream timeout")
+            return [{"date": "2026-09-08", "close": 10}]
+
+        router = DataSourceRouter(
+            providers={"primary": provider}, order={"history": ["primary"]},
+            retry_attempts=2, retry_delays=(0,)
+        )
+        result = router.fetch_history("000001", "20260101", "20260908")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(result.attempts, 2)
+        self.assertEqual(result.error_kind, None)
+        self.assertEqual(router.health()["primary"]["last_status"], "ok")
+
+    def test_auth_error_is_not_retried_and_is_classified(self):
+        from ah_recommendation_system.backend.stock_recommend.data_source_router import DataSourceRouter
+
+        calls = []
+        def provider(*args):
+            calls.append(1)
+            raise RuntimeError("Baidu Cookie required")
+
+        router = DataSourceRouter(
+            providers={"primary": provider}, order={"history": ["primary"]},
+            retry_attempts=3, retry_delays=(0, 0)
+        )
+        result = router.fetch_history("000001", "20260101", "20260908")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result.error_kind, "auth_or_cookie")
+        self.assertEqual(router.health()["primary"]["last_error_kind"], "auth_or_cookie")
+
+    def test_recent_cache_is_used_after_all_providers_fail_with_finite_age(self):
+        from ah_recommendation_system.backend.stock_recommend.data_source_router import DataSourceRouter
+
+        state = {"ok": True}
+        def provider(*args):
+            if state["ok"]:
+                return [{"date": "2026-09-08", "close": 10}]
+            raise ConnectionError("network down")
+
+        router = DataSourceRouter(
+            providers={"primary": provider}, order={"history": ["primary"]},
+            retry_attempts=1, cache_ttl_seconds=60, stale_cache_ttl_seconds=300,
+        )
+        first = router.fetch_history("000001", "20260101", "20260908")
+        self.assertTrue(first.fresh)
+        state["ok"] = False
+        # force the provider call instead of the fresh cache
+        router.cache_ttl_seconds = 0
+        stale = router.fetch_history("000001", "20260101", "20260908")
+        self.assertFalse(stale.fresh)
+        self.assertEqual(stale.source, "cache:primary")
+        self.assertIsNotNone(stale.cache_age_seconds)
+        self.assertEqual(stale.error_kind, "connection")
     def test_circuit_opens_after_consecutive_failures_and_skips_calls(self):
         from ah_recommendation_system.backend.stock_recommend.data_source_router import CircuitBreaker
 
@@ -110,7 +171,7 @@ class TestDataSourceRouter(unittest.TestCase):
         ) as hithink:
             hithink.return_value.enabled = False
             hithink.return_value.probe.return_value = {"available": True, "capabilities": {"snapshot": True}}
-            run.run_pipeline(mock=False, push=False)
+            run.run_pipeline(mock=False, push=False, prefer_previous_close=False)
 
         self.assertEqual(order[:2], ["prefetch", "collect"])
 

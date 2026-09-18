@@ -70,6 +70,7 @@ def build_market_decision(
     coverage: Optional[Mapping[str, Any]] = None,
     cross_market: Optional[Mapping[str, Any]] = None,
     previous_medium_term: Optional[str] = None,
+    market_regime: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build a deterministic market decision from verified evidence."""
     signals = [dict(item) for item in (market_signals or []) if isinstance(item, Mapping)]
@@ -111,9 +112,20 @@ def build_market_decision(
     else:
         regime, label, status = "defense", "防守", "降级观察"
 
-    if score >= 65:
+    benchmark = dict(market_regime or {})
+    benchmark_regime = str(benchmark.get("regime") or "").lower()
+    if benchmark.get("status") == "available" and benchmark_regime in {"offense", "balanced", "defense"}:
+        regime = benchmark_regime
+        if regime == "defense":
+            label, status = "防守", "降级观察"
+        elif regime == "offense":
+            label, status = "结构性进攻", "有效"
+        else:
+            label, status = "震荡等待确认", "需确认"
+
+    if regime == "offense":
         position_guidance = "进攻仓位 60%-80%；主线确认后分批加仓，跌破失效位减仓"
-    elif score >= 45:
+    elif regime == "balanced":
         position_guidance = "均衡仓位 40%-60%；仅在触发条件确认后加仓，未确认不追涨"
     else:
         position_guidance = "轻仓 20%-30%；不主动加仓，等待市场修复后再提高仓位"
@@ -134,12 +146,17 @@ def build_market_decision(
             ranked_themes.append(theme)
 
     primary = ranked_themes[0] if ranked_themes else "暂无价格确认主线"
-    primary_status = "有效" if ranked_themes and positive_signals and score >= 65 else "需确认"
-    primary_action = (
-        "回踩确认后参与，不追无量高开"
-        if primary_status == "有效"
-        else "等待开盘后价格、成交和宽度确认"
+    primary_status = (
+        "有效"
+        if ranked_themes and positive_signals and score >= 65 and regime == "offense"
+        else "需确认"
     )
+    if regime == "defense" and ranked_themes:
+        primary_action = "主题存在，等待指数确认"
+    elif primary_status == "有效":
+        primary_action = "回踩确认后参与，不追无量高开"
+    else:
+        primary_action = "等待开盘后价格、成交和宽度确认"
     primary_evidence = [
         f"行业盘面正向信号{len(positive_signals)}项",
         f"已交叉验证热点{len(confirmed_hotspots)}项",

@@ -16,6 +16,7 @@ from loguru import logger
 
 from ah_recommendation_system.backend.stock_recommend.data_collector import CollectedSnapshot
 from ah_recommendation_system.backend.stock_recommend.data_source_router import parse_sina_quotes
+from ah_recommendation_system.backend.stock_recommend.local_store import quote_date_from_value
 
 
 DEFAULT_FOCUS_UNIVERSE: Dict[str, List[Dict[str, str]]] = {
@@ -64,11 +65,126 @@ DEFAULT_FOCUS_UNIVERSE: Dict[str, List[Dict[str, str]]] = {
         {"code": "600584", "name": "长电科技"},
         {"code": "603501", "name": "韦尔股份"},
     ],
+    "玻纤": [
+        {"code": "600176", "name": "中国巨石"},
+    ],
+    "电子布": [
+        {"code": "600176", "name": "中国巨石"},
+    ],
     "人形机器人": [
         {"code": "002050", "name": "三花智控"},
         {"code": "002008", "name": "大族激光"},
     ],
 }
+
+
+
+def attach_industry_tags(
+    rows: Iterable[Dict[str, Any]],
+    focus_universe: Mapping[str, Iterable[Mapping[str, Any]]] | None = None,
+) -> List[Dict[str, Any]]:
+    """Copy exact industry membership onto quote rows without inventing aliases."""
+    memberships: Dict[str, List[str]] = {}
+    for industry, members in (focus_universe or {}).items():
+        label = str(industry or "").strip()
+        if not label:
+            continue
+        for member in members or []:
+            code = str((member or {}).get("code") or "").zfill(6)
+            if len(code) == 6:
+                bucket = memberships.setdefault(code, [])
+                if label not in bucket:
+                    bucket.append(label)
+    tagged: List[Dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        code = str(item.get("code") or "").zfill(6)
+        industries = list(item.get("focus_industries") or item.get("industries") or [])
+        for label in memberships.get(code, []):
+            if label not in industries:
+                industries.append(label)
+        if industries:
+            item["focus_industries"] = industries
+            item["industries"] = industries
+            if not str(item.get("industry") or "").strip():
+                item["industry"] = industries[0]
+        tagged.append(item)
+    return tagged
+
+
+def industry_tag_coverage(rows) -> float:
+    """Share of snapshot rows that already carry an explicit industry tag."""
+    items = list(rows or [])
+    if not items:
+        return 0.0
+    tagged = 0
+    for row in items:
+        labels = list(row.get("focus_industries") or row.get("industries") or [])
+        if not labels and row.get("industry"):
+            labels = [row.get("industry")]
+        if any(str(item or "").strip() for item in labels):
+            tagged += 1
+    return tagged / len(items)
+
+
+def _normalize_industry_universe(raw) -> Dict[str, List[Dict[str, str]]]:
+    if not isinstance(raw, Mapping):
+        return {}
+    result: Dict[str, List[Dict[str, str]]] = {}
+    for industry, members in raw.items():
+        label = str(industry or "").strip()
+        if not label or not isinstance(members, Iterable) or isinstance(members, (str, bytes)):
+            continue
+        cleaned: List[Dict[str, str]] = []
+        seen = set()
+        for member in members:
+            if not isinstance(member, Mapping):
+                continue
+            code = str(member.get("code") or "").zfill(6)
+            if len(code) != 6 or code in seen:
+                continue
+            seen.add(code)
+            cleaned.append({"code": code, "name": str(member.get("name") or code)})
+        if cleaned:
+            result[label] = cleaned
+    return result
+
+
+def resolve_industry_universe(
+    *,
+    fetch_live,
+    store_root,
+    as_of: str,
+    errors: List[str] | None = None,
+    prefer_cache: bool = False,
+) -> Dict[str, List[Dict[str, str]]]:
+    """Prefer a full-market industry catalog; never silently fall back to the tiny static map."""
+    from ah_recommendation_system.backend.stock_recommend.local_store import (
+        load_industry_universe,
+        persist_industry_universe,
+    )
+
+    notes = errors if errors is not None else []
+    cached = _normalize_industry_universe(load_industry_universe(store_root, as_of=as_of))
+    if prefer_cache:
+        if cached:
+            notes.append("industry_universe:cached")
+            return cached
+        notes.append("industry_universe:unavailable")
+        return {}
+    try:
+        live = _normalize_industry_universe(fetch_live())
+        if live:
+            persist_industry_universe(live, store_root, as_of=as_of)
+            return live
+        notes.append("industry_universe:empty_live")
+    except Exception as exc:
+        notes.append(f"industry_universe_live:{type(exc).__name__}")
+    if cached:
+        notes.append("industry_universe:cached")
+        return cached
+    notes.append("industry_universe:unavailable")
+    return {}
 
 
 def _quote_tencent(codes: Sequence[str], *, batch_size: int = 50) -> List[Dict[str, Any]]:
@@ -89,6 +205,19 @@ def _quote_tencent(codes: Sequence[str], *, batch_size: int = 50) -> List[Dict[s
             if len(parts) < 38:
                 continue
             try:
+                def _optional_float(index: int):
+                    if index >= len(parts):
+                        return None
+                    raw_value = str(parts[index] or "").strip()
+                    if not raw_value or raw_value in {"-", "--"}:
+                        return None
+                    number = float(raw_value)
+                    return None if number == 0 else number
+
+                pe = _optional_float(39)
+                pb = _optional_float(46)
+                market_cap_yi = _optional_float(44)
+                float_cap_yi = _optional_float(45)
                 rows.append(
                     {
                         "code": parts[2].zfill(6),
@@ -98,7 +227,14 @@ def _quote_tencent(codes: Sequence[str], *, batch_size: int = 50) -> List[Dict[s
                         "volume": float(parts[6] or 0),
                         "amount": float(parts[37] or 0),
                         "quote_time": parts[30],
+                        "quote_date": quote_date_from_value(parts[30]),
                         "quote_source": "tencent",
+                        "pe": pe,
+                        "pb": pb,
+                        "market_cap": None if market_cap_yi is None else round(market_cap_yi * 1e8),
+                        "float_cap": None if float_cap_yi is None else round(float_cap_yi * 1e8),
+                        "pe_kind": "dynamic" if pe is not None else None,
+                        "pe_source": "tencent" if pe is not None else None,
                     }
                 )
             except (TypeError, ValueError):
@@ -213,9 +349,19 @@ def build_focused_snapshot(
             row["candidate_sources"].append(source)
         row["lhb_net_buy"] = item.get("net_buy") or item.get("净额")
     requested_count = len(by_code)
-    quoted = {str(row.get("code") or "").zfill(6): row for row in quote_fetcher(list(by_code))}
+    quoted_rows = list(quote_fetcher(list(by_code)))
+    quoted = {str(row.get("code") or "").zfill(6): row for row in quoted_rows}
+    observed_dates = [
+        parsed
+        for row in quoted_rows
+        for parsed in [quote_date_from_value(row.get("price_as_of") or row.get("quote_date") or row.get("price_date") or row.get("quote_time"))]
+        if parsed
+    ]
+    price_as_of = max(observed_dates) if observed_dates and len(set(observed_dates)) == 1 else None
     for code, row in by_code.items():
         row.update(quoted.get(code) or {})
+        if price_as_of and not any(row.get(key) for key in ("price_as_of", "quote_date", "price_date")):
+            row["price_as_of"] = price_as_of
     rows = [row for row in by_code.values() if _number(row.get("price")) > 0]
     errors = [] if rows else ["focused_quotes_unavailable"]
     quote_source = next(
@@ -228,9 +374,10 @@ def build_focused_snapshot(
         cross_market = collect_cross_market()
     except Exception as exc:
         errors.append(f"cross_market:{type(exc).__name__}")
+    snapshot_date = price_as_of or None
     return CollectedSnapshot(
-        date=datetime.now().strftime("%Y-%m-%d"),
-        fundamental={"generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "source": f"focused_{quote_source}_quotes", "rows": rows, "count": len(rows), "universe_size": requested_count, "requested_count": requested_count},
+        date=snapshot_date or datetime.now().strftime("%Y-%m-%d"),
+        fundamental={"generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "source": f"focused_{quote_source}_quotes", "rows": rows, "count": len(rows), "universe_size": requested_count, "requested_count": requested_count, "price_as_of": price_as_of},
         capital={
             "source": "sina_lhb",
             "rows": [

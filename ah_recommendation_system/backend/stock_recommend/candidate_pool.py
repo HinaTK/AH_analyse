@@ -24,6 +24,7 @@ from ah_recommendation_system.backend.stock_recommend.quality_factors import ass
 from ah_recommendation_system.backend.stock_recommend.data_collector import (
     CollectedSnapshot,
 )
+from ah_recommendation_system.backend.stock_recommend.local_store import quote_date_from_value
 
 
 DEFAULT_WEIGHTS = {
@@ -39,6 +40,14 @@ DEFAULT_WEIGHTS = {
 EXCLUDE_NAME_PATTERNS = ("ST", "退", "暂停", "B股")
 
 
+def _date_value(*values: Any) -> Optional[str]:
+    for value in values:
+        parsed = quote_date_from_value(value)
+        if parsed:
+            return parsed
+    return None
+
+
 @dataclass
 class Candidate:
     code: str
@@ -50,6 +59,8 @@ class Candidate:
     market_cap: Optional[float] = None
     change_pct: Optional[float] = None
     change_60d_pct: Optional[float] = None
+    return_20d_pct: Optional[float] = None
+    drawdown_from_60d_high_pct: Optional[float] = None
     main_net: Optional[float] = None
     fundamental_score: float = 0.0
     capital_score: float = 0.0
@@ -76,8 +87,67 @@ class Candidate:
     llm_risks: List[str] = field(default_factory=list)
     llm_evidence_refs: List[str] = field(default_factory=list)
     hotspot_themes: List[str] = field(default_factory=list)
+    hotspot_score: float = 0.0
+    hotspot_evidence: List[str] = field(default_factory=list)
+    hotspot_industries: List[str] = field(default_factory=list)
+    hotspot_match_level: str = "none"
+    hotspot_mapping_sources: List[str] = field(default_factory=list)
+    hotspot_matches: List[Dict[str, Any]] = field(default_factory=list)
+    hotspot_mapping_verified: bool = False
     quality_evidence: Dict[str, Any] = field(default_factory=dict)
 
+
+
+def _turnover_pct(amount: Optional[float], market_cap: Optional[float]) -> Optional[float]:
+    if amount is None or market_cap is None or market_cap <= 0:
+        return None
+    return amount / market_cap * 100.0
+
+
+def _relative_capital_score(
+    *,
+    main_net: Optional[float],
+    amount: Optional[float],
+    market_cap: Optional[float],
+    main_net_5d: Optional[float] = None,
+) -> float:
+    if main_net is None:
+        return 0.0
+    flow = main_net_5d if main_net_5d is not None else main_net
+    share_of_amount = (flow / amount) if amount and amount > 0 else None
+    share_of_cap = (flow / market_cap) if market_cap and market_cap > 0 else None
+    if share_of_amount is not None:
+        amount_score = max(0.0, min(1.0, 0.5 + share_of_amount / 0.4))
+    else:
+        amount_score = max(0.0, min(1.0, (flow / 300_000_000 + 1.0) / 2.0))
+    if share_of_cap is not None:
+        cap_score = max(0.0, min(1.0, 0.5 + share_of_cap / 0.02))
+        return 0.65 * amount_score + 0.35 * cap_score
+    return amount_score
+
+
+def _path_adjusted_trend(chg60: Optional[float], return_20d: Optional[float], drawdown_60d: Optional[float], base: Optional[float] = None) -> float:
+    if chg60 is None and base is None:
+        return 0.0
+    trend = base if base is not None else max(0.0, min(1.0, ((chg60 or 0.0) + 30.0) / 60.0))
+    if return_20d is not None and return_20d < 0:
+        trend = min(trend, 0.55)
+        trend -= min(0.15, abs(return_20d) / 100.0)
+    if drawdown_60d is not None and drawdown_60d <= -8:
+        trend = min(trend, 0.6)
+        trend -= min(0.2, (abs(drawdown_60d) - 8.0) / 50.0)
+    return max(0.0, min(1.0, trend))
+
+
+def _path_adjusted_relative_strength(relative_excess: Optional[float], return_20d: Optional[float], drawdown_60d: Optional[float]) -> float:
+    if relative_excess is None:
+        return 0.0
+    score = max(0.0, min(1.0, 0.5 + relative_excess / 40.0))
+    if return_20d is not None and return_20d < 0:
+        score = min(score, 0.55)
+    if drawdown_60d is not None and drawdown_60d <= -8:
+        score = min(score, 0.6)
+    return score
 
 def _safe_float(x: Any) -> Optional[float]:
     try:
@@ -174,6 +244,10 @@ def build_candidates(
         for key in ("name", "source"):
             if r.get(key) and not existing.get(key):
                 existing[key] = r[key]
+        for key in ("main_net_5d", "positive_days_5d", "capital_days"):
+            value = _safe_float(r.get(key))
+            if value is not None:
+                existing[key] = value
 
     cands: List[Candidate] = []
     for code, r in fund_map.items():
@@ -184,18 +258,22 @@ def build_candidates(
         price = _safe_float(r.get("price"))
         chg = _safe_float(r.get("change_pct"))
         chg60 = _safe_float(r.get("change_60d_pct"))
+        return_20d = _safe_float(r.get("return_20d_pct"))
+        drawdown_60d = _safe_float(r.get("drawdown_from_60d_high_pct"))
         main_net = _safe_float((cap_map.get(code) or {}).get("main_net"))
 
         c = Candidate(
             code=code,
             name=name,
             price=price,
-            price_as_of=str(r.get("price_as_of") or r.get("quote_date") or r.get("date") or snapshot.date or "")[:10] or None,
+            price_as_of=_date_value(r.get("price_as_of"), r.get("quote_date"), r.get("price_date")),
             pe=pe,
             pb=pb,
             market_cap=mc,
             change_pct=chg,
             change_60d_pct=chg60,
+            return_20d_pct=return_20d,
+            drawdown_from_60d_high_pct=drawdown_60d,
             main_net=main_net,
             candidate_sources=list(r.get("candidate_sources") or []),
             focus_industries=list(r.get("focus_industries") or []),
@@ -235,40 +313,72 @@ def build_candidates(
         if chg60 is not None and chg60 > 0:
             c.reasons.append(f"60 日动量 {chg60:+.1f}%")
 
-        # capital: 主力净流入
+        amount = _safe_float(r.get("amount"))
+        volume_ratio = _safe_float(r.get("volume_ratio") or r.get("volume_ratio_20d"))
+        turnover = _turnover_pct(amount, mc)
+        cap_row = cap_map.get(code) or {}
+        main_net_5d = _safe_float(cap_row.get("main_net_5d"))
+        positive_days_5d = _safe_float(cap_row.get("positive_days_5d"))
+        capital_days = _safe_float(cap_row.get("capital_days"))
+
+        # capital: relative net flow, not raw yesterday yuan.
         if main_net is not None:
-            # 1 亿=1e8 算 1.0；负值扣分
-            score = max(-0.3, min(0.3, main_net / 1e8)) / 0.3 * 0.5 + 0.5
-            c.capital_score = round(score, 4)
+            c.capital_score = round(_relative_capital_score(
+                main_net=main_net, amount=amount, market_cap=mc, main_net_5d=main_net_5d,
+            ), 4)
             if main_net > 1e7:
                 c.reasons.append(f"主力净流入 {main_net/1e8:+.2f} 亿")
         else:
             c.capital_score = 0.0
+        if turnover is not None and mc is not None and mc >= 100_000_000_000 and turnover < 1.0:
+            c.reasons.append(f"低换手 {turnover:.2f}%")
 
         # Build auditable evidence dimensions. Missing values remain missing.
         if chg60 is not None:
-            if chg60 > 0:
+            trend_bits = [f"60日动量 {chg60:+.1f}%"]
+            if return_20d is not None:
+                trend_bits.append(f"近20日 {return_20d:+.1f}%")
+            if drawdown_60d is not None:
+                trend_bits.append(f"距60日高点 {drawdown_60d:+.1f}%")
+            trend_ok = chg60 > 0 and (return_20d is None or return_20d >= 0) and (drawdown_60d is None or drawdown_60d > -8)
+            if trend_ok:
                 c.valid_dimensions.add("trend")
-            c.evidence.append({"factor": "trend", "statement": f"60日动量 {chg60:+.1f}%", "value": chg60, "source": r.get("source") or "snapshot", "as_of": snapshot.date, "supports": chg60 > 0, "falsifier": "60日动量转负或跌破MA60"})
+            c.evidence.append({"factor": "trend", "statement": "，".join(trend_bits), "value": chg60, "source": r.get("source") or "snapshot", "as_of": _date_value(r.get("trend_as_of"), r.get("price_as_of"), r.get("quote_date")), "supports": trend_ok, "falsifier": "近20日转负或距60日高点回撤超过8%"})
         if main_net is not None:
             if main_net > 0:
                 c.valid_dimensions.add("capital")
-            c.evidence.append({"factor": "capital", "statement": f"主力净流入 {main_net / 1e8:+.2f}亿", "value": main_net, "source": "capital", "as_of": snapshot.date, "supports": main_net > 0, "falsifier": "主力资金连续转为净流出"})
+            capital_bits = [f"主力净流入 {main_net / 1e8:+.2f}亿"]
+            if amount is not None and amount > 0:
+                capital_bits.append(f"占成交 {main_net / amount * 100:.1f}%")
+            if main_net_5d is not None:
+                capital_bits.append(f"5日净流入 {main_net_5d / 1e8:+.2f}亿")
+                if positive_days_5d is not None:
+                    capital_bits.append(f"5日{int(positive_days_5d)}日为正")
+            can_label_accumulation = (
+                main_net_5d is not None
+                and (capital_days or 0) >= 5
+                and (positive_days_5d or 0) >= 3
+                and (main_net_5d or 0) > 0
+                and r.get("new_high_20d") is not True
+            )
+            capital_bits.append("疑似吸筹" if can_label_accumulation else "无法判断吸筹")
+            c.evidence.append({"factor": "capital", "statement": "，".join(capital_bits), "value": main_net_5d if main_net_5d is not None else main_net, "source": "capital", "as_of": _date_value(r.get("capital_as_of"), r.get("flow_as_of")), "supports": main_net > 0, "falsifier": "主力资金连续转为净流出"})
         else:
-            c.evidence.append({"factor": "capital", "statement": "资金流数据缺失，资金分未评估", "value": None, "source": "capital_unavailable", "as_of": snapshot.date, "supports": False, "falsifier": "资金流数据恢复后可重新评估"})
+            c.evidence.append({"factor": "capital", "statement": "资金流数据缺失，资金分未评估", "value": None, "source": "capital_unavailable", "as_of": None, "supports": False, "falsifier": "资金流数据恢复后可重新评估"})
         if pe is not None and pe > 0:
             if pe <= max_pe:
                 c.valid_dimensions.add("value")
-            c.evidence.append({"factor": "value", "statement": f"PE {pe:.1f}", "value": pe, "source": r.get("source") or "snapshot", "as_of": snapshot.date, "supports": pe <= max_pe, "falsifier": "估值升至筛选上限或盈利预期下修"})
-        amount = _safe_float(r.get("amount"))
-        volume_ratio = _safe_float(r.get("volume_ratio") or r.get("volume_ratio_20d"))
+            c.evidence.append({"factor": "value", "statement": f"PE {pe:.1f}", "value": pe, "source": r.get("source") or "snapshot", "as_of": _date_value(r.get("valuation_as_of")), "supports": pe <= max_pe, "falsifier": "估值升至筛选上限或盈利预期下修"})
         # A completed daily bar is the liquidity reference during pre-market;
         # a ratio around 0.8 still represents normal tradability and should
         # not be rejected as if it were an illiquid security. Stronger
         # expansion remains a separate scanner tag (>=1.5).
         if amount is not None and amount >= 100_000_000 and (volume_ratio is None or volume_ratio >= 0.8):
             c.valid_dimensions.add("price_volume")
-            c.evidence.append({"factor": "price_volume", "statement": f"成交额 {amount / 1e8:.2f}亿", "value": amount, "source": r.get("source") or "snapshot", "as_of": snapshot.date, "supports": amount >= 100_000_000, "falsifier": "成交额跌破1亿或量价背离"})
+            pv_bits = [f"成交额 {amount / 1e8:.2f}亿"]
+            if turnover is not None:
+                pv_bits.append(f"换手 {turnover:.2f}%")
+            c.evidence.append({"factor": "price_volume", "statement": "，".join(pv_bits), "value": amount, "source": r.get("source") or "snapshot", "as_of": _date_value(r.get("amount_as_of"), c.price_as_of), "supports": amount >= 100_000_000, "falsifier": "成交额跌破1亿或量价背离"})
         # Own-price momentum is already in trend. Relative strength needs an
         # independently aligned benchmark return, never a second copy of it.
         relative_excess = _safe_float(r.get("benchmark_excess_60d_pct"))
@@ -282,7 +392,7 @@ def build_candidates(
                 c.valid_dimensions.add("relative_strength")
             c.evidence.append({"factor": "relative_strength", "value": relative_excess,
                                "statement": f"60日相对基准超额 {relative_excess:+.2f}%",
-                               "source": r["benchmark_source"], "as_of": snapshot.date,
+                               "source": r["benchmark_source"], "as_of": _date_value(r.get("benchmark_end")),
                                "supports": relative_excess > 0, "falsifier": "相对基准超额转负"})
         c.data_quality = round(len(c.valid_dimensions) / 5.0, 3)
         c.quality_grade = "A" if len(c.valid_dimensions) >= 4 else "B" if len(c.valid_dimensions) >= 3 else "C"
@@ -316,7 +426,7 @@ def build_candidates(
             # supplier.  Treat an item as this company's catalyst only when
             # the title/explicit subject identifies the candidate.
             title = str(news.get("title") or "")
-            subject = " ".join(str(news.get(k) or "") for k in ("subject", "stock_code", "symbol"))
+            subject = " ".join(str(news.get(k) or "") for k in ("subject", "stock_code", "symbol", "code"))
             title_hit = bool(code and code in title) or bool(name and name in title)
             subject_hit = bool(subject and ((code and code in subject) or (name and name in subject)))
             if not (title_hit or subject_hit):
@@ -324,7 +434,8 @@ def build_candidates(
             p0_negative = any(word in news_text for word in ("立案", "调查", "重大处罚", "财务造假", "退市风险", "重大违约", "业绩暴雷"))
             ordinary_negative = any(word in news_text for word in ("减持", "诉讼", "亏损", "低于预期"))
             negative = p0_negative or ordinary_negative
-            event_score = 0.15 if ordinary_negative and not p0_negative else 0.0 if p0_negative else 0.8
+            major_positive = any(word in news_text for word in (chr(0x7b7e)+chr(0x8ba2), chr(0x91cd)+chr(0x5927)+chr(0x5408)+chr(0x540c), chr(0x4e2d)+chr(0x6807), chr(0x91cd)+chr(0x7ec4), chr(0x5e76)+chr(0x8d2d), chr(0x56de)+chr(0x8d2d), chr(0x589e)+chr(0x6301)))
+            event_score = 0.15 if ordinary_negative and not p0_negative else 0.0 if p0_negative else 1.0 if major_positive else 0.8
             matched_event_scores.append(event_score)
             evidence = {
                 "factor": "event",
@@ -333,7 +444,10 @@ def build_candidates(
                 "value": event_score,
                 "source": news.get("source") or "news",
                 "url": news.get("url"),
-                "as_of": news.get("published_at") or snapshot.date,
+                # Do not manufacture a news date from the report date. An
+                # undated item may still affect the broad candidate score, but
+                # cannot independently verify a current observation.
+                "as_of": _date_value(news.get("published_at"), news.get("date")),
                 "supports": not negative,
                 "falsifier": "后续公告澄清或催化失效",
             }
@@ -364,9 +478,12 @@ def build_candidates(
             trend_factor = min(1.0, trend_factor + 0.1)
         if r.get("above_ma60") is True:
             trend_factor = min(1.0, trend_factor + 0.1)
+        trend_factor = _path_adjusted_trend(chg60, return_20d, drawdown_60d, base=trend_factor if chg60 is not None else None)
         liquidity_factor = min(1.0, (amount or 0.0) / 500_000_000)
         if volume_ratio is not None:
             liquidity_factor = min(1.0, liquidity_factor * min(1.0, volume_ratio / 1.5))
+        if turnover is not None and mc is not None and mc >= 100_000_000_000 and turnover < 1.0:
+            liquidity_factor = min(liquidity_factor, 0.6)
         value_factor = max(0.0, min(1.0, 1.0 - (pe or max_pe) / max_pe)) if pe is not None and pe > 0 else 0.0
         industry = str(r.get("industry") or " ".join(c.focus_industries))
         if not industry:
@@ -387,8 +504,10 @@ def build_candidates(
                                "statement": f"财报质量 {quality_score:.2f}，覆盖{c.quality_evidence['metric_count']}/4项",
                                "source": c.quality_evidence["source"], "as_of": c.quality_evidence["published_at"],
                                "supports": quality_score >= .5, "falsifier": "盈利质量或现金转换恶化"})
-        capital_factor = max(0.0, min(1.0, ((main_net or 0.0) / 100_000_000 + 1.0) / 2.0)) if main_net is not None else 0.0
-        relative_factor = max(0.0, min(1.0, .5 + relative_excess / 40)) if relative_excess is not None and r.get("benchmark_source") else 0.0
+        capital_factor = _relative_capital_score(
+            main_net=main_net, amount=amount, market_cap=mc, main_net_5d=main_net_5d,
+        ) if main_net is not None else 0.0
+        relative_factor = _path_adjusted_relative_strength(relative_excess, return_20d, drawdown_60d) if relative_excess is not None and r.get("benchmark_source") else 0.0
         risk_penalty = 0.0
         volatility = _safe_float(r.get("volatility_20d_pct"))
         drawdown = _safe_float(r.get("max_drawdown_pct"))
@@ -416,6 +535,8 @@ def build_candidates(
             + risk_penalty,
             4,
         )
+        if (c.event_score or 0) >= 0.95:
+            c.composite = round(min(1.0, c.composite + 0.05), 4)
         has_focus = "focus_industry" in c.candidate_sources
         has_lhb = bool({"lhb_trader", "lhb_institution"} & set(c.candidate_sources))
         if has_focus and has_lhb:
@@ -475,6 +596,12 @@ def to_dict_list(cands: Iterable[Candidate]) -> List[Dict[str, Any]]:
                 "llm_risks": list(getattr(c, "llm_risks", []) or []),
                 "llm_evidence_refs": list(getattr(c, "llm_evidence_refs", []) or []),
                 "hotspot_themes": list(getattr(c, "hotspot_themes", []) or []),
+                "hotspot_score": round(float(getattr(c, "hotspot_score", 0.0) or 0.0), 4),
+                "hotspot_evidence": list(getattr(c, "hotspot_evidence", []) or []),
+                "hotspot_industries": list(getattr(c, "hotspot_industries", []) or []),
+                "hotspot_match_level": getattr(c, "hotspot_match_level", "none") or "none",
+                "hotspot_mapping_sources": list(getattr(c, "hotspot_mapping_sources", []) or []),
+                "hotspot_mapping_verified": bool(getattr(c, "hotspot_mapping_verified", False)),
             }
         )
     return out
