@@ -1,6 +1,7 @@
 import unittest
 
 from ah_recommendation_system.backend.stock_recommend.quality_gate import evaluate_report_quality
+from ah_recommendation_system.backend.stock_recommend.run import _history_coverage
 
 
 class TestQualityCoverageRegression(unittest.TestCase):
@@ -36,3 +37,18 @@ class TestQualityCoverageRegression(unittest.TestCase):
         self.assertTrue(self.check({"fresh_data_available": True}, "fresh_market_data"))
         self.assertTrue(self.check({"source": "mock"}, "fresh_market_data"))
         self.assertFalse(self.check({"source": "mock", "fresh_data_available": False}, "fresh_market_data"))
+
+    def test_history_coverage_matches_padded_and_unpadded_codes(self):
+        class Cand:
+            def __init__(self, code):
+                self.code = code
+
+        target, complete = _history_coverage(
+            [Cand("1"), Cand("000002")],
+            [
+                {"code": "000001", "history_days": 80},
+                {"code": "2", "history_days": 10},
+            ],
+        )
+        self.assertEqual(target, 2)
+        self.assertEqual(complete, 1)

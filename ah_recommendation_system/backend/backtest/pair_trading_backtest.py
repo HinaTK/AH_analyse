@@ -94,9 +94,12 @@ def _run_backtest_core(
                 if pd.notna(prev_p) and pd.notna(curr_p):
                     day_ret = (pos * float(curr_p - prev_p)) / 100.0
             else:
-                a_ret = float(data.loc[i, "a_ret"]) if not pd.isna(data.loc[i, "a_ret"]) else 0.0
-                h_ret = float(data.loc[i, "h_ret"]) if not pd.isna(data.loc[i, "h_ret"]) else 0.0
-                day_ret = (a_ret - h_ret) if pos == 1 else (-a_ret + h_ret)
+                a_ret = data.loc[i, "a_ret"]
+                h_ret = data.loc[i, "h_ret"]
+                if pd.notna(a_ret) and pd.notna(h_ret):
+                    a_ret_f = float(a_ret)
+                    h_ret_f = float(h_ret)
+                    day_ret = (a_ret_f - h_ret_f) if pos == 1 else (-a_ret_f + h_ret_f)
 
         equity *= (1.0 + day_ret)
 

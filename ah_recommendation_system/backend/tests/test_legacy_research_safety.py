@@ -42,12 +42,28 @@ def strategy_class(filename, name, **extra):
     return scope[name]
 
 
-def frontend_fmt():
+def frontend_fmt_source():
     source = (ROOT / "frontend/index.html").read_text(encoding="utf-8")
     start = source.index("fmt(v) {")
-    end = source.index("},", start)
-    body = source[start + len("fmt(v) ") : end + 1]
-    code = "const fmt = function(v) " + body + "; console.log(JSON.stringify({null:fmt(null), empty:fmt(''), num:fmt(1.5)}))"
+    i = start + len("fmt(v) ")
+    depth = 0
+    for j, ch in enumerate(source[i:], i):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return source[i : j + 1]
+    raise AssertionError("fmt() body not found")
+
+
+def frontend_fmt(body=None):
+    body = body or frontend_fmt_source()
+    code = (
+        "const fmt = function(v) "
+        + body
+        + "; console.log(JSON.stringify({null:fmt(null), empty:fmt(''), num:fmt(1.5)}))"
+    )
     result = subprocess.run(["node", "-e", code], capture_output=True, text=True, encoding="utf-8", check=True)
     return json.loads(result.stdout)
 
@@ -91,6 +107,12 @@ class LegacyResearchSafetyTests(unittest.TestCase):
         self.assertEqual(formatted["null"], "待验证")
         self.assertEqual(formatted["empty"], "待验证")
         self.assertEqual(formatted["num"], "+1.50%")
+
+    def test_frontend_fmt_extracts_nested_object_body(self):
+        nested = "{ if (v === null) { return '待验证' } const n = Number(v); return Number.isFinite(n) ? n.toFixed(2) + '%' : '待验证' }"
+        formatted = frontend_fmt(nested)
+        self.assertEqual(formatted["null"], "待验证")
+        self.assertEqual(formatted["num"], "1.50%")
 
     def test_frontend_no_longer_claims_static_demo_mode(self):
         html = (ROOT / "frontend/index.html").read_text(encoding="utf-8")

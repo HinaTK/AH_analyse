@@ -112,6 +112,24 @@ def market_data_attempted_chain(snap: Any) -> list[str]:
     return [str(source)] if source else []
 
 
+def _pad_code(code: Any) -> str:
+    text = str(code or "").strip()
+    return text.zfill(6) if text.isdigit() else text
+
+
+def _history_coverage(candidates: Any, rows: Any) -> tuple[int, int]:
+    """Count history completeness against the same padded candidate set."""
+    target_codes = {_pad_code(getattr(item, "code", None) or (item or {}).get("code")) for item in (candidates or [])}
+    target_codes.discard("")
+    by_code = {}
+    for row in rows or []:
+        code = _pad_code((row or {}).get("code"))
+        if code:
+            by_code[code] = row
+    complete = sum(1 for code in target_codes if float((by_code.get(code) or {}).get("history_days") or 0) >= 60)
+    return len(target_codes), complete
+
+
 def _backend_root() -> Path:
     return _BACKEND_DIR
 
@@ -1054,7 +1072,7 @@ def run_pipeline(
             "universe_size": int(snap.fundamental.get("universe_size") or snap.fundamental.get("count") or 0),
             "scanned_count": market_scanned_count,
             "candidate_count": len(seeds),
-            "history_target_count": len({str(c.code) for c in cands}),
+            "history_target_count": _history_coverage(cands, snap.fundamental.get("rows") or [])[0],
             "eligible_count": selection.get("eligible_count", 0),
             "mode": coverage_mode,
             "source": snap.fundamental.get("source"),
@@ -1066,22 +1084,7 @@ def run_pipeline(
                     for row in (snap.fundamental.get("rows") or [])
                 ) else "unknown"
             ),
-            "history_count": sum(
-                1
-                for code in {str(c.code) for c in cands}
-                if float(
-                    next(
-                        (
-                            row.get("history_days")
-                            for row in (snap.fundamental.get("rows") or [])
-                            if str(row.get("code") or "") == code
-                        ),
-                        0,
-                    )
-                    or 0
-                )
-                >= 60
-            ),
+            "history_count": _history_coverage(cands, snap.fundamental.get("rows") or [])[1],
             "fresh_data_available": data_available,
             "stale": any(bool(row.get("stale")) for row in (snap.fundamental.get("rows") or [])),
             "sources": [snap.fundamental.get("source")] if snap.fundamental.get("source") else [],

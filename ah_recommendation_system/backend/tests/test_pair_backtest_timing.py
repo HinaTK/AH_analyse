@@ -49,6 +49,18 @@ class TestPairBacktestTiming(unittest.TestCase):
         self.assertAlmostEqual(result["equity_curve"][5]["equity"], 1.01)
         self.assertAlmostEqual(result["metrics"]["total_return_pct"], 1.0)
 
+    def test_missing_price_return_does_not_count_as_zero(self):
+        dates = pd.date_range("2024-01-01", periods=5)
+        a_df = pd.DataFrame({"date": dates, "close": [100.0, 100.0, 90.0, float("nan"), 85.0]})
+        h_df = pd.DataFrame({"date": dates, "close": [100.0, 100.0, 100.0, 105.0, 105.0]})
+        result = run_backtest_from_price_dfs(
+            a_df, h_df, hkd_cny=1.0, lookback=3, entry_z=1.0, exit_z=-1, round_trip_cost_pct=0.0
+        )
+        curve = result["equity_curve"]
+        self.assertAlmostEqual(curve[2]["equity"], 1.0)
+        # Missing A return must not be treated as 0 while H moved +5%.
+        self.assertAlmostEqual(curve[3]["equity"], curve[2]["equity"])
+
 
 if __name__ == "__main__":
     unittest.main()
