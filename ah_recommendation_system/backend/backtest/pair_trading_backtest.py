@@ -83,6 +83,23 @@ def _run_backtest_core(
         dt_str = dt.strftime("%Y-%m-%d")
 
         zi = z.iloc[i]
+
+        # Settle yesterday's position first. Missing z only blocks new trades,
+        # not already-observable returns on a still-held position.
+        day_ret = 0.0
+        if pos != 0 and i > 0:
+            if mode == "premium":
+                prev_p = premium.iloc[i - 1]
+                curr_p = premium.iloc[i]
+                if pd.notna(prev_p) and pd.notna(curr_p):
+                    day_ret = (pos * float(curr_p - prev_p)) / 100.0
+            else:
+                a_ret = float(data.loc[i, "a_ret"]) if not pd.isna(data.loc[i, "a_ret"]) else 0.0
+                h_ret = float(data.loc[i, "h_ret"]) if not pd.isna(data.loc[i, "h_ret"]) else 0.0
+                day_ret = (a_ret - h_ret) if pos == 1 else (-a_ret + h_ret)
+
+        equity *= (1.0 + day_ret)
+
         if pd.isna(zi):
             equity_curve.append({"date": dt_str, "equity": equity})
             continue
@@ -104,41 +121,32 @@ def _run_backtest_core(
             pos = 0
             current_trade = None
 
-        # Entry
+        # Entry. Record equity before the entry cost so round-trip fees
+        # are included in trade pnl.
         if pos == 0:
             if zi_f <= -entry_z:
                 pos = 1
+                entry_equity = equity
                 apply_cost()
                 current_trade = Trade(
                     direction="buy_ah",
                     entry_date=dt_str,
                     entry_index=i,
                     entry_premium_pct=float(premium.iloc[i]),
-                    entry_equity=equity,
+                    entry_equity=entry_equity,
                 )
             elif zi_f >= entry_z:
                 pos = -1
+                entry_equity = equity
                 apply_cost()
                 current_trade = Trade(
                     direction="sell_ah",
                     entry_date=dt_str,
                     entry_index=i,
                     entry_premium_pct=float(premium.iloc[i]),
-                    entry_equity=equity,
+                    entry_equity=entry_equity,
                 )
 
-        # Daily return
-        day_ret = 0.0
-        if pos != 0 and i > 0:
-            if mode == "premium":
-                delta_p = float(premium.iloc[i] - premium.iloc[i - 1])
-                day_ret = (pos * delta_p) / 100.0
-            else:
-                a_ret = float(data.loc[i, "a_ret"]) if not pd.isna(data.loc[i, "a_ret"]) else 0.0
-                h_ret = float(data.loc[i, "h_ret"]) if not pd.isna(data.loc[i, "h_ret"]) else 0.0
-                day_ret = (a_ret - h_ret) if pos == 1 else (-a_ret + h_ret)
-
-        equity *= (1.0 + day_ret)
         equity_curve.append({"date": dt_str, "equity": equity})
 
     # Force close any open trade at the end.

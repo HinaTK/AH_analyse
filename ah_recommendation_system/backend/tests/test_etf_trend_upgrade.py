@@ -167,6 +167,16 @@ class TestEtfTrendBacktest(unittest.TestCase):
 
 
 class TestEtfTrendFetchResilience(unittest.TestCase):
+    def test_etf_history_cache_reuses_recent_success(self):
+        from ah_recommendation_system.backend.etf_sector import etf_trend_analysis as module
+
+        frame = pd.DataFrame({"date": [pd.Timestamp("2026-04-15")], "close": [1.0], "high": [1.1]})
+        with patch.object(module, "fetch_etf_hist_em", return_value=frame) as fetch:
+            first, source1 = module.fetch_etf_history_with_fallback("510300", "20260101", "20260416")
+            second, source2 = module.fetch_etf_history_with_fallback("510300", "20260101", "20260416")
+        self.assertEqual(fetch.call_count, 1)
+        self.assertEqual(source1, source2)
+        self.assertEqual(len(second), 1)
     def test_fetch_etf_history_with_fallback_uses_sina_after_em_failures(self):
         from ah_recommendation_system.backend.etf_sector.etf_trend_analysis import (
             fetch_etf_history_with_fallback,
@@ -269,6 +279,10 @@ class TestEtfTrendRouteFallback(unittest.IsolatedAsyncioTestCase):
         }
 
         with (
+            patch(
+                "ah_recommendation_system.backend.api.etf_sector_routes.select_hot_etf_candidates",
+                return_value={"codes": ["510300", "159915", "518880"], "items": []},
+            ),
             patch(
                 "ah_recommendation_system.backend.api.etf_sector_routes.generate_etf_trend_recommendation_block",
                 return_value=live_failed_trend,

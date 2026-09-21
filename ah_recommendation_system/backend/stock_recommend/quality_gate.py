@@ -9,6 +9,7 @@ def evaluate_report_quality(report: Mapping[str, Any]) -> Dict[str, Any]:
     recommendations = dict(report.get("recommendations") or {})
     stocks = list(recommendations.get("stocks") or report.get("picks") or [])
     etfs = list(recommendations.get("etfs") or report.get("etf_picks") or [])
+    panel = list(report.get("candidate_panel") or report.get("candidates_top") or [])
     market = dict(report.get("market") or {})
     directions = dict(report.get("directions") or {})
     blockers = []
@@ -32,7 +33,13 @@ def evaluate_report_quality(report: Mapping[str, Any]) -> Dict[str, Any]:
 
     fresh = coverage.get("fresh_data_available")
     source = str(coverage.get("source") or "")
-    stale_only = fresh is False or source == "last_good_snapshot" or bool(coverage.get("stale"))
+    live_source = bool(source) and source not in {"mock", ""}
+    stale_only = (
+        fresh is False
+        or source == "last_good_snapshot"
+        or bool(coverage.get("stale"))
+        or (live_source and fresh is not True)
+    )
     checks.append({"name": "fresh_market_data", "passed": not stale_only})
     if stale_only:
         blockers.append("仅有旧缓存或无法确认当日有效行情")
@@ -52,11 +59,18 @@ def evaluate_report_quality(report: Mapping[str, Any]) -> Dict[str, Any]:
             "部分数据源异常，兜底链路已接管：" + "、".join(fallback_errors[:5])
         )
 
-    history_target = int(coverage.get("history_target_count") or coverage.get("candidate_count") or 0)
+    history_target = coverage.get("history_target_count")
     history_count = coverage.get("history_count")
-    history_complete = True
-    if history_target > 0 and history_count is not None:
-        history_complete = int(history_count) / history_target >= 0.8
+    # Never substitute candidate_count. Missing both fields means this report
+    # did not run the live history cohort, so there is nothing to measure.
+    if history_target is None and history_count is None:
+        history_complete = True
+    else:
+        history_complete = (
+            type(history_target) is int and type(history_count) is int
+            and history_target > 0 and 0 <= history_count <= history_target
+            and history_count / history_target >= 0.8
+        )
     checks.append({"name": "candidate_history_completeness", "passed": history_complete})
     if not history_complete:
         blockers.append("候选历史行情完整率低于80%")
@@ -100,7 +114,6 @@ def evaluate_report_quality(report: Mapping[str, Any]) -> Dict[str, Any]:
     if not etf_fields_valid:
         blockers.append("正式ETF缺少真实评分或行情质量证据")
 
-    panel = list(report.get("candidate_panel") or report.get("candidates_top") or [])
     valuation_missing = 0
     for item in panel:
         reasons = [str(reason) for reason in (item.get("rejection_reasons") or [])]

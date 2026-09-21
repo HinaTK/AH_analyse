@@ -26,7 +26,6 @@ from ah_recommendation_system.backend.config import STRATEGY_CONFIG
 try:
     from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
     from sklearn.preprocessing import StandardScaler
-    from sklearn.model_selection import train_test_split
     from sklearn.metrics import mean_squared_error, r2_score
 
     ML_AVAILABLE = True
@@ -154,12 +153,21 @@ class MLPredictorStrategy:
             return None
 
         try:
-            scaler = StandardScaler()
-            X_scaled = scaler.fit_transform(features)
+            split = int(len(features) * 0.8)
+            horizon = int(self.config.get("predict_horizon") or 0)
+            train_end = max(1, split - max(0, horizon))
+            if train_end >= len(features) or train_end < 2:
+                return None
+            X_train = features.iloc[:train_end]
+            y_train = target.iloc[:train_end]
+            X_test = features.iloc[split:]
+            y_test = target.iloc[split:]
+            if X_test.empty or y_test.empty:
+                return None
 
-            X_train, X_test, y_train, y_test = train_test_split(
-                X_scaled, target, test_size=0.2, random_state=42
-            )
+            scaler = StandardScaler()
+            X_train_scaled = scaler.fit_transform(X_train)
+            X_test_scaled = scaler.transform(X_test)
 
             if self.model_type == "xgboost":
                 model = GradientBoostingRegressor(
@@ -170,9 +178,9 @@ class MLPredictorStrategy:
                     n_estimators=100, max_depth=10, random_state=42
                 )
 
-            model.fit(X_train, y_train)
+            model.fit(X_train_scaled, y_train)
 
-            y_pred = model.predict(X_test)
+            y_pred = model.predict(X_test_scaled)
             mse = mean_squared_error(y_test, y_pred)
             r2 = r2_score(y_test, y_pred)
 
@@ -252,6 +260,10 @@ class MLPredictorStrategy:
                             "predicted_change": round(future_change, 2),
                             "predicted_direction": signal,
                             "confidence": min(abs(future_change) / 3, 1.0),
+                            "prediction_method": "trained_model",
+                            "confidence_kind": "scaled_magnitude_not_probability",
+                            "investment_usable": False,
+                            "data_warning": "置信度由预测幅度缩放得到，不是胜率或校准概率。",
                         }
                     )
                 except Exception as e:
@@ -272,9 +284,17 @@ class MLPredictorStrategy:
                         prediction["predicted_direction"] = "stable"
                     prediction["predicted_change"] = round(trend, 2)
                     prediction["confidence"] = 0.5
+                    prediction["prediction_method"] = "premium_trend_fallback"
+                    prediction["confidence_kind"] = "fixed_rule_not_probability"
+                    prediction["investment_usable"] = False
+                    prediction["data_warning"] = "无可用模型，已回退近期溢价趋势规则；固定置信度不是胜率。"
                 else:
                     prediction["predicted_direction"] = "unknown"
                     prediction["confidence"] = 0.3
+                    prediction["prediction_method"] = "insufficient_history_fallback"
+                    prediction["confidence_kind"] = "fixed_rule_not_probability"
+                    prediction["investment_usable"] = False
+                    prediction["data_warning"] = "样本不足，使用固定规则置信度，不是胜率。"
 
             prediction["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -304,8 +324,9 @@ class MLPredictorStrategy:
 
         return {
             "strategy": "机器学习预测",
-            "description": "基于机器学习预测AH溢价率未来走势的策略",
+            "description": "基于机器学习或规则回退预测AH溢价率未来走势；输出仅供研究，不代表胜率。",
             "model_type": self.model_type,
+            "investment_usable": False,
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "predictions": predictions[:20],
             "summary": {

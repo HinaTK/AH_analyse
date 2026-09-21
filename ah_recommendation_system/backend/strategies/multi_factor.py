@@ -155,6 +155,9 @@ class MultiFactorStrategy:
                 "current_price": latest_price,
                 "total_score": scores["total_score"],
                 "factor_scores": scores["factor_scores"],
+                "data_mode": "demo",
+                "investment_usable": False,
+                "data_warning": "估值使用固定PE/PB/股息率占位，仅供演示排序，不可作为投资依据。",
                 "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
 
@@ -187,6 +190,9 @@ class MultiFactorStrategy:
             "strategy": "多因子Alpha模型",
             "description": "结合估值、动量、流动性和AH溢价的综合因子选股策略",
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "data_mode": "demo",
+            "investment_usable": False,
+            "data_warning": "估值使用固定PE/PB/股息率占位，仅供演示排序，不可作为投资依据。",
             "parameters": {"factor_weights": self.weights, "top_n": top_n},
             "recommendations": results[:top_n],
             "summary": {

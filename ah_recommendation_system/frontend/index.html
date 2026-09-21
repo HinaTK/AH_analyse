@@ -250,12 +250,12 @@
 						<div>
 							<div class="text-xs uppercase tracking-widest" style="color: var(--muted2)">AH / A股 与 H股</div>
 							<h1 class="text-2xl md:text-3xl font-bold mt-1">每日推荐控制台</h1>
-							<p class="text-sm mt-2" style="color: var(--muted)">点击交互，实时刷新、调整参数、导出结果。默认演示模式使用模拟数据。</p>
+							<p class="text-sm mt-2" style="color: var(--muted)">按各模块来源和时间核对结果。历史报告不是实时行情，模拟数据不能当作当日判断。</p>
 						</div>
 						<div class="flex flex-wrap items-center gap-2">
 							<span class="badge">接口: <span class="mono">/api/v1/*</span></span>
 							<span class="badge">导出: <span class="mono">xlsx/csv</span></span>
-							<span class="badge">模式: <span class="mono">演示/模拟</span></span>
+							<span class="badge">模式: <span class="mono">按模块核对来源/时间</span></span>
 						</div>
 					</div>
 					<div class="mt-5 flex flex-wrap gap-2 items-center">
@@ -771,6 +771,7 @@
 							</div>
 							<span class="badge">维度：估值 / 动量 / 流动性 / AH溢价</span>
 						</div>
+						<div class="mt-2 text-sm" style="color: var(--warn)">{{ data.data_warning || '估值使用固定PE/PB/股息率占位，仅供演示排序，不可作为投资依据。' }}</div>
 
 						<div class="mt-4 overflow-x-auto">
 							<table class="table">
@@ -779,8 +780,8 @@
 										<th>#</th>
 										<th class="th-sort" @click="toggleSort('name', 1)">股票<span class="sort-ind">{{ sortIndicator('name') }}</span></th>
 										<th class="th-sort" @click="toggleSort('current_price', -1)">价格<span class="sort-ind">{{ sortIndicator('current_price') }}</span></th>
-										<th class="th-sort" @click="toggleSort('total_score', -1)"><span class="inline-flex items-center gap-2">总分<help-tip title="总分" text="按权重汇总的综合评分（估值/动量/流动性/AH溢价）。用于排序展示。"></help-tip></span><span class="sort-ind">{{ sortIndicator('total_score') }}</span></th>
-										<th class="th-sort" @click="toggleSort('valuation', -1)"><span class="inline-flex items-center gap-2">估值<help-tip title="估值因子" text="估值相关的简单评分（示例：PE/PB/股息率等）。具体口径以策略实现为准。"></help-tip></span><span class="sort-ind">{{ sortIndicator('valuation') }}</span></th>
+										<th class="th-sort" @click="toggleSort('total_score', -1)"><span class="inline-flex items-center gap-2">总分<help-tip title="总分" text="按权重汇总的演示评分（估值使用固定PE/PB/股息率占位）。仅用于研究排序，不可作为投资依据。"></help-tip></span><span class="sort-ind">{{ sortIndicator('total_score') }}</span></th>
+										<th class="th-sort" @click="toggleSort('valuation', -1)"><span class="inline-flex items-center gap-2">估值<help-tip title="估值因子" text="当前使用固定PE=12、PB=1.5、股息率=3.0的占位值，不是真实个股估值。"></help-tip></span><span class="sort-ind">{{ sortIndicator('valuation') }}</span></th>
 										<th class="th-sort" @click="toggleSort('momentum', -1)"><span class="inline-flex items-center gap-2">动量<help-tip title="动量因子" text="价格趋势/收益率相关评分（示例：N日收益）。"></help-tip></span><span class="sort-ind">{{ sortIndicator('momentum') }}</span></th>
 										<th class="th-sort" @click="toggleSort('liquidity', -1)"><span class="inline-flex items-center gap-2">流动性<help-tip title="流动性因子" text="成交量/换手等流动性相关评分，用于过滤难交易标的。"></help-tip></span><span class="sort-ind">{{ sortIndicator('liquidity') }}</span></th>
 										<th class="th-sort" @click="toggleSort('ah_premium', -1)"><span class="inline-flex items-center gap-2">AH溢价<help-tip title="AH溢价因子" text="AH溢价偏离度相关评分，用于捕捉两地定价差。"></help-tip></span><span class="sort-ind">{{ sortIndicator('ah_premium') }}</span></th>
@@ -950,7 +951,7 @@
 								<div><div style="color: var(--muted2)">当前溢价</div><div class="mono">{{ p.current_premium }}</div></div>
 								<div><div style="color: var(--muted2)">预测变化</div><div class="mono">{{ p.predicted_change ?? '无' }}</div></div>
 								<div>
-									<div class="inline-flex items-center gap-2" style="color: var(--muted2)">置信度<help-tip title="置信度" text="模型对方向判断的置信度(0~1)。这是模型输出，不等同于真实胜率。"></help-tip></div>
+									<div class="inline-flex items-center gap-2" style="color: var(--muted2)">置信度<help-tip title="置信度" text="由预测幅度缩放或规则固定值得到，不是胜率或校准概率。规则回退时请看 prediction_method。"></help-tip></div>
 									<div class="mono">{{ (p.confidence ?? 0).toFixed(2) }}</div>
 								</div>
 							</div>
@@ -1017,6 +1018,7 @@
 									<span v-if="trendSummary.regime_label" class="badge" :class="badgeClass(trendSummary.regime_label)">{{ trendSummary.regime_label }}</span>
 									<span class="badge">覆盖 {{ trendCoverage.success_count || 0 }}/{{ trendCoverage.universe_count || 0 }}</span>
 									<span class="badge">生成 {{ trendBlock.generated_at || '-' }}</span>
+									<span class="badge" v-if="trendBlock.data_warning" style="color: var(--warn)">{{ trendBlock.data_warning }}</span>
 									<select class="input select mono" style="width: 96px" v-model="exportFormat">
 										<option value="xlsx">xlsx</option>
 										<option value="csv">csv</option>
@@ -1897,14 +1899,16 @@
 					} catch (e) { this.$emit('toast', { title: '推荐加载失败', message: e.message || String(e) }) }
 					finally { this.loading = false }
 				},
-				fmt(v) { const n = Number(v); return Number.isFinite(n) ? (n > 0 ? '+' : '') + n.toFixed(2) + '%' : '-' },
+				fmt(v) { if (v === null || v === undefined || v === '') return '待验证'; const n = Number(v); return Number.isFinite(n) ? (n > 0 ? '+' : '') + n.toFixed(2) + '%' : '待验证' },
 				statusClass(v) { return v === 'hit' ? 'badge-strong' : v === 'miss' ? 'badge-weak' : 'badge-warn' },
 			},
 			template: `
 				<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
 					<section class="panel p-5"><div class="flex justify-between items-center"><div class="text-lg font-semibold">今日盘前推荐</div><span class="badge">{{ pre && pre.as_of || '-' }}</span></div>
+						<div class="text-xs mt-2" style="color:var(--muted)">生成 {{ pre && pre.generated_at || '-' }} · 行情口径 {{ pre && pre.coverage && pre.coverage.quote_basis || '-' }}</div>
 						<div class="text-sm mt-2" style="color:var(--muted)">{{ pre && pre.summary || '暂无推荐' }}</div>
-						<div class="mt-4" v-for="(p,i) in (pre && pre.picks || [])" :key="p.code"><div class="flex justify-between"><span><b>{{ i+1 }}. {{ p.name }}</b> <span class="mono">{{ p.code }}</span></span><span class="badge badge-strong">{{ p.action || 'WATCH' }}</span></div><div class="text-xs mt-1" style="color:var(--muted)">{{ p.rationale || '-' }}</div></div>
+						<div v-if="pre && pre.data_status && pre.data_status !== 'ok'" class="text-xs mt-2" style="color:var(--warn)">数据状态：{{ pre.data_status === 'failed' ? '核心数据不可用' : '部分数据降级' }} · {{ (pre.degraded_sections || []).join('、') }} {{ (pre.blocking_sections || []).join('、') }}</div>
+						<div class="mt-4" v-for="(p,i) in (pre && pre.picks || [])" :key="p.code"><div class="flex justify-between"><span><b>{{ i+1 }}. {{ p.name }}</b> <span class="mono">{{ p.code }}</span></span><span class="badge badge-strong">{{ p.action || 'WATCH' }}</span></div><div class="text-xs mt-1" style="color:var(--muted)">{{ p.rationale || '-' }}</div><div v-if="p.hotspot_match_level" class="text-xs mt-1" style="color:var(--muted)">{{ p.hotspot_themes && p.hotspot_themes.length ? '热点：' + p.hotspot_themes.join('、') + ' · 排序加分 ' + ((p.hotspot_bonus || 0) * 100).toFixed(2) + '/100' : '未匹配当前热点，基础因子入选' }}</div></div>
 						<div class="mt-4 text-sm font-semibold">ETF观察</div><div class="text-sm mt-2" v-for="e in (pre && pre.etf_picks || [])" :key="e.code">{{ e.name }} <span class="mono">{{ e.code }}</span> · {{ e.rationale || '-' }}</div>
 					</section>
 					<section class="panel p-5"><div class="flex justify-between items-center"><div class="text-lg font-semibold">最近盘后复盘</div><span class="badge">{{ post && post.as_of || '-' }}</span></div>

@@ -1106,7 +1106,10 @@ class TestStockRecommendationPipeline(unittest.TestCase):
 
         snapshot = CollectedSnapshot(
             date="2026-09-08",
-            fundamental={"rows": [{"code": "000001", "name": "Stock-000001", "price": 10.0}], "count": 1, "universe_size": 1},
+            fundamental={"rows": [
+                {"code": "000001", "name": "Stock-000001", "price": 10.0, "history_days": 80, "pe": 12.0},
+                {"code": "000002", "name": "Stock-000002", "price": 11.0, "history_days": 80, "pe": 12.0},
+            ], "count": 2, "universe_size": 2},
             capital={"rows": []},
             events={
                 "macro_news": {"items": [{"event_id": "m1"}, {"event_id": "m2"}]},
@@ -1190,7 +1193,7 @@ class TestStockRecommendationPipeline(unittest.TestCase):
         self.assertEqual(scan_focus_inputs[0], {})
         self.assertEqual(len(hotspot_inputs), 1)
         self.assertEqual(len(hotspot_inputs[0]), 2)
-        self.assertEqual(len(mapper_inputs[0][1]), 1)
+        self.assertEqual(len(mapper_inputs[0][1]), 2)
         self.assertEqual(len(event_inputs), 1)
         self.assertEqual([item.code for item in event_inputs[0]], ["000001", "000002"])
         self.assertEqual(result["report"]["picks"][0]["code"], "000002")
@@ -1353,7 +1356,7 @@ class TestStockRecommendationPipeline(unittest.TestCase):
         ), patch(
             "ah_recommendation_system.backend.stock_recommend.run._enrich_with_daily_features",
             return_value=30,
-        ), patch(
+        ) as enrich_history, patch(
             "ah_recommendation_system.backend.stock_recommend.run.analyze_hotspots",
             return_value={"status": "disabled", "hotspots": []},
         ), patch(
@@ -1376,6 +1379,8 @@ class TestStockRecommendationPipeline(unittest.TestCase):
         self.assertEqual(collect_all.call_args.kwargs.get("include_fundamental"), False)
         persist.assert_not_called()
         focused_call.assert_not_called()
+        enrich_history.assert_called_once()
+        self.assertLessEqual(len(enrich_history.call_args.args[0]), 30)
         self.assertEqual(result["report"]["coverage"]["source"], "previous_close")
         self.assertEqual(result["report"]["coverage"]["quote_basis"], "previous_close")
         self.assertGreaterEqual(result["report"]["coverage"]["scanned_count"], 1000)

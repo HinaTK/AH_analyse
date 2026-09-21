@@ -267,30 +267,75 @@ def rolling_calibrate_ranker(panel, *, as_of: str,
             model = fit_ranker(train, feature_keys=feature_keys)
         except ValueError:
             continue
-        def evaluate(rows_subset):
-            scored = predict_scores(model, rows_subset)
-            paired = [(s, r) for s, r in zip(scored, rows_subset) if s is not None]
-            if not paired:
-                return {"mean_net_excess_pct": -math.inf, "cohort_count": 0, "cohort_drawdown_pct": 0.0}
-            paired.sort(key=lambda item: -item[0])
-            top = paired[:5]
-            mean_excess = sum(r["excess_return_pct"] for _, r in top) / len(top)
-            return {"mean_net_excess_pct": mean_excess, "cohort_count": len(paired), "cohort_drawdown_pct": 0.0}
+
+        def scored_for_evaluate(subset, scores):
+            prepared = []
+            for score, row in zip(scores, subset):
+                if score is None:
+                    continue
+                prepared.append({
+                    **row,
+                    "factors": {"model_score": float(score)},
+                    "risk_penalty": 0,
+                    "eligible": row.get("eligible", True),
+                    "regime": row.get("regime") or "offense",
+                    "net_return_pct": float(row.get("net_return_pct", row["excess_return_pct"])),
+                })
+            return prepared
+
         validation_scores = predict_scores(model, validation)
         finite_scores = sorted(s for s in validation_scores if s is not None)
         if not finite_scores:
             continue
         chosen_quantile = max(0.0, min(0.9, 1.0 - 5.0 / max(1, len(finite_scores))))
         cutoff_score = finite_scores[max(0, int(chosen_quantile * len(finite_scores)))]
-        validation_metrics = evaluate(validation)
-        baseline_metrics = evaluate(test)
+        validation_metrics = _evaluate(
+            scored_for_evaluate(validation, validation_scores),
+            {"model_score": 1.0},
+            cutoff_score,
+        )
+        test_scores = predict_scores(model, test)
+        test_metrics = _evaluate(
+            scored_for_evaluate(test, test_scores),
+            {"model_score": 1.0},
+            cutoff_score,
+        )
+        # Saved point-in-time composite only; never invent a second model call.
+        baseline_rows = []
+        for row in test:
+            try:
+                composite = float(row.get("composite"))
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(composite):
+                continue
+            baseline_rows.append({
+                **row,
+                "factors": {"composite": composite},
+                "risk_penalty": 0,
+                "eligible": row.get("eligible", True),
+                "regime": row.get("regime") or "offense",
+                "net_return_pct": float(row.get("net_return_pct", row["excess_return_pct"])),
+            })
+        if not baseline_rows:
+            reasons.append("missing_independent_composite_baseline")
+            continue
+        baseline_metrics = _evaluate(baseline_rows, {"composite": 1.0}, baseline_threshold)
         folds.append({
             "test_start": str(test_start.date()), "test_end": str(test_end.date()),
             "train_count": len(train), "validation_count": len(validation), "test_count": len(test),
+            "baseline_ranking_key": "composite",
             "selected_threshold": cutoff_score,
             "validation_metrics": validation_metrics, "baseline_metrics": baseline_metrics,
-            "test_metrics": evaluate(test),
+            "test_metrics": test_metrics,
+            "model": {
+                "kind": model.kind,
+                "coefficients": dict(model.coefficients),
+                "intercept": model.intercept,
+            },
         })
+    if any(not (fold["test_metrics"].get("portfolio") or {}).get("risk_validated") for fold in folds):
+        reasons.append("ranker_drawdown_unavailable")
     if len(folds) < minimum_folds or len(rows) < 600:
         reasons.append("insufficient_rolling_samples")
     qualifying = [f for f in folds
@@ -299,8 +344,9 @@ def rolling_calibrate_ranker(panel, *, as_of: str,
         reasons.append("out_of_sample_gain_not_stable")
     if folds and (not folds or folds[-1] not in qualifying):
         reasons.append("latest_proposal_failed_test")
+    promoted = folds[-1]["model"] if folds and not reasons else None
     return {"applied": not reasons, "reasons": reasons, "sample_count": len(rows), "folds": folds,
             "methodology": "purged_rolling_ranker_v1", "as_of": as_of,
-            "model": {"kind": "linear", "coefficients": {}, "intercept": 0.0} if not reasons else None,
+            "model": promoted,
             "ranking_key": "model_score" if not reasons else "composite",
             "minimum_score": folds[-1]["selected_threshold"] if not reasons and folds else baseline_threshold}

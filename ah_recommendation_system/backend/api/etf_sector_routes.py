@@ -37,6 +37,20 @@ def _load_latest_stored_etf_trend() -> Optional[Dict[str, Any]]:
     return trend if isinstance(trend, dict) and trend else None
 
 
+def _stored_trend_fallback(reason: str) -> Optional[Dict[str, Any]]:
+    stored = _load_latest_stored_etf_trend()
+    if not stored:
+        return None
+    return {
+        **stored,
+        "fallback_source": "stored",
+        "fallback_reason": reason,
+        "data_status": "degraded",
+        "fresh_data_available": False,
+        "data_warning": "实时采集失败，展示历史存储报告（非实时）；请核对原始报告时间。",
+    }
+
+
 def _should_fallback_to_stored_trend(trend: Dict[str, Any]) -> bool:
     coverage = trend.get("coverage") if isinstance(trend, dict) else None
     if not isinstance(coverage, dict):
@@ -169,15 +183,15 @@ async def get_etf_trend_block(
                 coverage["custom_universe"] = False
                 coverage["selection_mode"] = auto_selection.get("mode")
         if _should_fallback_to_stored_trend(trend):
-            stored_trend = _load_latest_stored_etf_trend()
+            stored_trend = _stored_trend_fallback("live_all_fetch_failed")
             if stored_trend:
-                return {
-                    **stored_trend,
-                    "fallback_source": "stored",
-                    "fallback_reason": "live_all_fetch_failed",
-                }
+                return stored_trend
         return trend
     except HTTPException:
         raise
     except Exception as e:
+        if source != "stored":
+            stored_trend = _stored_trend_fallback("live_fetch_exception")
+            if stored_trend:
+                return stored_trend
         raise HTTPException(status_code=500, detail=str(e))

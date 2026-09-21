@@ -1054,9 +1054,7 @@ def run_pipeline(
             "universe_size": int(snap.fundamental.get("universe_size") or snap.fundamental.get("count") or 0),
             "scanned_count": market_scanned_count,
             "candidate_count": len(seeds),
-            "history_target_count": sum(1 for row in (snap.fundamental.get("rows") or [])
-                                  if str(row.get("code") or "") in {c.code for c in cands}
-                                  and float(row.get("history_days") or 0) >= 60),
+            "history_target_count": len({str(c.code) for c in cands}),
             "eligible_count": selection.get("eligible_count", 0),
             "mode": coverage_mode,
             "source": snap.fundamental.get("source"),
@@ -1068,9 +1066,22 @@ def run_pipeline(
                     for row in (snap.fundamental.get("rows") or [])
                 ) else "unknown"
             ),
-            "history_count": sum(1 for row in (snap.fundamental.get("rows") or [])
-                                  if str(row.get("code") or "") in {c.code for c in cands}
-                                  and float(row.get("history_days") or 0) >= 60),
+            "history_count": sum(
+                1
+                for code in {str(c.code) for c in cands}
+                if float(
+                    next(
+                        (
+                            row.get("history_days")
+                            for row in (snap.fundamental.get("rows") or [])
+                            if str(row.get("code") or "") == code
+                        ),
+                        0,
+                    )
+                    or 0
+                )
+                >= 60
+            ),
             "fresh_data_available": data_available,
             "stale": any(bool(row.get("stale")) for row in (snap.fundamental.get("rows") or [])),
             "sources": [snap.fundamental.get("source")] if snap.fundamental.get("source") else [],

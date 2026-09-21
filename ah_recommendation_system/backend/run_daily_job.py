@@ -186,15 +186,26 @@ def generate_report() -> Dict[str, Any]:
     mf_rec = mf_strategy.generate_recommendations()
     ml_rec = ml_strategy.generate_recommendations()
 
+    fetcher = get_price_fetcher()
+    data_mode = "mock" if getattr(fetcher, "use_mock_data", False) else "live"
+
     # ETF / 板块 / 消息面 (best-effort, fallback per section)
     etf_sector: Dict[str, Any] = {}
-    try:
-        etf_sector = generate_etf_sector_block(prev_report=prev)
-    except Exception as e:
-        logger.warning(f"ETF/板块模块生成失败: {e}")
+    if data_mode == "mock":
+        etf_sector = {
+            "data_status": "unavailable",
+            "reason": "disabled_in_mock_mode",
+            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    else:
+        try:
+            etf_sector = generate_etf_sector_block(prev_report=prev)
+        except Exception as e:
+            logger.warning(f"ETF/板块模块生成失败: {e}")
 
     return {
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "data_mode": data_mode,
         "pair_trading": pair_rec,
         "multi_factor": mf_rec,
         "ml_prediction": ml_rec,
