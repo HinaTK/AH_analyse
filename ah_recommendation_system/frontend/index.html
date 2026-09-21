@@ -1886,6 +1886,19 @@
 			data() { return { pre: null, post: null, loading: false } },
 			mounted() { this.fetchData() },
 			watch: { refreshKey() { this.fetchData() } },
+			computed: {
+				coverage() { return (this.pre && this.pre.coverage) || {} },
+				market() { return (this.pre && this.pre.market) || {} },
+				directions() { return (this.pre && this.pre.directions) || {} },
+				usableNow() {
+					const source = this.coverage.quote_basis || this.coverage.source || ''
+					if (this.coverage.stale) return '当前不能当作实时判断'
+					if (source === 'previous_close') return '可用于盘前准备，不是盘中实时'
+					if (source === 'mock') return '模拟数据，不能用于当日判断'
+					if (this.pre && this.pre.quality_gate && this.pre.quality_gate.passed === false) return '质量门槛未通过，不能作为正式观察'
+					return '先核对来源和时间后再使用'
+				},
+			},
 			methods: {
 				async fetchData() {
 					this.loading = true
@@ -1901,17 +1914,45 @@
 				},
 				fmt(v) { if (v === null || v === undefined || v === '') return '待验证'; const n = Number(v); return Number.isFinite(n) ? (n > 0 ? '+' : '') + n.toFixed(2) + '%' : '待验证' },
 				statusClass(v) { return v === 'hit' ? 'badge-strong' : v === 'miss' ? 'badge-weak' : 'badge-warn' },
+				dirItems(key) { return ((this.directions && this.directions[key]) || []) },
+				firstText(items, field) { const row = (items || [])[0]; return row && row[field] ? row[field] : '暂无' },
 			},
 			template: `
-				<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-					<section class="panel p-5"><div class="flex justify-between items-center"><div class="text-lg font-semibold">今日盘前推荐</div><span class="badge">{{ pre && pre.as_of || '-' }}</span></div>
-						<div class="text-xs mt-2" style="color:var(--muted)">生成 {{ pre && pre.generated_at || '-' }} · 行情口径 {{ pre && pre.coverage && pre.coverage.quote_basis || '-' }}</div>
-						<div class="text-sm mt-2" style="color:var(--muted)">{{ pre && pre.summary || '暂无推荐' }}</div>
-						<div v-if="pre && pre.data_status && pre.data_status !== 'ok'" class="text-xs mt-2" style="color:var(--warn)">数据状态：{{ pre.data_status === 'failed' ? '核心数据不可用' : '部分数据降级' }} · {{ (pre.degraded_sections || []).join('、') }} {{ (pre.blocking_sections || []).join('、') }}</div>
-						<div class="mt-4" v-for="(p,i) in (pre && pre.picks || [])" :key="p.code"><div class="flex justify-between"><span><b>{{ i+1 }}. {{ p.name }}</b> <span class="mono">{{ p.code }}</span></span><span class="badge badge-strong">{{ p.action || 'WATCH' }}</span></div><div class="text-xs mt-1" style="color:var(--muted)">{{ p.rationale || '-' }}</div><div v-if="p.hotspot_match_level" class="text-xs mt-1" style="color:var(--muted)">{{ p.hotspot_themes && p.hotspot_themes.length ? '热点：' + p.hotspot_themes.join('、') + ' · 排序加分 ' + ((p.hotspot_bonus || 0) * 100).toFixed(2) + '/100' : '未匹配当前热点，基础因子入选' }}</div></div>
-						<div class="mt-4 text-sm font-semibold">ETF观察</div><div class="text-sm mt-2" v-for="e in (pre && pre.etf_picks || [])" :key="e.code">{{ e.name }} <span class="mono">{{ e.code }}</span> · {{ e.rationale || '-' }}</div>
+				<div class="grid grid-cols-1 gap-4">
+					<section class="panel p-5">
+						<div class="flex justify-between items-center"><div class="text-lg font-semibold">盘前决策卡</div><span class="badge">{{ pre && pre.as_of || '-' }}</span></div>
+						<div class="text-xs mt-2" style="color:var(--muted)">生成 {{ pre && pre.generated_at || '-' }} · 行情口径 {{ coverage.quote_basis || coverage.source || '-' }} · {{ coverage.label || '-' }}</div>
+						<div class="text-sm mt-2" style="color:var(--warn)">现在能不能用：{{ usableNow }}</div>
+						<div class="mt-4 grid md:grid-cols-4 gap-3">
+							<div class="kpi"><div class="l">市场环境</div><div class="v">{{ market.label || market.regime || '-' }}</div><div class="text-xs mt-1" style="color:var(--muted)">{{ market.status || '-' }} · {{ market.position_guidance || pre && pre.market_view || '-' }}</div></div>
+							<div class="kpi"><div class="l">当前主攻</div><div class="v text-base">{{ firstText(dirItems('current_attack'), 'direction') }}</div><div class="text-xs mt-1" style="color:var(--muted)">{{ firstText(dirItems('current_attack'), 'action') }}</div></div>
+							<div class="kpi"><div class="l">1~3个月方向</div><div class="v text-base">{{ firstText(dirItems('medium_term'), 'direction') }}</div><div class="text-xs mt-1" style="color:var(--muted)">{{ firstText(dirItems('medium_term'), 'action') }}</div></div>
+							<div class="kpi"><div class="l">回避 / 撤退</div><div class="v text-base">{{ firstText(dirItems('avoid_or_exit'), 'direction') }}</div><div class="text-xs mt-1" style="color:var(--muted)">{{ firstText(dirItems('avoid_or_exit'), 'action') }}</div></div>
+						</div>
 					</section>
-					<section class="panel p-5"><div class="flex justify-between items-center"><div class="text-lg font-semibold">最近盘后复盘</div><span class="badge">{{ post && post.as_of || '-' }}</span></div>
+					<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+						<section class="panel p-5">
+							<div class="text-sm font-semibold">触发条件 / 否定条件</div>
+							<div class="mt-3 text-sm"><b>触发：</b>{{ firstText(dirItems('current_attack'), 'trigger') }}</div>
+							<div class="mt-2 text-sm"><b>否定：</b>{{ (pre && pre.falsification && pre.falsification.length ? pre.falsification.join('；') : firstText(dirItems('current_attack'), 'invalidation')) }}</div>
+							<div class="mt-3 text-xs" style="color:var(--muted)">来源 {{ (market.regime_evidence && market.regime_evidence.source) || coverage.source || '-' }} · 价格截至 {{ (market.regime_evidence && market.regime_evidence.price_as_of) || '-' }} · 有效期至下一份盘前报告</div>
+							<div v-if="pre && pre.data_status && pre.data_status !== 'ok'" class="text-xs mt-2" style="color:var(--warn)">数据状态：{{ pre.data_status === 'failed' ? '核心数据不可用' : '部分数据降级' }}</div>
+						</section>
+						<section class="panel p-5">
+							<div class="text-sm font-semibold">观察 / 等待触发</div>
+							<div class="text-xs mt-1" style="color:var(--muted)">个股是观察候选，不是买入指令。缺触发条件时只能等待。</div>
+							<div class="mt-3" v-for="(p,i) in (pre && pre.picks || [])" :key="p.code">
+								<div class="flex justify-between"><span><b>{{ i+1 }}. {{ p.name }}</b> <span class="mono">{{ p.code }}</span></span><span class="badge">{{ p.action || 'WATCH' }}</span></div>
+								<div class="text-xs mt-1" style="color:var(--muted)">触发：{{ p.trigger || '未给出' }}</div>
+								<div class="text-xs mt-1" style="color:var(--muted)">否定：{{ p.invalidation || '未给出' }}</div>
+							</div>
+							<div v-if="!(pre && pre.picks && pre.picks.length)" class="text-sm mt-3" style="color:var(--muted)">{{ pre && pre.empty_reason || '本次无正式观察标的' }}</div>
+							<div class="mt-4 text-sm font-semibold">ETF观察</div>
+							<div class="text-sm mt-2" v-for="e in (pre && pre.etf_picks || [])" :key="e.code">{{ e.name }} <span class="mono">{{ e.code }}</span> · {{ e.action || 'WATCH' }}</div>
+						</section>
+					</div>
+					<section class="panel p-5">
+						<div class="flex justify-between items-center"><div class="text-lg font-semibold">最近盘后复盘</div><span class="badge">{{ post && post.as_of || '-' }}</span></div>
 						<div v-if="post && post.items && post.items.length" class="mt-4"><div class="py-2 border-b border-gray-700" v-for="item in post.items" :key="item.prediction_id"><div class="flex justify-between"><span><b>{{ item.name }}</b> <span class="mono">{{ item.code }}</span></span><span class="badge" :class="statusClass(item.status)">{{ item.status }}</span></div><div class="text-xs mt-1" style="color:var(--muted)">T+1 {{ fmt(item.return_pct) }} · 修正 {{ item.correction }}</div><div class="text-xs mt-1" style="color:var(--muted)">T+5 {{ (item.outcomes||[]).find(x=>x.horizon===5) ? fmt((item.outcomes||[]).find(x=>x.horizon===5).return_pct) : '-' }} · T+20 {{ (item.outcomes||[]).find(x=>x.horizon===20) ? fmt((item.outcomes||[]).find(x=>x.horizon===20).return_pct) : '-' }}</div></div></div><div v-else class="text-sm mt-4" style="color:var(--muted)">暂无盘后复盘记录</div>
 					</section>
 				</div>`
@@ -2136,7 +2177,7 @@
 			},
 			data() {
 				return {
-					currentTab: 'etf_sector',
+					currentTab: 'daily_recommend',
 					showSecondaryTabs: false,
 					refreshKey: 0,
 					updating: false,
@@ -2156,7 +2197,7 @@
 					return (this.tabs || []).filter(tab => tab.id === 'daily_recommend' || tab.id === 'etf_sector' || tab.id === 'review')
 				},
 				secondaryTabs() {
-					return (this.tabs || []).filter(tab => tab.id !== 'etf_sector' && tab.id !== 'review')
+					return (this.tabs || []).filter(tab => tab.id !== 'daily_recommend' && tab.id !== 'etf_sector' && tab.id !== 'review')
 				},
 			},
 			methods: {

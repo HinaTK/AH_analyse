@@ -120,6 +120,18 @@ class LegacyResearchSafetyTests(unittest.TestCase):
         self.assertIn("按模块核对来源/时间", html)
         self.assertIn("行情口径", html)
 
+    def test_premarket_page_is_a_decision_card_not_a_quote_table(self):
+        html = (ROOT / "frontend/index.html").read_text(encoding="utf-8")
+        self.assertIn("盘前决策卡", html)
+        self.assertIn("现在能不能用", html)
+        self.assertIn("市场环境", html)
+        self.assertIn("当前主攻", html)
+        self.assertIn("1~3个月方向", html)
+        self.assertIn("回避 / 撤退", html)
+        self.assertIn("触发条件 / 否定条件", html)
+        self.assertNotIn("今日盘前推荐", html)
+        self.assertNotIn("p.rationale", html)
+
 
 if __name__ == "__main__":
     unittest.main()
