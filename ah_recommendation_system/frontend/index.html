@@ -1939,12 +1939,14 @@
 							<div v-if="pre && pre.data_status && pre.data_status !== 'ok'" class="text-xs mt-2" style="color:var(--warn)">数据状态：{{ pre.data_status === 'failed' ? '核心数据不可用' : '部分数据降级' }}</div>
 						</section>
 						<section class="panel p-5">
-							<div class="text-sm font-semibold">观察 / 等待触发</div>
-							<div class="text-xs mt-1" style="color:var(--muted)">个股是观察候选，不是买入指令。缺触发条件时只能等待。</div>
+							<div class="text-sm font-semibold">条件买单 / 开盘确认</div>
+							<div class="text-xs mt-1" style="color:var(--muted)">盘前是条件买单，开盘确认前不得成交。高开出区或量不够则取消，不换票。</div>
 							<div class="mt-3" v-for="(p,i) in (pre && pre.picks || [])" :key="p.code">
 								<div class="flex justify-between"><span><b>{{ i+1 }}. {{ p.name }}</b> <span class="mono">{{ p.code }}</span></span><span class="badge">{{ p.action || 'WATCH' }}</span></div>
 								<div class="text-xs mt-1" style="color:var(--muted)">触发：{{ p.trigger || '未给出' }}</div>
 								<div class="text-xs mt-1" style="color:var(--muted)">否定：{{ p.invalidation || '未给出' }}</div>
+								<div class="text-xs mt-1" style="color:var(--muted)">条件买入 {{ p.buy_zone || '待确认' }} · 止损 {{ p.stop_loss || '待确认' }} · 目标 {{ p.target || '待确认' }}</div>
+								<div class="text-xs mt-1" style="color:var(--muted)">仓位：{{ p.position_text || '未给出' }} · {{ p.fill_constraint || '开盘确认前不得成交' }}</div>
 							</div>
 							<div v-if="!(pre && pre.picks && pre.picks.length)" class="text-sm mt-3" style="color:var(--muted)">{{ pre && pre.empty_reason || '本次无正式观察标的' }}</div>
 							<div class="mt-4 text-sm font-semibold">ETF观察</div>

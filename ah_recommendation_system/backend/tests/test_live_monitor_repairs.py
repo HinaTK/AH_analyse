@@ -34,7 +34,7 @@ class TestLiveMonitorRepairs(unittest.TestCase):
         result = select_by_rules(candidates, top_n_pick=5, market_regime={"regime": "defense", "status": "available"})
         self.assertEqual(len(result["picks"]), 2)
         self.assertIn("防守", result["market_view"])
-        self.assertTrue(all(p["action"] == "WATCH" for p in result["picks"]))
+        self.assertTrue(all(p["action"] == "CONDITIONAL_BUY" for p in result["picks"]))
 
     def test_defense_never_fills_quota_with_weak_or_missing_relative_strength(self):
         c = Candidate(code="600001", name="test", quality_grade="A", composite=.9,

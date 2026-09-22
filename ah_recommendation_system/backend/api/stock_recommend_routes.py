@@ -28,6 +28,11 @@ async def get_pre_market() -> Dict[str, Any]:
     return _load("latest.json")
 
 
+@router.get("/open-confirm")
+async def get_open_confirm() -> Dict[str, Any]:
+    return _load("latest_open_confirm.json")
+
+
 @router.get("/post-market")
 async def get_post_market() -> Dict[str, Any]:
     return _load("latest_review.json")

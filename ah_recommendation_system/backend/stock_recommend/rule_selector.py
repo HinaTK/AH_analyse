@@ -8,7 +8,11 @@ from typing import Any, Dict, List
 from ah_recommendation_system.backend.stock_recommend.candidate_pool import Candidate
 
 
-def _price_plan(candidate: Candidate) -> Dict[str, str]:
+MIN_REWARD_RISK = 1.5
+FILL_CONSTRAINT = "开盘确认前不得成交"
+
+
+def _price_plan(candidate: Candidate) -> Dict[str, Any]:
     price = candidate.price
     if (
         not price
@@ -17,13 +21,39 @@ def _price_plan(candidate: Candidate) -> Dict[str, str]:
         or candidate.support > price
         or candidate.resistance <= price
     ):
-        return {"buy_zone": "等待支撑位确认", "stop_loss": "等待风险边界确认", "target": "等待压力位确认"}
+        return {
+            "buy_zone": "等待支撑位确认",
+            "stop_loss": "等待风险边界确认",
+            "target": "等待压力位确认",
+            "reward_risk": None,
+            "entry_price": None,
+        }
     support = float(candidate.support)
+    entry = float(price)
     stop = support - float(candidate.atr or price * 0.05) * 1.25
+    target = float(candidate.resistance)
+    risk = entry - stop
+    reward_risk = round((target - entry) / risk, 4) if risk > 0 else None
     return {
-        "buy_zone": f"{support:.2f}-{float(price):.2f}",
+        "buy_zone": f"{support:.2f}-{entry:.2f}",
         "stop_loss": f"{max(0.01, stop):.2f}",
-        "target": f"{float(candidate.resistance):.2f}",
+        "target": f"{target:.2f}",
+        "reward_risk": reward_risk,
+        "entry_price": entry,
+    }
+
+
+def _position_plan(market_regime: Dict[str, Any] | None) -> Dict[str, Any]:
+    defensive = bool(market_regime and market_regime.get("regime") == "defense" and market_regime.get("status") == "available")
+    if defensive:
+        low, high, cap = 0.05, 0.08, 0.30
+    else:
+        low, high, cap = 0.05, 0.10, 0.80
+    return {
+        "position_pct_min": low,
+        "position_pct_max": high,
+        "account_cap_pct": cap,
+        "position_text": f"单票{low:.0%}-{high:.0%}，账户总仓≤{cap:.0%}".replace(".0%", "%"),
     }
 
 
@@ -292,6 +322,13 @@ def select_by_rules(
         reasons = [e.get("statement") for e in candidate.evidence if e.get("statement") and e.get("supports", True)]
         if not reasons:
             continue
+        reward_risk = plan.get("reward_risk")
+        if reward_risk is not None and float(reward_risk) < MIN_REWARD_RISK:
+            candidate.rejection_reasons.append(
+                f"reward_risk:盈亏比{reward_risk}低于{MIN_REWARD_RISK:.1f}，空间不足不得条件买入"
+            )
+            continue
+        position = _position_plan(market_regime)
         picks.append(
             {
                 "code": candidate.code,
@@ -299,9 +336,12 @@ def select_by_rules(
                 "reference_price": candidate.price,
                 "reference_date": getattr(candidate, "price_as_of", None),
                 "reference_source": "candidate_snapshot",
-                "action": "WATCH",
+                "action": "CONDITIONAL_BUY",
+                "execution_status": "awaiting_open_confirmation",
+                "fill_constraint": FILL_CONSTRAINT,
                 "confidence": round(0.45 + candidate.composite * 0.4, 2),
                 **plan,
+                **position,
                 "holding_days": "5-20个交易日",
                 "rationale": "；".join(reasons[:5]),
                 "trigger": "板块不转弱且价格站稳前一交易日收盘，成交额不低于20日均值",

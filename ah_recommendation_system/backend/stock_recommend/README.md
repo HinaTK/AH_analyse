@@ -14,6 +14,7 @@ python -m ah_recommendation_system.backend.stock_recommend.run --mock
 
 # 实盘采集、保存并推送（未配置的推送渠道会自动跳过）
 python -m ah_recommendation_system.backend.stock_recommend.run --push
+python -m ah_recommendation_system.backend.stock_recommend.run --open-confirm --push
 python -m ah_recommendation_system.backend.stock_recommend.run --post-market --push
 python -m ah_recommendation_system.backend.stock_recommend.run --weekly-reweight
 ```

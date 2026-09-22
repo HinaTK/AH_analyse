@@ -44,6 +44,7 @@ from ah_recommendation_system.backend.stock_recommend.feishu_pusher import (
     push_to_feishu,
 )
 from ah_recommendation_system.backend.stock_recommend.rule_selector import finalize_picks_against_hotspots, select_by_rules
+from ah_recommendation_system.backend.stock_recommend.open_confirm import confirm_open_picks
 from ah_recommendation_system.backend.stock_recommend.evidence_collection import enrich_evidence
 from ah_recommendation_system.backend.stock_recommend.report_builder import (
     build_report,
@@ -1428,6 +1429,141 @@ def _build_direction_outcomes(
     return outcomes
 
 
+def _lookup_open_quotes(codes: list[str]) -> Dict[str, Dict[str, Any]]:
+    """Best-effort live quotes for open confirmation. Missing fields cancel the ticket."""
+    wanted = {str(code).zfill(6) if str(code).isdigit() else str(code) for code in codes if code}
+    quotes: Dict[str, Dict[str, Any]] = {}
+    if not wanted:
+        return quotes
+    try:
+        snap = MarketDataManager().prefetch_snapshot(limit=6000)
+        rows = list(((snap.fundamental or {}) if isinstance(snap.fundamental, dict) else {}).get("rows") or [])
+    except Exception as exc:
+        logger.warning("open-confirm snapshot failed: {}", type(exc).__name__)
+        return quotes
+    for row in rows:
+        code = str((row or {}).get("code") or "")
+        padded = code.zfill(6) if code.isdigit() else code
+        if padded not in wanted and code not in wanted:
+            continue
+        quotes[padded or code] = {
+            "price": (row or {}).get("price") or (row or {}).get("close"),
+            "previous_close": (row or {}).get("previous_close") or (row or {}).get("pre_close"),
+            "amount": (row or {}).get("amount"),
+            "amount_20d": (row or {}).get("amount_20d") or (row or {}).get("avg_amount_20d"),
+            "sector_change_pct": (row or {}).get("industry_change_pct") or (row or {}).get("sector_change_pct"),
+        }
+    return quotes
+
+
+def _save_open_confirm_report(review: Dict[str, Any], *, report_path: Path) -> Dict[str, str]:
+    import json
+
+    target_dir = report_path.parent
+    payload = json.dumps(review, ensure_ascii=False, indent=2)
+    json_path = target_dir / "latest_open_confirm.json"
+    json_path.write_text(payload, encoding="utf-8")
+    dated = target_dir / f"open_confirm_{str(review.get('as_of') or '').replace('-', '')}.json"
+    dated.write_text(payload, encoding="utf-8")
+    return {"json_path": str(json_path), "dated_json": str(dated)}
+
+
+def run_open_confirm(
+    *,
+    mock: bool = False,
+    push: bool = False,
+    force_push: bool = False,
+    report_path: Optional[Path] = None,
+    expected_as_of: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Confirm today's pre-market conditional tickets after the open. Never overwrites latest.json."""
+    report_dir = _backend_root() / "data" / "stock_recommend"
+    latest = Path(report_path) if report_path is not None else report_dir / "latest.json"
+    if not latest.exists():
+        raise FileNotFoundError("No pre-market report found; run the pre-market job first")
+    import json
+
+    report = json.loads(latest.read_text(encoding="utf-8"))
+    expected_date = expected_as_of or datetime.now().strftime("%Y-%m-%d")
+    as_of = str(report.get("as_of") or "")
+    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if report.get("type") != "stock_recommend_pre_market" or as_of != expected_date:
+        reason = f"latest.json 不是当日盘前报告：期望 {expected_date}，实际 {as_of or '缺失'}"
+        review = {
+            "schema_version": "decision-report-v2",
+            "type": "stock_recommend_open_confirm_error",
+            "as_of": expected_date,
+            "generated_at": generated_at,
+            "run": {
+                "run_id": f"{expected_date.replace('-', '')}-open_confirm-error",
+                "session": "open_confirm",
+                "trade_date": expected_date,
+                "generated_at": generated_at,
+                "status": "failed",
+            },
+            "quality_gate": {"passed": False, "blocking_reasons": [reason], "warnings": []},
+            "data_status": "failed",
+            "picks": [],
+            "etf_picks": [],
+            "summary": "开盘确认未执行，避免使用旧报告。",
+        }
+        paths = _save_open_confirm_report(review, report_path=latest)
+        return {"ok": False, "review": review, "paths": paths, "push": None}
+    quotes = {} if mock else _lookup_open_quotes([str(item.get("code") or "") for item in (report.get("picks") or [])])
+    confirmed = confirm_open_picks(report.get("picks") or [], quotes=quotes)
+    for pick in confirmed:
+        pick.setdefault("rationale", pick.get("cancel_reason") or pick.get("fill_constraint") or "开盘确认")
+        if not any(str((item or {}).get("statement") or "").strip() for item in (pick.get("evidence") or [])):
+            pick["evidence"] = [{"statement": pick.get("fill_constraint") or pick.get("action") or "开盘确认"}]
+    directions = {
+        "current_attack": [],
+        "medium_term": [],
+        "early_positioning": [],
+        "avoid_or_exit": [],
+    }
+    directions.update(dict(report.get("directions") or {}))
+    market = dict(report.get("market") or {})
+    market.setdefault("regime", "unknown")
+    market.setdefault("status", "unavailable")
+    review = {
+        "schema_version": "decision-report-v2",
+        "type": "stock_recommend_open_confirm",
+        "as_of": as_of,
+        "generated_at": generated_at,
+        "run": {
+            "run_id": f"{as_of.replace('-', '')}-open_confirm-{datetime.now().strftime('%Y%m%dT%H%M%S')}",
+            "session": "open_confirm",
+            "trade_date": as_of,
+            "generated_at": generated_at,
+            "status": "passed",
+        },
+        "coverage": {
+            "mode": "full_market",
+            "source": "live_open" if not mock else "mock",
+            "quote_basis": "intraday",
+            "fresh_data_available": not mock,
+        },
+        "market": market,
+        "directions": directions,
+        "picks": confirmed,
+        "etf_picks": list(report.get("etf_picks") or []),
+        "summary": "开盘确认：区间内且量能达标则BUY，否则CANCEL，不换票。",
+        "source_report": {
+            "run_id": (report.get("run") or {}).get("run_id"),
+            "generated_at": report.get("generated_at"),
+        },
+    }
+    review["quality_gate"] = evaluate_report_quality(review)
+    if not review["quality_gate"]["passed"]:
+        review["run"]["status"] = "failed"
+    paths = _save_open_confirm_report(review, report_path=latest)
+    push_result = _deliver_report(review, force=force_push) if push else None
+    wechat_result = push_to_wechat(review) if push else None
+    if push:
+        paths = _save_open_confirm_report(review, report_path=latest)
+    return {"ok": bool(review["quality_gate"]["passed"]), "review": review, "paths": paths, "push": push_result, "wechat_push": wechat_result}
+
+
 def run_post_market(
     *,
     mock: bool = False,
@@ -1559,6 +1695,7 @@ def main() -> int:
         help="Only verify historical recommendations (T+N returns)",
     )
     parser.add_argument("--post-market", action="store_true", help="Review latest pre-market report")
+    parser.add_argument("--open-confirm", action="store_true", help="Confirm pre-market conditional tickets after the open")
     parser.add_argument("--weekly-reweight", action="store_true", help="Update bounded factor weights")
     parser.add_argument("--previous-close-snapshot", action="store_true", help="Collect and persist previous-close full-market snapshot without push")
     args = parser.parse_args()
@@ -1576,6 +1713,15 @@ def main() -> int:
         )
         print(json_dumps({"ok": result["ok"], "paths": result["paths"], "push": result["push"]}))
         return 0
+
+    if args.open_confirm:
+        result = run_open_confirm(
+            mock=bool(args.mock) or not bool(args.live),
+            push=bool(args.push),
+            force_push=bool(args.force_push),
+        )
+        print(json_dumps({"ok": result["ok"], "paths": result.get("paths"), "push": result.get("push")}))
+        return 0 if result.get("ok") else 1
 
     if args.weekly_reweight:
         result = run_weekly_reweight_job()

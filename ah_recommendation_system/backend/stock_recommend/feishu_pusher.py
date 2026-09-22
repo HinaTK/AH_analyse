@@ -369,7 +369,10 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
 
     elements.append({"tag": "hr"})
     if picks:
-        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "**正式个股推荐**"}})
+        heading = "**正式个股推荐**"
+        if str(report.get("type") or "") == "stock_recommend_open_confirm":
+            heading = "**开盘确认（可下单或取消）**"
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": heading}})
         for i, p in enumerate(picks, 1):
             code = p.get("code", "?")
             name = p.get("name", "?")
@@ -381,6 +384,21 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
                 f"触发：{trigger}\n"
                 f"否定：{invalidation}"
             )
+            if action == "CONDITIONAL_BUY":
+                md += (
+                    f"\n条件买入 {p.get('buy_zone') or '待确认'}｜止损 {p.get('stop_loss') or '待确认'}"
+                    f"｜目标 {p.get('target') or '待确认'}"
+                    f"\n仓位：{p.get('position_text') or '未给出'}"
+                    f"\n{p.get('fill_constraint') or '开盘确认前不得成交'}"
+                )
+            elif action == "BUY":
+                md += (
+                    f"\n可下单｜买入 {p.get('buy_zone') or '待确认'}"
+                    f"｜止损 {p.get('stop_loss') or '待确认'}"
+                    f"\n仓位：{p.get('position_text') or '未给出'}"
+                )
+            elif action == "CANCEL":
+                md += f"\n当日取消：{p.get('cancel_reason') or p.get('fill_constraint') or '未确认'}"
             llm_review = str(p.get("llm_review") or "").strip()
             if "hotspot_match_level" in p:
                 themes = "、".join(p.get("hotspot_themes") or [])

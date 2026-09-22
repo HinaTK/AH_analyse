@@ -103,7 +103,7 @@ class TestEvidenceRecommendation(unittest.TestCase):
 
         candidate = Candidate(
             code="000004", name="技术股", price=10, composite=0.8,
-            atr=0.4, support=9.5, resistance=11.2,
+            atr=0.4, support=9.5, resistance=12.0,
             valid_dimensions={"trend", "price_volume", "value"},
             evidence=[
                 {"factor": "trend", "statement": "站上MA20", "source": "daily", "as_of": "2026-09-08"},
@@ -116,7 +116,8 @@ class TestEvidenceRecommendation(unittest.TestCase):
 
         self.assertEqual(pick["buy_zone"], "9.50-10.00")
         self.assertEqual(pick["stop_loss"], "9.00")
-        self.assertEqual(pick["target"], "11.20")
+        self.assertEqual(pick["target"], "12.00")
+        self.assertGreaterEqual(pick["reward_risk"], 1.5)
 
     def test_hithink_client_without_key_is_disabled_without_network(self):
         from ah_recommendation_system.backend.stock_recommend.hithink_client import HithinkClient
