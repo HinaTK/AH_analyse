@@ -23,6 +23,7 @@ from ah_recommendation_system.backend.run_daily_job import generate_report
 from ah_recommendation_system.backend.stock_recommend.run import (
     run_pipeline,
     run_post_market,
+    run_previous_close_snapshot,
     run_weekly_reweight_job,
 )
 
@@ -56,7 +57,7 @@ def main() -> int:
     parser.add_argument(
         "--run-now", action="store_true", help="Generate report immediately"
     )
-    parser.add_argument("--mode", choices=("legacy", "pre_market", "post_market", "weekly_reweight"), default="legacy")
+    parser.add_argument("--mode", choices=("legacy", "pre_market", "post_market", "previous_close_snapshot", "evening_pre_market", "weekly_reweight"), default="legacy")
     parser.add_argument("--mock", action="store_true")
     parser.add_argument("--push", action="store_true")
     parser.add_argument("--force-push", action="store_true")
@@ -66,6 +67,18 @@ def main() -> int:
     if args.mode == "pre_market":
         result = run_pipeline(mock=args.mock, push=args.push, force_push=args.force_push)
         return _scheduled_exit_code(result, push_requested=args.push)
+    if args.mode == "previous_close_snapshot":
+        result = run_previous_close_snapshot(mock=args.mock)
+        return 0 if result.get("ok") else 1
+    if args.mode == "evening_pre_market":
+        result = run_pipeline(
+            mock=args.mock,
+            push=True,
+            force_push=False,
+            prefer_previous_close=True,
+            require_previous_close=True,
+        )
+        return _scheduled_exit_code(result, push_requested=True)
     if args.mode == "post_market":
         result = run_post_market(mock=args.mock, push=args.push, force_push=args.force_push)
         return _scheduled_exit_code(result, push_requested=args.push)

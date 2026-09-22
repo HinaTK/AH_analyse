@@ -742,8 +742,10 @@ class TestDecisionReportV2(unittest.TestCase):
             first = _deliver_report(report, ledger_path=ledger)
             can_retry = should_deliver(ledger, trade_date="2026-09-11", session="pre_market")
 
-        self.assertTrue(first["ok"])
-        self.assertEqual(push.call_count, 1)
+        self.assertFalse(first["ok"])
+        self.assertTrue(first["skipped"])
+        self.assertEqual(first["reason"], "quality_gate_failed")
+        self.assertEqual(push.call_count, 0)
         self.assertFalse(report["delivery"]["accepted"])
         self.assertTrue(can_retry)
 

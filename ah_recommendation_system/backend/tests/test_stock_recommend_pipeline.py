@@ -251,7 +251,7 @@ class TestStockRecommendationPipeline(unittest.TestCase):
         pipeline.assert_called_once_with(
             mock=False,
             push=True,
-            force_push=True,
+            force_push=False,
             prefer_previous_close=True,
             require_previous_close=True,
         )

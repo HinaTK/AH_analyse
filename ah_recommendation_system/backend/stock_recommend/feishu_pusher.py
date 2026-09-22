@@ -374,21 +374,12 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
             code = p.get("code", "?")
             name = p.get("name", "?")
             action = p.get("action", "WATCH")
-            conf = p.get("confidence", 0)
-            buy = p.get("buy_zone", "—")
-            sl = p.get("stop_loss", "—")
-            tgt = p.get("target", "—")
-            hd = p.get("holding_days", "—")
-            rat = p.get("rationale", "")
-            risks = p.get("key_risks") or []
-            factors = p.get("factors") or {}
-            comp = factors.get("composite", "—")
+            trigger = p.get("trigger") or "未给出"
+            invalidation = p.get("invalidation") or "未给出"
             md = (
-                f"**{i}. {name} ({code})** · `{action}` · 信心 {conf}\n"
-                f"买入 {buy}  止损 {sl}  目标 {tgt}  持有 {hd}\n"
-                f"理由: {rat}\n"
-                f"资金: {_format_capital_evidence(p)}\n"
-                f"{_format_factor_line(p)}"
+                f"**{i}. {name} ({code})** · `{action}`\n"
+                f"触发：{trigger}\n"
+                f"否定：{invalidation}"
             )
             llm_review = str(p.get("llm_review") or "").strip()
             if "hotspot_match_level" in p:
@@ -400,8 +391,6 @@ def build_card(report: Dict[str, Any]) -> Dict[str, Any]:
                     md += "\n热点：未匹配当前热点，基础因子入选"
             if llm_review:
                 md += f"\nAI复核: {llm_review}"
-            if risks:
-                md += "\n风险: " + "; ".join(risks)
             elements.append({"tag": "div", "text": {"tag": "lark_md", "content": md}})
     else:
         elements.append(
@@ -497,6 +486,21 @@ def push_to_feishu(
             "push_to_feishu expects the source report, not a prebuilt card. "
             "Call push_to_feishu(report) and let it build the card internally."
         )
+    coverage = dict(report.get("coverage") or {})
+    run = dict(report.get("run") or {})
+    is_mock = (
+        str(coverage.get("mode") or "") == "mock_sample"
+        or str(coverage.get("source") or "") == "mock"
+        or str(run.get("source") or "") == "mock"
+    )
+    if is_mock:
+        return {"ok": False, "skipped": True, "reason": "mock_delivery_blocked"}
+    quality_failed = (
+        report.get("quality_gate", {}).get("passed") is False
+        or str(run.get("status") or "") == "failed"
+    )
+    if quality_failed:
+        return {"ok": False, "skipped": True, "reason": "quality_gate_failed"}
     hook = resolve_webhook(webhook)
     if not hook:
         return {"ok": False, "skipped": True, "reason": "AH_FEISHU_WEBHOOK not set"}

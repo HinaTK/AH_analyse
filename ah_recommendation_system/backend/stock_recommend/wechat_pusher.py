@@ -23,6 +23,21 @@ def build_wechat_payload(report: Dict[str, Any]) -> Dict[str, Any]:
 def push_to_wechat(
     report: Dict[str, Any], *, webhook: Optional[str] = None, timeout: float = 10.0
 ) -> Dict[str, Any]:
+    coverage = dict(report.get("coverage") or {})
+    run = dict(report.get("run") or {})
+    is_mock = (
+        str(coverage.get("mode") or "") == "mock_sample"
+        or str(coverage.get("source") or "") == "mock"
+        or str(run.get("source") or "") == "mock"
+    )
+    if is_mock:
+        return {"ok": False, "skipped": True, "reason": "mock_delivery_blocked"}
+    quality_failed = (
+        report.get("quality_gate", {}).get("passed") is False
+        or str(run.get("status") or "") == "failed"
+    )
+    if quality_failed:
+        return {"ok": False, "skipped": True, "reason": "quality_gate_failed"}
     hook = (webhook or os.environ.get("AH_WECHAT_WEBHOOK") or "").strip()
     if not hook:
         return {"ok": False, "skipped": True, "reason": "AH_WECHAT_WEBHOOK not set"}

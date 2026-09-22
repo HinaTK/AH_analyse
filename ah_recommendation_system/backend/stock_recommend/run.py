@@ -169,6 +169,19 @@ def _deliver_report(
             "reason": "mock_delivery_blocked",
         })
         return {"ok": False, "skipped": True, "reason": "mock_delivery_blocked"}
+    quality_failed = (
+        report.get("quality_gate", {}).get("passed") is False
+        or str((report.get("run") or {}).get("status") or "") == "failed"
+    )
+    if quality_failed:
+        report.setdefault("delivery", {})
+        report["delivery"].update({
+            "channel": "feishu",
+            "accepted": False,
+            "skipped": True,
+            "reason": "quality_gate_failed",
+        })
+        return {"ok": False, "skipped": True, "reason": "quality_gate_failed"}
     if not should_deliver(target, trade_date=trade_date, session=session, force=force):
         existing = get_delivery(target, trade_date=trade_date, session=session)
         ambiguous = bool(existing.get("ambiguous"))
@@ -1423,11 +1436,7 @@ def run_post_market(
             "delivery": {"channel": "feishu", "payload_hash": "", "accepted": False},
         }
         paths = save_review_report(review, _backend_root())
-        push_result = _deliver_report(review, force=force_push) if push else None
-        wechat_result = push_to_wechat(review) if push else None
-        if push:
-            paths = save_review_report(review, _backend_root())
-        return {"ok": False, "review": review, "paths": paths, "push": push_result, "wechat_push": wechat_result}
+        return {"ok": False, "review": review, "paths": paths, "push": None, "wechat_push": None}
     for pick in report.get("picks") or []:
         code = str(pick.get("code") or "")
         if not code:

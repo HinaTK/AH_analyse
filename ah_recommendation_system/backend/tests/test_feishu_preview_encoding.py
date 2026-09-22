@@ -21,6 +21,7 @@ def report_fixture():
 class TestFeishuPreviewEncoding(unittest.TestCase):
     def test_question_mark_corruption_is_blocked_before_http(self):
         report = report_fixture()
+        report["coverage"] = {"mode": "full_market", "source": "previous_close"}
         report["summary"] = "MOCK ?????????????"
         with patch("ah_recommendation_system.backend.stock_recommend.feishu_pusher.requests.post") as post:
             result = push_to_feishu(report, webhook="https://example.invalid/webhook")
