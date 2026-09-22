@@ -48,6 +48,32 @@ class TestSnapshotProvenance(unittest.TestCase):
             self.assertEqual(rows[0]["original_source"], "hithink_financial_api")
             self.assertFalse(rows[0]["stale"])
 
+    def test_load_previous_close_accepts_explicit_observed_at_timestamp(self):
+        from ah_recommendation_system.backend.stock_recommend.local_store import load_previous_close_snapshot, persist_snapshot
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            observed_at = int(__import__("datetime").datetime(2026, 9, 18, 17, 30).timestamp() * 1000)
+            persist_snapshot(
+                [
+                    {
+                        "code": str(600000 + i).zfill(6),
+                        "name": "A",
+                        "price": 10,
+                        "observed_at": observed_at,
+                        "source": "hithink_financial_api",
+                    }
+                    for i in range(1200)
+                ],
+                root,
+                as_of="2026-09-18",
+            )
+
+            rows = load_previous_close_snapshot(root, as_of="2026-09-21", min_rows=1000)
+
+            self.assertEqual(len(rows), 1200)
+            self.assertEqual(rows[0]["price_as_of"], "2026-09-18")
+
 
 
     def test_persist_snapshot_skips_below_min_rows(self):
@@ -73,6 +99,9 @@ class TestSnapshotProvenance(unittest.TestCase):
             for i in range(1200)
         ]
         with patch("ah_recommendation_system.backend.stock_recommend.run.DEFAULT_COLLECTION_RUNTIME.run") as collect_run, patch(
+            "ah_recommendation_system.backend.stock_recommend.run._enrich_with_daily_features",
+            return_value=0,
+        ), patch(
             "ah_recommendation_system.backend.stock_recommend.run.persist_snapshot",
             return_value={"parquet_path": "x.parquet"},
         ) as persist:

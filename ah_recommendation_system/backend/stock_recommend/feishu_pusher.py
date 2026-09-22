@@ -589,6 +589,67 @@ def push_to_feishu(
     }
 
 
+def push_failure_alert(
+    report: Dict[str, Any],
+    *,
+    webhook: Optional[str] = None,
+    secret: Optional[str] = None,
+    timeout: float = 10.0,
+) -> Dict[str, Any]:
+    """Send a failure notice without treating it as a formal recommendation."""
+    coverage = dict(report.get("coverage") or {})
+    run = dict(report.get("run") or {})
+    is_mock = (
+        str(coverage.get("mode") or "") == "mock_sample"
+        or str(coverage.get("source") or "") == "mock"
+        or str(run.get("source") or "") == "mock"
+    )
+    if is_mock:
+        return {"ok": False, "skipped": True, "reason": "mock_delivery_blocked"}
+    hook = resolve_webhook(webhook)
+    if not hook:
+        return {"ok": False, "skipped": True, "reason": "AH_FEISHU_WEBHOOK not set"}
+    as_of = report.get("as_of", "")
+    quality_gate = dict(report.get("quality_gate") or {})
+    reasons = quality_gate.get("blocking_reasons") or report.get("data_warnings") or ["未知质量异常"]
+    content = (
+        "**任务状态**\n数据采集失败或内容质量未通过，本次未生成正式观察。\n"
+        + "\n".join(f"- {reason}" for reason in reasons)
+        + "\n\n这不是买入建议，也不是当日正式推荐卡。"
+    )
+    payload = {
+        "msg_type": "interactive",
+        "card": {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": f"A股分析任务异常 · {as_of}"},
+                "template": "red",
+            },
+            "elements": [
+                {"tag": "div", "text": {"tag": "lark_md", "content": content}},
+            ],
+        },
+    }
+    sec = (secret if secret is not None else os.environ.get("AH_FEISHU_SECRET") or "").strip()
+    if sec:
+        ts = str(int(time.time()))
+        payload["timestamp"] = ts
+        payload["sign"] = _sign(sec, ts)
+    try:
+        resp = requests.post(hook, json=payload, timeout=timeout)
+        business = resp.json() if resp.text else {}
+        code = business.get("code") if isinstance(business, dict) else None
+        ok = resp.status_code == 200 and code in (None, 0, "0")
+        return {
+            "ok": ok,
+            "status": resp.status_code,
+            "response": business,
+            "reason": "alert_sent" if ok else f"http_{resp.status_code}",
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "reason": "alert_transport_error"}
+
+
 def push_markdown_simple(
     text: str,
     *,

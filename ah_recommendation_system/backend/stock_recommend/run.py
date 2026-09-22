@@ -40,6 +40,7 @@ from ah_recommendation_system.backend.stock_recommend.data_collector import (
     collect_fundamental,
 )
 from ah_recommendation_system.backend.stock_recommend.feishu_pusher import (
+    push_failure_alert,
     push_to_feishu,
 )
 from ah_recommendation_system.backend.stock_recommend.rule_selector import finalize_picks_against_hotspots, select_by_rules
@@ -488,6 +489,11 @@ def run_previous_close_snapshot(
         rows = list(payload.get("rows") or [])
         source = str(payload.get("source") or (rows[0].get("source") if rows else "unknown") or "unknown")
         as_of = str(payload.get("as_of") or as_of)
+        if rows:
+            try:
+                _enrich_with_daily_features(rows, pf, as_of=as_of, limit=min(len(rows), 600))
+            except Exception as exc:
+                errors.append(f"history_enrich:{type(exc).__name__}")
 
     try:
         from ah_recommendation_system.backend.stock_recommend.focused_collector import resolve_industry_universe
@@ -739,6 +745,55 @@ def run_pipeline(
         row_count=len(snap.fundamental.get("rows") or []),
         error_count=len(snap.errors),
     )
+    if not data_available:
+        generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        as_of = str(snap.date or now.strftime("%Y-%m-%d"))
+        reasons = [str(item) for item in (snap.errors or []) if str(item)] or ["核心行情不可用"]
+        report = {
+            "schema_version": "decision-report-v2",
+            "type": "stock_recommend_pre_market",
+            "as_of": as_of,
+            "generated_at": generated_at,
+            "picks": [],
+            "etf_picks": [],
+            "recommendations": {"stocks": [], "etfs": []},
+            "data_status": "failed",
+            "data_warnings": reasons,
+            "coverage": {
+                "mode": coverage_mode,
+                "source": snap.fundamental.get("source") or "unavailable",
+                "fresh_data_available": False,
+            },
+            "quality_gate": {"passed": False, "blocking_reasons": reasons, "warnings": []},
+            "run": {
+                "run_id": f"{as_of.replace('-', '')}-pre_market-collect-failed",
+                "session": "pre_market",
+                "trade_date": as_of,
+                "generated_at": generated_at,
+                "status": "failed",
+                "stages": stages,
+            },
+        }
+        paths = save_report(report, _backend_root())
+        push_result: Optional[Dict[str, Any]] = None
+        if push:
+            push_result = push_failure_alert(report)
+            report.setdefault("delivery", {}).update({
+                "channel": "feishu",
+                "accepted": bool(push_result.get("ok")),
+                "skipped": not bool(push_result.get("ok")),
+                "reason": push_result.get("reason") or "quality_gate_failed",
+            })
+            paths = save_report(report, _backend_root())
+        return {
+            "ok": False,
+            "report": report,
+            "paths": paths,
+            "push": push_result,
+            "wechat_push": None,
+            "as_of": as_of,
+            "generated_at": generated_at,
+        }
     # Rebuild the candidate pool on every run from current signals.  Focus
     # industries remain provenance tags, never a score or an investment reason.
     raw_rows = snap.fundamental.get("rows") or []
@@ -777,14 +832,6 @@ def run_pipeline(
             snap.errors.append(f"hithink_enrichment:{exc}")
     elif not mock and seeds:
         snap.errors.append("hithink_enrichment:skipped_previous_close")
-        if not mock and data_available:
-            try:
-                from ah_recommendation_system.backend.stock_recommend.data_collector import collect_events
-                event_codes = [str(row.get("code")) for row in seeds[:20] if row.get("code")]
-                refreshed_events = collect_events(limit=200, codes=event_codes)
-                snap.events = _merge_candidate_events(snap.events, refreshed_events)
-            except Exception as exc:
-                snap.errors.append(f"candidate_news:{exc}")
     snap.fundamental["rows"] = seeds if seeds else raw_rows
     snap.fundamental["candidate_count"] = len(seeds) if seeds else len(raw_rows)
     previous_close_replay = str(snap.fundamental.get("source") or "") in {"previous_close", "disk_cache", "last_good_snapshot"}
@@ -848,8 +895,7 @@ def run_pipeline(
         selected_codes = {str(candidate.code).zfill(6) for candidate in initial_cands}
         evidence_rows = [row for row in (snap.fundamental.get("rows") or [])
                          if str(row.get("code") or "").zfill(6) in selected_codes]
-        if not previous_close_replay:
-            _enrich_with_daily_features(evidence_rows, pf, as_of=snap.date, limit=len(evidence_rows))
+        _enrich_with_daily_features(evidence_rows, pf, as_of=snap.date, limit=min(30, len(evidence_rows)))
         evidence_audit = enrich_evidence(evidence_rows, as_of=snap.date, limit=len(evidence_rows))
         evidence_audit["attempted_count"] = len(evidence_rows)
         snap.errors.extend(evidence_audit.get("errors") or [])
@@ -1273,12 +1319,12 @@ def run_pipeline(
     if push:
         quality_failed = report.get("quality_gate", {}).get("passed") is False or str((report.get("run") or {}).get("status") or "") == "failed"
         if quality_failed:
-            push_result = {"ok": False, "skipped": True, "reason": "quality_gate_failed"}
+            push_result = push_failure_alert(report)
             report.setdefault("delivery", {}).update({
                 "channel": "feishu",
-                "accepted": False,
-                "skipped": True,
-                "reason": "quality_gate_failed",
+                "accepted": bool(push_result.get("ok")),
+                "skipped": not bool(push_result.get("ok")),
+                "reason": push_result.get("reason") or "quality_gate_failed",
             })
         else:
             push_result = _deliver_report(report, force=force_push)

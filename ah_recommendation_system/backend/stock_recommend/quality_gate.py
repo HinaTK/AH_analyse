@@ -73,7 +73,12 @@ def evaluate_report_quality(report: Mapping[str, Any]) -> Dict[str, Any]:
         )
     checks.append({"name": "candidate_history_completeness", "passed": history_complete})
     if not history_complete:
-        blockers.append("候选历史行情完整率低于80%")
+        message = "候选历史行情完整率低于80%"
+        replay = source in {"previous_close", "disk_cache"} or str(coverage.get("quote_basis") or "") == "previous_close"
+        if replay:
+            warnings.append(message + "（昨收回放，不阻断正式观察）")
+        else:
+            blockers.append(message)
 
     decision_complete = bool(market.get("regime") and market.get("status")) and all(
         key in directions

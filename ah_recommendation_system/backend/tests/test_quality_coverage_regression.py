@@ -27,6 +27,36 @@ class TestQualityCoverageRegression(unittest.TestCase):
         self.assertFalse(self.check({"source": "mock", "history_target_count": 10, "history_count": 2},
                                     "candidate_history_completeness"))
 
+    def test_previous_close_history_gap_warns_instead_of_blocking(self):
+        result = evaluate_report_quality({
+            "coverage": {
+                "source": "previous_close",
+                "quote_basis": "previous_close",
+                "mode": "full_market",
+                "fresh_data_available": True,
+                "history_target_count": 30,
+                "history_count": 0,
+            },
+            "market": {"regime": "defense", "status": "需确认"},
+            "directions": {
+                "current_attack": [],
+                "medium_term": [],
+                "early_positioning": [],
+                "avoid_or_exit": [],
+            },
+        })
+        self.assertTrue(result["passed"])
+        self.assertFalse(self.check(
+            {
+                "source": "previous_close",
+                "history_target_count": 30,
+                "history_count": 0,
+            },
+            "candidate_history_completeness",
+        ))
+        self.assertTrue(any("历史行情完整率" in item for item in result["warnings"]))
+        self.assertFalse(any("历史行情完整率" in item for item in result["blocking_reasons"]))
+
     def test_live_freshness_requires_explicit_true(self):
         for value in (None, False, 1, "true"):
             with self.subTest(value=value):

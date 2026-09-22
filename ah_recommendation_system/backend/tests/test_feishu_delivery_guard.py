@@ -122,6 +122,55 @@ class FeishuDeliveryGuardTests(unittest.TestCase):
         self.assertNotIn("持有 5-10", rendered)
         self.assertNotIn("信心 0.72", rendered)
 
+    def test_quality_failure_sends_alert_not_formal_recommendation(self):
+        from ah_recommendation_system.backend.stock_recommend.feishu_pusher import push_failure_alert
+
+        report = _live_report(
+            run={"run_id": "bad", "session": "pre_market", "status": "failed", "trade_date": "2026-09-22"},
+            quality_gate={"passed": False, "blocking_reasons": ["候选历史行情完整率低于80%"]},
+            picks=[],
+        )
+        with patch("ah_recommendation_system.backend.stock_recommend.feishu_pusher.requests.post") as post:
+            post.return_value.status_code = 200
+            post.return_value.json.return_value = {"code": 0}
+            result = push_failure_alert(report, webhook="https://open.feishu.cn/open-apis/bot/v2/hook/test")
+
+        self.assertTrue(result["ok"])
+        payload = post.call_args.kwargs["json"]
+        rendered = json.dumps(payload, ensure_ascii=False)
+        self.assertIn("任务异常", rendered)
+        self.assertIn("候选历史行情完整率低于80%", rendered)
+        self.assertNotIn("北化股份", rendered)
+        self.assertNotIn("买入 23.00-23.50", rendered)
+
+    def test_collect_failure_skips_rule_scan(self):
+        from ah_recommendation_system.backend.stock_recommend.run import run_pipeline
+
+        with patch("ah_recommendation_system.backend.stock_recommend.run.collect_all") as collect, patch(
+            "ah_recommendation_system.backend.stock_recommend.run.load_previous_close_snapshot",
+            return_value=[],
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.build_candidates"
+        ) as build_cands, patch(
+            "ah_recommendation_system.backend.stock_recommend.run.save_report",
+            return_value={},
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.push_failure_alert",
+            return_value={"ok": True, "reason": "alert_sent"},
+        ):
+            snap = type("Snap", (), {})()
+            snap.date = "2026-09-22"
+            snap.errors = ["previous_close_snapshot_missing"]
+            snap.fundamental = {"rows": [], "source": None}
+            snap.capital = {"rows": []}
+            snap.events = {}
+            collect.return_value = snap
+            result = run_pipeline(mock=False, push=True, prefer_previous_close=True, require_previous_close=True)
+
+        build_cands.assert_not_called()
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["push"]["reason"], "alert_sent")
+
 
 if __name__ == "__main__":
     unittest.main()
