@@ -173,7 +173,7 @@ class TestOpenConfirm(unittest.TestCase):
             },
         )
         self.assertEqual(confirmed[0]["action"], "CANCEL")
-        self.assertIn("gap_up", confirmed[0]["cancel_reason"])
+        self.assertEqual(confirmed[0]["cancel_reason"], "gap_up")
 
     def test_low_turnover_cancels(self):
         from ah_recommendation_system.backend.stock_recommend.open_confirm import confirm_open_picks
@@ -277,6 +277,66 @@ class TestOpenConfirm(unittest.TestCase):
             self.assertEqual(saved_pre["type"], "stock_recommend_pre_market")
             confirm_path = root / "latest_open_confirm.json"
             self.assertTrue(confirm_path.exists())
+
+    def test_lookup_open_quotes_reads_snapshot_rows(self):
+        from ah_recommendation_system.backend.stock_recommend.market_data import SnapshotResult
+        from ah_recommendation_system.backend.stock_recommend.run import _lookup_open_quotes
+
+        snap = SnapshotResult(
+            rows=[{
+                "code": "603893",
+                "price": 196.5,
+                "amount": 1_200_000_000,
+                "volume_ratio_20d": 1.2,
+                "change_pct": 0.4,
+            }]
+        )
+        with patch(
+            "ah_recommendation_system.backend.stock_recommend.run._quote_with_fallback",
+            return_value=snap.rows,
+        ), patch(
+            "ah_recommendation_system.backend.stock_recommend.run.MarketDataManager"
+        ) as manager:
+            quotes = _lookup_open_quotes(["603893"])
+            manager.return_value.prefetch_snapshot.assert_not_called()
+
+        self.assertEqual(quotes["603893"]["price"], 196.5)
+        self.assertEqual(quotes["603893"]["amount"], 1_200_000_000)
+        self.assertEqual(quotes["603893"]["amount_20d"], 1_000_000_000)
+
+    def test_missing_open_quotes_fail_job_instead_of_fake_cancel(self):
+        from ah_recommendation_system.backend.stock_recommend.run import run_open_confirm
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            latest = root / "latest.json"
+            latest.write_text(json.dumps(_premarket_report()), encoding="utf-8")
+            with patch(
+                "ah_recommendation_system.backend.stock_recommend.run._backend_root",
+                return_value=root,
+            ), patch(
+                "ah_recommendation_system.backend.stock_recommend.run._lookup_open_quotes",
+                return_value={},
+            ), patch(
+                "ah_recommendation_system.backend.stock_recommend.run.push_failure_alert",
+                return_value={"ok": True, "reason": "sent"},
+            ) as alert, patch(
+                "ah_recommendation_system.backend.stock_recommend.run._deliver_report",
+            ) as deliver, patch(
+                "ah_recommendation_system.backend.stock_recommend.run.push_to_wechat",
+                return_value=None,
+            ):
+                result = run_open_confirm(
+                    push=True,
+                    report_path=latest,
+                    expected_as_of="2026-09-22",
+                )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["review"]["picks"], [])
+        self.assertEqual(result["review"]["type"], "stock_recommend_open_confirm_error")
+        alert.assert_called_once()
+        deliver.assert_not_called()
 
 
 class TestConditionalCardCopy(unittest.TestCase):

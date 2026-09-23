@@ -64,6 +64,7 @@ from ah_recommendation_system.backend.stock_recommend.focused_collector import (
     collect_focused_market,
     industry_tag_coverage,
     resolve_industry_universe,
+    _quote_with_fallback,
 )
 from ah_recommendation_system.backend.stock_recommend.collection_runtime import DEFAULT_COLLECTION_RUNTIME
 from ah_recommendation_system.backend.stock_recommend.dynamic_scanner import scan_snapshot
@@ -1429,31 +1430,100 @@ def _build_direction_outcomes(
     return outcomes
 
 
+def _quotes_from_rows(rows: list[Dict[str, Any]], wanted: set[str]) -> Dict[str, Dict[str, Any]]:
+    quotes: Dict[str, Dict[str, Any]] = {}
+    for row in rows or []:
+        code = _pad_code((row or {}).get("code"))
+        if code not in wanted:
+            continue
+        amount = (row or {}).get("amount")
+        if amount is None:
+            amount = (row or {}).get("turnover")
+        amount_20d = (row or {}).get("amount_20d") or (row or {}).get("avg_amount_20d")
+        ratio = (row or {}).get("volume_ratio_20d")
+        if amount_20d is None and amount is not None and ratio not in (None, 0, 0.0):
+            try:
+                amount_20d = float(amount) / float(ratio)
+            except (TypeError, ValueError, ZeroDivisionError):
+                amount_20d = None
+        quotes[code] = {
+            "price": (row or {}).get("price") or (row or {}).get("last_price") or (row or {}).get("close"),
+            "previous_close": (row or {}).get("previous_close") or (row or {}).get("pre_close") or (row or {}).get("prev_price"),
+            "amount": amount,
+            "amount_20d": amount_20d,
+            "sector_change_pct": (row or {}).get("industry_change_pct") or (row or {}).get("sector_change_pct"),
+        }
+    return quotes
+
+
 def _lookup_open_quotes(codes: list[str]) -> Dict[str, Dict[str, Any]]:
-    """Best-effort live quotes for open confirmation. Missing fields cancel the ticket."""
-    wanted = {str(code).zfill(6) if str(code).isdigit() else str(code) for code in codes if code}
+    """Live quotes for open confirmation. Incomplete quotes must fail the job, not fake-cancel."""
+    wanted = {_pad_code(code) for code in codes if code}
     quotes: Dict[str, Dict[str, Any]] = {}
     if not wanted:
         return quotes
     try:
-        snap = MarketDataManager().prefetch_snapshot(limit=6000)
-        rows = list(((snap.fundamental or {}) if isinstance(snap.fundamental, dict) else {}).get("rows") or [])
+        quotes.update(_quotes_from_rows(_quote_with_fallback(sorted(wanted)), wanted))
     except Exception as exc:
-        logger.warning("open-confirm snapshot failed: {}", type(exc).__name__)
-        return quotes
-    for row in rows:
-        code = str((row or {}).get("code") or "")
-        padded = code.zfill(6) if code.isdigit() else code
-        if padded not in wanted and code not in wanted:
-            continue
-        quotes[padded or code] = {
-            "price": (row or {}).get("price") or (row or {}).get("close"),
-            "previous_close": (row or {}).get("previous_close") or (row or {}).get("pre_close"),
-            "amount": (row or {}).get("amount"),
-            "amount_20d": (row or {}).get("amount_20d") or (row or {}).get("avg_amount_20d"),
-            "sector_change_pct": (row or {}).get("industry_change_pct") or (row or {}).get("sector_change_pct"),
-        }
+        logger.warning("open-confirm focused quote failed: {}", type(exc).__name__)
+    missing = {code for code in wanted if quotes.get(code, {}).get("price") is None}
+    if missing:
+        try:
+            snap = MarketDataManager().prefetch_snapshot(limit=6000)
+            quotes.update(_quotes_from_rows(list(getattr(snap, "rows", None) or []), missing))
+        except Exception as exc:
+            logger.warning("open-confirm snapshot failed: {}", type(exc).__name__)
     return quotes
+
+
+def _open_confirm_missing_quotes(
+    picks: list[Dict[str, Any]],
+    quotes: Dict[str, Dict[str, Any]],
+) -> list[str]:
+    from ah_recommendation_system.backend.stock_recommend.open_confirm import _parse_zone
+
+    missing: list[str] = []
+    for item in picks or []:
+        if str(item.get("action") or "") not in {"CONDITIONAL_BUY", "WATCH"}:
+            continue
+        code = _pad_code(item.get("code"))
+        quote = quotes.get(code) or quotes.get(str(item.get("code") or "")) or {}
+        price = quote.get("price")
+        if price is None:
+            missing.append(code or str(item.get("code") or ""))
+            continue
+        zone = _parse_zone(item.get("buy_zone"))
+        try:
+            last = float(price)
+        except (TypeError, ValueError):
+            missing.append(code or str(item.get("code") or ""))
+            continue
+        if zone is not None and last > zone[1]:
+            continue
+        if quote.get("amount") is None or quote.get("amount_20d") is None:
+            missing.append(code or str(item.get("code") or ""))
+    return missing
+
+
+def _open_confirm_error_review(*, expected_date: str, generated_at: str, reason: str) -> Dict[str, Any]:
+    return {
+        "schema_version": "decision-report-v2",
+        "type": "stock_recommend_open_confirm_error",
+        "as_of": expected_date,
+        "generated_at": generated_at,
+        "run": {
+            "run_id": f"{expected_date.replace('-', '')}-open_confirm-error",
+            "session": "open_confirm",
+            "trade_date": expected_date,
+            "generated_at": generated_at,
+            "status": "failed",
+        },
+        "quality_gate": {"passed": False, "blocking_reasons": [reason], "warnings": []},
+        "data_status": "failed",
+        "picks": [],
+        "etf_picks": [],
+        "summary": "开盘确认未执行，避免使用旧报告或缺失行情。",
+    }
 
 
 def _save_open_confirm_report(review: Dict[str, Any], *, report_path: Path) -> Dict[str, str]:
@@ -1489,28 +1559,21 @@ def run_open_confirm(
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if report.get("type") != "stock_recommend_pre_market" or as_of != expected_date:
         reason = f"latest.json 不是当日盘前报告：期望 {expected_date}，实际 {as_of or '缺失'}"
-        review = {
-            "schema_version": "decision-report-v2",
-            "type": "stock_recommend_open_confirm_error",
-            "as_of": expected_date,
-            "generated_at": generated_at,
-            "run": {
-                "run_id": f"{expected_date.replace('-', '')}-open_confirm-error",
-                "session": "open_confirm",
-                "trade_date": expected_date,
-                "generated_at": generated_at,
-                "status": "failed",
-            },
-            "quality_gate": {"passed": False, "blocking_reasons": [reason], "warnings": []},
-            "data_status": "failed",
-            "picks": [],
-            "etf_picks": [],
-            "summary": "开盘确认未执行，避免使用旧报告。",
-        }
+        review = _open_confirm_error_review(expected_date=expected_date, generated_at=generated_at, reason=reason)
         paths = _save_open_confirm_report(review, report_path=latest)
         return {"ok": False, "review": review, "paths": paths, "push": None}
-    quotes = {} if mock else _lookup_open_quotes([str(item.get("code") or "") for item in (report.get("picks") or [])])
-    confirmed = confirm_open_picks(report.get("picks") or [], quotes=quotes)
+    picks = list(report.get("picks") or [])
+    quotes = {} if mock else _lookup_open_quotes([str(item.get("code") or "") for item in picks])
+    missing = [] if mock else _open_confirm_missing_quotes(picks, quotes)
+    if missing:
+        reason = f"开盘确认行情缺失，不能把接口失败包装成CANCEL：{','.join(missing)}"
+        review = _open_confirm_error_review(expected_date=expected_date, generated_at=generated_at, reason=reason)
+        paths = _save_open_confirm_report(review, report_path=latest)
+        push_result = push_failure_alert(review) if push else None
+        if push:
+            paths = _save_open_confirm_report(review, report_path=latest)
+        return {"ok": False, "review": review, "paths": paths, "push": push_result}
+    confirmed = confirm_open_picks(picks, quotes=quotes)
     for pick in confirmed:
         pick.setdefault("rationale", pick.get("cancel_reason") or pick.get("fill_constraint") or "开盘确认")
         if not any(str((item or {}).get("statement") or "").strip() for item in (pick.get("evidence") or [])):

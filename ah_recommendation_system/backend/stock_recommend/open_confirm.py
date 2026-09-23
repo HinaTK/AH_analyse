@@ -56,7 +56,7 @@ def confirm_open_picks(
             low, high = zone
             if price > high:
                 reasons.append("gap_up")
-            if amount is None or amount_20d is None or amount_20d <= 0 or amount < amount_20d:
+            elif amount is None or amount_20d is None or amount_20d <= 0 or amount < amount_20d:
                 reasons.append("volume")
             if sector is not None and sector <= -0.5:
                 reasons.append("sector_weak")
