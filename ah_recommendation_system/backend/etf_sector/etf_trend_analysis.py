@@ -44,7 +44,11 @@ DEFAULT_ETF_UNIVERSE: List[EtfUniverseItem] = [
 DEFAULT_PARAMETERS = TrendAnalysisParameters()
 _ETF_CODE_PATTERN = re.compile(r"\d{6}")
 _DEFAULT_ETF_MAP = {item.code: item for item in DEFAULT_ETF_UNIVERSE}
-_HISTORY_FETCH_RETRY_DELAYS = (0.35, 0.8)
+# Keep fallback bounded: three attempts per source with short backoff.  A
+# failed provider must not hold up the complete report for minutes.
+_HISTORY_FETCH_RETRY_DELAYS = (0.15, 0.35)
+_ETF_HISTORY_CACHE_TTL_SECONDS = 30 * 60
+_ETF_HISTORY_CACHE: Dict[Tuple[str, str, str], Tuple[float, pd.DataFrame, str]] = {}
 
 RECOMMENDATION_PRIORITY = {
     "优先关注": 0,
@@ -321,6 +325,18 @@ def _fetch_history_with_retries(
 def fetch_etf_history_with_fallback(
     symbol: str, start_date: str, end_date: str
 ) -> Tuple[pd.DataFrame, str]:
+    cache_key = (str(symbol), str(start_date), str(end_date))
+    cached = _ETF_HISTORY_CACHE.get(cache_key)
+    if cached is not None:
+        cached_at, cached_frame, cached_source = cached
+        age = max(0.0, time.time() - cached_at)
+        if age <= _ETF_HISTORY_CACHE_TTL_SECONDS:
+            frame = cached_frame.copy()
+            frame.attrs.update({"cache_age_seconds": round(age, 3), "cache_hit": True,
+                                "provider_source": cached_source})
+            return frame, cached_source
+        _ETF_HISTORY_CACHE.pop(cache_key, None)
+
     errors: List[str] = []
     fetch_plan = [
         (
@@ -348,7 +364,17 @@ def fetch_etf_history_with_fallback(
                 **kwargs,
             )
             if _is_non_empty_history(df):
-                return df, source_name
+                # Preserve adjustment provenance for downstream return
+                # calculations.  qfq and raw series must never be silently
+                # treated as interchangeable.
+                frame = df.copy()
+                frame.attrs.update({
+                    "provider_source": source_name,
+                    "adjustment": "qfq" if source_name == "eastmoney_qfq" else "raw" if source_name == "eastmoney_raw" else "sina",
+                    "cache_hit": False,
+                })
+                _ETF_HISTORY_CACHE[cache_key] = (time.time(), frame.copy(), source_name)
+                return frame, source_name
         except Exception as exc:
             errors.append(f"{source_name}:{exc}")
 

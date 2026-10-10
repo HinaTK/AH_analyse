@@ -168,7 +168,9 @@ def load_previous_close_snapshot(
         # its quotes represent. Every row must carry the same explicit quote
         # date; a file label or a turnover threshold is not a quote date.
         row_dates = [
-            quote_date_from_value(row.get("price_as_of") or row.get("quote_date") or row.get("price_date"))
+            quote_date_from_value(
+                row.get("price_as_of") or row.get("quote_date") or row.get("price_date") or row.get("observed_at")
+            )
             for row in rows
         ]
         quote_dates = {item for item in row_dates if item}
@@ -183,7 +185,9 @@ def load_previous_close_snapshot(
                 original_source=row.get("original_source") or original,
                 source="previous_close",
                 quote_basis="previous_close",
-                price_as_of=quote_date_from_value(row.get("price_as_of") or row.get("quote_date") or row.get("price_date")) or verified_date,
+                price_as_of=quote_date_from_value(
+                    row.get("price_as_of") or row.get("quote_date") or row.get("price_date") or row.get("observed_at")
+                ) or verified_date,
             )
             for row in rows
         ]
