@@ -134,6 +134,7 @@ def run_research(input_path=DEFAULT_INPUT,output_path=None,asof=None,sessions=63
     pd.DataFrame([dict(code=c,window=w,**v) for (c,w),v in runs.items()]).to_csv(out/'runs.csv',index=False)
     pd.DataFrame(returns).to_csv(out/'daily-returns.csv')
     rotation=rank[rank.has_all_four_windows & ~rank.holding & (rank.full_cycles>runs[(BASE[0],'full')]['cycles'])].sort_values(['full_cycles','full_cycle_net','full_cycle_net_per_avg_cost_pct','code'],ascending=[False,False,False,True])
+    rotation_top10=rank[rank.has_all_four_windows & ~rank.holding].sort_values(['full_cycles','full_cycle_net','full_cycle_net_per_avg_cost_pct','code'],ascending=[False,False,False,True]).head(10)
     records=clean(rank.to_dict('records'));holdings={c:next(x for x in records if x['code']==c) for c in HOLDINGS}
     summary=dict(version=VERSION,run_at=run_id,asof=asof,window_start=dates[0],window_end=dates[-1],sessions=sessions,fee_minimum=1,universe_count=universe,attempted_assets=len(pool),rank_rows=len(rank),attempted_runs=len(pool)*4,successful_runs=len(runs),failed_runs=failed,fetch_errors=sum(e['stage']=='fetch' for e in errors),offline=offline,smoke=limit is not None,latest_claim=False,full_pool=limit is None,qualified=int(rank.qualification.sum()),eligibility_snapshot='20260923 historical eligibility; not newly discovered listed universe',scoring_weights=WEIGHTS,output_path=str(out))
     model_excluded=sum(e['stage']=='simulate' and e['error'] in ('initial orders exceed 1% first bar volume','price too high for board lot') for e in errors)
