@@ -140,6 +140,6 @@ def run_research(input_path=DEFAULT_INPUT,output_path=None,asof=None,sessions=63
     summary.update(data_failed_runs=failed-model_excluded,model_excluded_runs=model_excluded)
     summary.update(production_pool=production_pool,production_scope=production_scope,latest_claim=production_scope and summary['data_failed_runs']==0 and summary['fetch_errors']==0)
     summary.update(rankable_rows=int(rank.has_all_four_windows.sum()),successful_assets=int(rank.has_all_four_windows.sum()),failed_assets=int((~rank.has_all_four_windows).sum()))
-    result=clean(dict(summary=summary,ranking=records,rotation_ranking=rotation.to_dict('records'),leader=None if rotation.empty else rotation.iloc[0].to_dict(),holdings=holdings,errors=errors))
+    result=clean(dict(summary=summary,ranking=records,rotation_ranking=rotation.to_dict('records'),rotation_top10=rotation.head(10).to_dict('records'),leader=None if rotation.empty else rotation.iloc[0].to_dict(),holdings=holdings,errors=errors))
     (out/'summary.json').write_text(dump(summary),encoding='utf-8');(out/'result.json').write_text(dump(result),encoding='utf-8');progress(dict(stage='complete',summary=summary))
     return result

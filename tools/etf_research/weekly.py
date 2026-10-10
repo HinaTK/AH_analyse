@@ -43,7 +43,8 @@ def run_weekly(state_path=DEFAULT_STATE,research_runner=None,**kwargs):
     for c in research.HOLDINGS:
         x=result['holdings'][c];lines.append(f"{c}：往返{number(x.get('full_cycles'))}次；净差价{money(x.get('full_cycle_net'))}元")
     lines.append('【轮换往返前10·同一套5分钟模拟】')
-    for x in result.get('rotation_ranking',[])[:10]:lines.append(f"{x['code']}：{number(x.get('full_cycles'))}次；净差价{money(x.get('full_cycle_net'))}元")
+    top10=result.get('rotation_top10') or result.get('rotation_ranking',[])[:10]
+    for x in top10:lines.append(f"{x['code']} {x.get('name','')}：{number(x.get('full_cycles'))}次；净差价{money(x.get('full_cycle_net'))}元")
     lines.append('【综合研究排名·第三ETF互补视图】')
     for x in result['ranking'][:10]:
         score='不可用' if x.get('score') is None else f"{x['score']:.3f}"

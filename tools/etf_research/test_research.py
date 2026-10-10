@@ -58,6 +58,9 @@ def test_offline_research_runs_four_windows_and_accounts_for_errors(tmp_path,mon
     assert len(result['ranking'])==5
     assert set(result['holdings'])==set(r.HOLDINGS)
     assert result['summary']['latest_claim'] is False
+    assert len(result['rotation_top10'])<=10
+    assert all(x.get('has_all_four_windows') for x in result['rotation_top10'])
+    assert all(x['code'] not in r.HOLDINGS for x in result['rotation_top10'])
     import json
     text=(out/'summary.json').read_text(encoding='utf-8')
     json.loads(text,parse_constant=lambda x: pytest.fail('invalid JSON constant'))
