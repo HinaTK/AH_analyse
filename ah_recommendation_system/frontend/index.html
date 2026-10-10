@@ -220,24 +220,6 @@
 			font-size: 10px;
 			opacity: 0.75;
 		}
-
-		.badge-strong {
-			border-color: rgba(51, 214, 166, 0.30);
-			background: rgba(51, 214, 166, 0.12);
-			color: rgba(207, 250, 239, 0.96);
-		}
-
-		.badge-warn {
-			border-color: rgba(245, 158, 11, 0.30);
-			background: rgba(245, 158, 11, 0.12);
-			color: rgba(254, 243, 199, 0.96);
-		}
-
-		.badge-weak {
-			border-color: rgba(239, 68, 68, 0.28);
-			background: rgba(239, 68, 68, 0.12);
-			color: rgba(254, 226, 226, 0.96);
-		}
 	</style>
 </head>
 <body>
@@ -250,29 +232,19 @@
 						<div>
 							<div class="text-xs uppercase tracking-widest" style="color: var(--muted2)">AH / A股 与 H股</div>
 							<h1 class="text-2xl md:text-3xl font-bold mt-1">每日推荐控制台</h1>
-							<p class="text-sm mt-2" style="color: var(--muted)">按各模块来源和时间核对结果。历史报告不是实时行情，模拟数据不能当作当日判断。</p>
+							<p class="text-sm mt-2" style="color: var(--muted)">点击交互，实时刷新、调整参数、导出结果。默认演示模式使用模拟数据。</p>
 						</div>
 						<div class="flex flex-wrap items-center gap-2">
 							<span class="badge">接口: <span class="mono">/api/v1/*</span></span>
 							<span class="badge">导出: <span class="mono">xlsx/csv</span></span>
-							<span class="badge">模式: <span class="mono">按模块核对来源/时间</span></span>
+							<span class="badge">模式: <span class="mono">演示/模拟</span></span>
 						</div>
 					</div>
-					<div class="mt-5 flex flex-wrap gap-2 items-center">
-						<button v-for="tab in primaryTabs" :key="tab.id" class="btn" :class="currentTab === tab.id ? 'btn-primary' : ''" @click="currentTab = tab.id">
+					<div class="mt-5 flex flex-wrap gap-2">
+						<button v-for="tab in tabs" :key="tab.id" class="btn" :class="currentTab === tab.id ? 'btn-primary' : ''" @click="currentTab = tab.id">
 							<span class="mono">{{ tab.short }}</span>
 							<span>{{ tab.name }}</span>
 						</button>
-						<button v-if="secondaryTabs.length" class="btn btn-secondary" @click="showSecondaryTabs = !showSecondaryTabs">
-							<span class="mono">···</span>
-							<span>{{ showSecondaryTabs ? '收起其他策略' : '更多策略' }}</span>
-						</button>
-						<template v-if="showSecondaryTabs">
-							<button v-for="tab in secondaryTabs" :key="tab.id" class="btn" :class="currentTab === tab.id ? 'btn-primary' : ''" @click="currentTab = tab.id">
-								<span class="mono">{{ tab.short }}</span>
-								<span>{{ tab.name }}</span>
-							</button>
-						</template>
 							<button class="btn" :disabled="updating" @click="forceUpdate">{{ updating ? '更新中...' : '强制更新' }}</button>
 							<button class="btn btn-secondary" :disabled="updating" @click="forceUpdateMock">模拟数据</button>
 							<button class="btn btn-secondary" :disabled="updating" @click="resetRefreshState">重置状态</button>
@@ -301,9 +273,9 @@
 				<div v-if="currentTab === 'pair_trading'"><pair-trading :refresh-key="refreshKey" @toast="showToast"></pair-trading></div>
 				<div v-if="currentTab === 'multi_factor'"><multi-factor :refresh-key="refreshKey" @toast="showToast"></multi-factor></div>
 				<div v-if="currentTab === 'ml_prediction'"><ml-prediction :refresh-key="refreshKey" @toast="showToast"></ml-prediction></div>
-					<div v-if="currentTab === 'etf_sector'"><etf-sector :refresh-key="refreshKey" @toast="showToast"></etf-sector></div>
-				<div v-if="currentTab === 'review'"><review-module :refresh-key="refreshKey" @toast="showToast"></review-module></div>
-				<div v-if="currentTab === 'daily_recommend'"><daily-recommendation :refresh-key="refreshKey" @toast="showToast"></daily-recommendation></div>
+				<div v-if="currentTab === 'etf_sector'"><etf-sector :refresh-key="refreshKey" @toast="showToast"></etf-sector></div>
+				<div v-if="currentTab === 'watchlist'"><watchlist-tab :refresh-key="refreshKey" :selected-code="selectedResearchCode" @toast="showToast" @open-research="openResearch"></watchlist-tab></div>
+				<div v-if="currentTab === 'research'"><research-tab :refresh-key="refreshKey" :selected-code="selectedResearchCode" @toast="showToast" @select-code="setResearchCode" @save-watchlist="saveToWatchlist"></research-tab></div>
 			</div>
 		</main>
 
@@ -322,7 +294,6 @@
 			timeout: 30000,
 			headers: { 'Content-Type': 'application/json' }
 		})
-		const ETF_SECTOR_TIMEOUT = 90000
 
 		const HelpTip = {
 			props: {
@@ -396,7 +367,6 @@
 					pair_trading: '配对交易',
 					multi_factor: '多因子',
 					ml_prediction: 'ML预测',
-					etf_trend: 'ETF趋势',
 					all: '全部',
 				}
 				const typeName = typeNameMap[data_type] || data_type
@@ -412,6 +382,897 @@
 				}
 			} catch (e) {
 				emitToast({ title: '导出失败', message: e && e.message ? e.message : String(e) })
+			}
+		}
+
+		function normalizeCode(value) {
+			return String(value || '').trim().toUpperCase()
+		}
+
+		function getErrorMessage(error) {
+			if (error && error.response && error.response.data && error.response.data.detail) {
+				return error.response.data.detail
+			}
+			return error && error.message ? error.message : String(error)
+		}
+
+		function formatFixed(value, digits = 2) {
+			const n = _toNum(value)
+			return n === null ? '-' : n.toFixed(digits)
+		}
+
+		function formatPercent(value, digits = 2) {
+			const n = _toNum(value)
+			return n === null ? '-' : `${n.toFixed(digits)}%`
+		}
+
+		function formatDisplayValue(value) {
+			if (value === null || value === undefined || value === '') return '-'
+			if (typeof value === 'number') {
+				if (!Number.isFinite(value)) return '-'
+				return Math.abs(value) >= 100 ? value.toFixed(2) : value.toFixed(4).replace(/\.?0+$/, '')
+			}
+			if (typeof value === 'boolean') return value ? 'true' : 'false'
+			if (typeof value === 'object') return JSON.stringify(value)
+			return String(value)
+		}
+
+		function prettyJson(value) {
+			return JSON.stringify(value === undefined ? null : value, null, 2)
+		}
+
+		function toChartNumber(value) {
+			const n = _toNum(value)
+			return n === null ? null : n
+		}
+
+		function compactTableRows(rows, maxRows) {
+			return Array.isArray(rows) ? rows.slice(0, maxRows) : []
+		}
+
+		function buildLabeledSummary(primary, secondary, tertiary, emptyHint) {
+			return {
+				primary: primary || '暂无结构化结论',
+				secondary: secondary || '请展开原始输出查看完整细节。',
+				tertiary: tertiary || emptyHint,
+			}
+		}
+
+		const WATCHLIST_PINNED_KEY = 'ah-watchlist-pinned'
+		const RECENT_RESEARCH_KEY = 'ah-research-recent'
+
+		function readStoredCodes(key) {
+			try {
+				const raw = localStorage.getItem(key)
+				if (!raw) return []
+				const items = JSON.parse(raw)
+				return Array.isArray(items) ? items.map(normalizeCode).filter(Boolean) : []
+			} catch (_e) {
+				return []
+			}
+		}
+
+		function writeStoredCodes(key, items) {
+			try {
+				localStorage.setItem(key, JSON.stringify((items || []).map(normalizeCode).filter(Boolean)))
+			} catch (_e) {
+				// ignore storage failures
+			}
+		}
+
+		function humanizeDirection(value) {
+			const v = String(value || '').trim().toLowerCase()
+			if (v === 'sell_ah') return '做空A / 做多H'
+			if (v === 'buy_ah') return '做多A / 做空H'
+			if (v === 'hold') return '暂时观望'
+			if (v === 'premium_increase') return '溢价可能继续扩大'
+			if (v === 'premium_decrease') return '溢价可能回落'
+			if (v === 'stable' || v === 'flat') return '预计大体稳定'
+			if (v === 'unknown') return '方向暂不明确'
+			return formatDisplayValue(value)
+		}
+
+		function humanizeTradeDirection(value) {
+			const v = String(value || '').trim().toLowerCase()
+			if (v === 'long_a_short_h' || v === 'buy_ah') return '做多A / 做空H'
+			if (v === 'short_a_long_h' || v === 'sell_ah') return '做空A / 做多H'
+			return formatDisplayValue(value)
+		}
+
+		function humanizeMetricKey(key) {
+			const map = {
+				total_return_pct: '总收益率',
+				annual_return_pct: '年化收益率',
+				max_drawdown_pct: '最大回撤',
+				sharpe_ratio: '夏普比率',
+				win_rate: '胜率',
+				win_rate_pct: '胜率',
+				trades: '交易次数',
+				trade_count: '交易次数',
+				avg_trade_return_pct: '单笔平均收益',
+				volatility_pct: '波动率',
+			}
+			return map[key] || '其他指标'
+		}
+
+		function humanizeBlockReason(value) {
+			const v = String(value || '').trim().toLowerCase()
+			if (v === 'edge_lt_cost') return '价差不足覆盖成本'
+			if (v === 'data_quality') return '数据质量不足'
+			if (v === 'ok') return '条件满足'
+			return '暂不满足执行条件'
+		}
+
+		function humanizeBacktestMode(value) {
+			const v = String(value || '').trim().toLowerCase()
+			if (v === 'prices') return '价格驱动'
+			return v ? '自定义模式' : '-'
+		}
+
+		const WatchlistTab = {
+			emits: ['toast', 'open-research'],
+			props: {
+				refreshKey: { type: Number, default: 0 },
+				selectedCode: { type: String, default: '' },
+			},
+			template: `
+				<section class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+					<div class="panel p-6 lg:col-span-1">
+						<div class="flex items-start justify-between gap-3">
+							<div>
+								<div class="text-xs uppercase tracking-widest" style="color: var(--muted2)">观察列表</div>
+								<div class="text-xl font-bold mt-1">自选列表</div>
+								<div class="text-sm mt-2" style="color: var(--muted)">输入 A 股代码后加入自选，并从列表直接跳转到研究页。</div>
+							</div>
+							<span class="badge">本地自选列表</span>
+						</div>
+
+						<label class="block mt-6">
+							<div class="text-xs mb-1" style="color: var(--muted2)">A 股代码</div>
+							<input class="input mono" placeholder="601398.SH" v-model="inputCode" @keyup.enter="addSymbol" />
+							<div class="text-xs mt-2" style="color: var(--muted2)">支持 601398.SH 或 601398 形式，回车即可加入自选。</div>
+						</label>
+
+						<div class="mt-4 flex flex-wrap gap-2">
+							<span class="text-xs" style="color: var(--muted2)">重点示例：</span>
+							<button class="btn" @click="useExample('601398.SH')">601398.SH</button>
+							<button class="btn" @click="useExample('601988.SH')">601988.SH</button>
+						</div>
+
+						<div class="mt-4 flex flex-wrap gap-2">
+							<button class="btn btn-primary" @click="addSymbol" :disabled="submitting">{{ submitting ? '添加中...' : '添加' }}</button>
+							<button class="btn" @click="fetchItems" :disabled="loading">{{ loading ? '刷新中...' : '刷新列表' }}</button>
+						</div>
+
+						<div class="mt-6 grid grid-cols-2 gap-3">
+							<div class="kpi">
+								<div class="v" style="color: var(--accent2)">{{ items.length }}</div>
+								<div class="l">自选数量</div>
+							</div>
+							<div class="kpi">
+								<div class="v mono text-base">{{ selectedCode || '-' }}</div>
+								<div class="l">当前研究代码</div>
+							</div>
+						</div>
+					</div>
+
+					<div class="panel p-6 lg:col-span-2">
+						<div class="flex items-center justify-between gap-3">
+							<div>
+								<div class="text-xs uppercase tracking-widest" style="color: var(--muted2)">列表</div>
+								<div class="text-lg font-bold mt-1">已加入的股票</div>
+							</div>
+							<span class="badge">可删除，也可一键进入研究页</span>
+						</div>
+
+						<div class="mt-4 overflow-x-auto">
+							<table class="table">
+								<thead>
+									<tr>
+										<th>股票</th>
+										<th>代码</th>
+										<th>操作</th>
+									</tr>
+								</thead>
+								<tbody>
+									<tr v-for="item in items" :key="item.a_code" class="row">
+										<td>
+											<div class="flex flex-wrap items-center gap-2">
+												<button class="btn" @click="togglePinned(item.a_code)">{{ isPinned(item.a_code) ? '已置顶' : '置顶' }}</button>
+												<div class="font-semibold">{{ item.name || item.a_code }}</div>
+												<span v-if="selectedCode === item.a_code" class="badge">当前研究</span>
+											</div>
+											<div class="mono text-xs mt-2" style="color: var(--muted2)">{{ item.a_code }} / {{ item.h_code || '-' }}</div>
+										</td>
+										<td class="mono">{{ item.a_code }}</td>
+										<td>
+											<div class="flex flex-col sm:flex-row gap-2">
+												<button class="btn btn-blue" @click="openResearch(item.a_code)">研究</button>
+												<button class="btn" @click="removeSymbol(item.a_code)" :disabled="!!removingCodes[item.a_code]">{{ removingCodes[item.a_code] ? '删除中...' : '删除' }}</button>
+											</div>
+										</td>
+									</tr>
+									<tr v-if="loading">
+										<td colspan="3" style="color: var(--muted)">加载中...</td>
+									</tr>
+									<tr v-if="!loading && items.length === 0">
+										<td colspan="3" style="color: var(--muted)">还没有自选股。你可以先添加 601398.SH 这类 A 股代码，加入后即可直接进入研究页。</td>
+									</tr>
+								</tbody>
+							</table>
+						</div>
+					</div>
+				</section>
+			`,
+			data() {
+				return {
+					items: [],
+					inputCode: '',
+					loading: false,
+					submitting: false,
+					removingCodes: {},
+					pinnedCodes: [],
+					listEpoch: 0,
+					listRequestToken: 0,
+					addRequestToken: 0,
+				}
+			},
+			mounted() {
+				this.pinnedCodes = readStoredCodes(WATCHLIST_PINNED_KEY)
+				this.fetchItems()
+			},
+			watch: {
+				refreshKey() {
+					this.fetchItems()
+				}
+			},
+			methods: {
+				emitToast(payload) { this.$emit('toast', payload) },
+				isPinned(code) {
+					return this.pinnedCodes.includes(normalizeCode(code))
+				},
+				applyPinnedSort() {
+					const pinned = new Set(this.pinnedCodes)
+					this.items = [...this.items].sort((a, b) => {
+						const ap = pinned.has(normalizeCode(a && a.a_code)) ? 1 : 0
+						const bp = pinned.has(normalizeCode(b && b.a_code)) ? 1 : 0
+						if (ap !== bp) return bp - ap
+						return String(a && a.a_code || '').localeCompare(String(b && b.a_code || ''))
+					})
+				},
+				togglePinned(code) {
+					const normalized = normalizeCode(code)
+					if (!normalized) return
+					this.pinnedCodes = this.pinnedCodes.includes(normalized)
+						? this.pinnedCodes.filter(item => item !== normalized)
+						: [normalized, ...this.pinnedCodes]
+					writeStoredCodes(WATCHLIST_PINNED_KEY, this.pinnedCodes)
+					this.applyPinnedSort()
+				},
+				useExample(code) {
+					this.inputCode = normalizeCode(code)
+				},
+				async fetchItems() {
+					const token = ++this.listRequestToken
+					const epoch = this.listEpoch
+					this.loading = true
+					try {
+						const res = await api.get('/api/v1/watchlist')
+						if (token !== this.listRequestToken) return
+						if (epoch !== this.listEpoch) return
+						this.items = Array.isArray(res.data && res.data.items) ? res.data.items : []
+						this.applyPinnedSort()
+					} catch (e) {
+						if (token !== this.listRequestToken) return
+						if (epoch !== this.listEpoch) return
+						this.emitToast({ title: '自选列表获取失败', message: getErrorMessage(e) })
+					} finally {
+						if (token !== this.listRequestToken) return
+						this.loading = false
+					}
+				},
+				async addSymbol() {
+					const code = normalizeCode(this.inputCode)
+					if (!code) {
+						this.emitToast({ title: '请输入代码', message: '请先输入有效的 A 股代码。' })
+						return
+					}
+					const token = ++this.addRequestToken
+					this.submitting = true
+					try {
+						await api.post(`/api/v1/watchlist/${encodeURIComponent(code)}`)
+						if (token !== this.addRequestToken) return
+						this.listEpoch += 1
+						this.inputCode = ''
+						this.emitToast({ title: '已加入自选', message: `${code} 已加入自选。` })
+						await this.fetchItems()
+					} catch (e) {
+						if (token !== this.addRequestToken) return
+						this.emitToast({ title: '添加失败', message: getErrorMessage(e) })
+					} finally {
+						if (token !== this.addRequestToken) return
+						this.submitting = false
+					}
+				},
+				async removeSymbol(aCode) {
+					if (this.removingCodes[aCode]) return
+					this.removingCodes = { ...this.removingCodes, [aCode]: true }
+					try {
+						await api.delete(`/api/v1/watchlist/${encodeURIComponent(aCode)}`)
+						this.listEpoch += 1
+						this.emitToast({ title: '已删除', message: `${aCode} 已从自选移除。` })
+						await this.fetchItems()
+					} catch (e) {
+						this.emitToast({ title: '删除失败', message: getErrorMessage(e) })
+					} finally {
+						const next = { ...this.removingCodes }
+						delete next[aCode]
+						this.removingCodes = next
+					}
+				},
+				openResearch(aCode) {
+					this.$emit('open-research', normalizeCode(aCode))
+				}
+			}
+		}
+
+		const ResearchTab = {
+			emits: ['toast', 'select-code', 'save-watchlist'],
+			props: {
+				refreshKey: { type: Number, default: 0 },
+				selectedCode: { type: String, default: '' },
+			},
+			template: `
+				<section class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+					<div class="panel p-6 lg:col-span-1">
+						<div class="flex items-start justify-between gap-3">
+							<div>
+								<div class="text-xs uppercase tracking-widest" style="color: var(--muted2)">个股研究</div>
+								<div class="text-xl font-bold mt-1">个股研究</div>
+								<div class="text-sm mt-2" style="color: var(--muted)">根据选中的 A 股代码拉取研究详情和配对回测结果。</div>
+							</div>
+							<span class="badge">研究数据已连接</span>
+						</div>
+
+						<label class="block mt-6">
+							<div class="text-xs mb-1" style="color: var(--muted2)">A 股代码</div>
+							<input class="input mono" placeholder="601398.SH" v-model="codeInput" @keyup.enter="loadFromInput" />
+							<div class="text-xs mt-2" style="color: var(--muted2)">可以从自选页点击“研究”，也可以直接手动输入代码并加载。</div>
+						</label>
+
+						<div class="mt-4 flex flex-wrap gap-2">
+							<button class="btn btn-primary" @click="loadFromInput" :disabled="loading">{{ loading ? '加载中...' : '加载研究' }}</button>
+							<button class="btn" @click="fetchAll(activeCode)" :disabled="loading || !activeCode">刷新</button>
+							<button class="btn" @click="saveToWatchlist" :disabled="!activeCode">加入自选</button>
+						</div>
+
+						<div class="mt-4 flex flex-wrap gap-2" v-if="!activeCode">
+							<span class="text-xs" style="color: var(--muted2)">试试示例：</span>
+							<button class="btn" @click="useExample('601398.SH')">601398.SH</button>
+						</div>
+
+						<div class="mt-4" v-if="recentCodes.length">
+							<div class="flex items-center justify-between gap-3 mb-2">
+								<div class="text-xs" style="color: var(--muted2)">最近查看</div>
+								<button class="btn" @click="clearRecent">清空</button>
+							</div>
+							<div class="flex flex-wrap gap-2">
+								<button v-for="code in recentCodes" :key="code" class="btn" @click="loadRecent(code)">{{ code }}</button>
+							</div>
+						</div>
+
+						<div class="mt-6 grid grid-cols-2 gap-3">
+							<div class="kpi col-span-2">
+								<div class="l">股票</div>
+								<div class="v text-lg">{{ stock.name || '-' }}</div>
+								<div class="mono text-xs mt-2" style="color: var(--muted2)">{{ stock.a_code || '-' }} / {{ stock.h_code || '-' }}</div>
+							</div>
+							<div class="kpi">
+								<div class="v" style="color: var(--accent)">{{ latestPremiumLabel }}</div>
+								<div class="l">最新溢价</div>
+							</div>
+							<div class="kpi">
+								<div class="v">{{ premiumCountLabel }}</div>
+								<div class="l">溢价样本数</div>
+							</div>
+						</div>
+
+						<div v-if="detailError || backtestError" class="mt-4 rounded-xl p-3 text-sm" style="color: var(--warn); border: 1px solid rgba(250,204,21,0.22); background: rgba(250,204,21,0.08)">{{ [detailError, backtestError].filter(Boolean).join('；') }}</div>
+						<div v-if="!activeCode" class="mt-4 text-sm" style="color: var(--muted)">请在自选列表中点击“研究”，或直接输入 A 股代码。</div>
+						<div v-if="activeCode && !loading && !detail && !backtest" class="mt-4 text-sm" style="color: var(--muted)">暂无可展示的研究结果，请刷新或更换标的。</div>
+						<div v-if="activeCode" class="mt-4 flex flex-wrap gap-2">
+							<span class="badge" v-if="detail && !detailError">研究详情已加载</span>
+							<span class="badge" v-if="backtest && !backtestError">回测结果已加载</span>
+							<span class="badge" v-if="detailError">研究详情暂不可用</span>
+							<span class="badge" v-if="backtestError">回测结果暂不可用</span>
+						</div>
+					</div>
+
+					<div class="panel p-6 lg:col-span-2" v-if="activeCode">
+						<div class="flex items-center justify-between gap-3">
+							<div>
+								<div class="text-xs uppercase tracking-widest" style="color: var(--muted2)">AH溢价</div>
+								<div class="text-lg font-bold mt-1">AH 溢价序列</div>
+							</div>
+							<span class="badge mono">{{ activeCode || '-' }}</span>
+						</div>
+						<div class="mt-4" ref="premiumChartEl" style="height: 320px"></div>
+					</div>
+					<div class="panel p-6 lg:col-span-2" v-else>
+						<div class="text-xs uppercase tracking-widest" style="color: var(--muted2)">Premium</div>
+						<div class="text-lg font-bold mt-1">等待选择标的</div>
+						<div class="text-sm mt-3" style="color: var(--muted)">从自选列表点击“研究”，或在左侧输入 A 股代码后加载。这里会显示 A/H 溢价曲线。</div>
+					</div>
+
+					<div class="panel p-6 lg:col-span-3" v-if="activeCode && detail">
+						<div class="flex items-center justify-between gap-3">
+							<div>
+								<div class="text-xs uppercase tracking-widest" style="color: var(--muted2)">策略摘要</div>
+								<div class="text-lg font-bold mt-1">研究摘要</div>
+							</div>
+							<span class="badge">先看结论，再看原始输出</span>
+						</div>
+
+							<div class="mt-4 grid grid-cols-1 xl:grid-cols-3 gap-4">
+							<div class="kpi">
+								<div class="l">配对交易</div>
+								<div class="v text-lg">{{ pairTradingSummary.primary }}</div>
+								<div class="mt-2 text-sm" style="color: var(--muted)">{{ pairTradingSummary.secondary }}</div>
+								<div class="mt-3 text-xs" style="color: var(--muted2)">{{ pairTradingSummary.tertiary }}</div>
+							</div>
+							<div class="kpi">
+								<div class="l">多因子</div>
+								<div class="v text-lg">{{ multiFactorSummary.primary }}</div>
+								<div class="mt-2 text-sm" style="color: var(--muted)">{{ multiFactorSummary.secondary }}</div>
+								<div class="mt-3 text-xs" style="color: var(--muted2)">{{ multiFactorSummary.tertiary }}</div>
+							</div>
+							<div class="kpi">
+								<div class="l">ML预测</div>
+								<div class="v text-lg">{{ mlPredictionSummary.primary }}</div>
+								<div class="mt-2 text-sm" style="color: var(--muted)">{{ mlPredictionSummary.secondary }}</div>
+								<div class="mt-3 text-xs" style="color: var(--muted2)">{{ mlPredictionSummary.tertiary }}</div>
+							</div>
+						</div>
+
+							<details class="mt-5 rounded-xl p-4" style="border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.04)">
+								<summary class="cursor-pointer font-semibold">查看原始策略输出</summary>
+								<div class="mt-4 grid grid-cols-1 xl:grid-cols-3 gap-4">
+									<div>
+										<div class="text-sm font-semibold">配对交易原始输出</div>
+										<pre class="mt-3 p-4 rounded-xl overflow-x-auto whitespace-pre-wrap break-all mono text-xs" style="border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.05); max-height: 260px">{{ pairTradingJson }}</pre>
+									</div>
+									<div>
+										<div class="text-sm font-semibold">多因子原始输出</div>
+										<pre class="mt-3 p-4 rounded-xl overflow-x-auto whitespace-pre-wrap break-all mono text-xs" style="border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.05); max-height: 260px">{{ multiFactorJson }}</pre>
+									</div>
+									<div>
+										<div class="text-sm font-semibold">ML预测原始输出</div>
+										<pre class="mt-3 p-4 rounded-xl overflow-x-auto whitespace-pre-wrap break-all mono text-xs" style="border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.05); max-height: 260px">{{ mlPredictionJson }}</pre>
+									</div>
+								</div>
+							</details>
+						</div>
+					</div>
+
+					<div class="panel p-6 lg:col-span-3" v-if="activeCode && backtest">
+						<div class="flex items-center justify-between gap-3">
+							<div>
+								<div class="text-xs uppercase tracking-widest" style="color: var(--muted2)">Backtest</div>
+								<div class="text-lg font-bold mt-1">回测结果</div>
+							</div>
+							<span class="badge mono">{{ activeCode || '-' }}</span>
+						</div>
+
+							<div class="mt-4 grid grid-cols-1 xl:grid-cols-3 gap-4">
+							<div class="lg:col-span-1">
+								<div class="text-sm font-semibold">指标</div>
+								<div class="mt-3 overflow-x-auto">
+									<table class="table">
+										<tbody>
+											<tr v-for="row in metricRows" :key="row.key" class="row">
+												<td class="mono">{{ row.label }}</td>
+												<td class="mono">{{ row.value }}</td>
+											</tr>
+											<tr v-if="metricRows.length === 0">
+												<td colspan="2" style="color: var(--muted)">暂无指标</td>
+											</tr>
+										</tbody>
+									</table>
+								</div>
+							</div>
+							<div class="lg:col-span-2">
+								<div class="text-sm font-semibold">权益曲线</div>
+								<div class="mt-3" ref="equityChartEl" style="height: 260px"></div>
+							</div>
+						</div>
+
+							<div class="mt-6">
+								<div class="text-sm font-semibold">交易明细</div>
+							<div class="mt-3 overflow-x-auto">
+								<table class="table">
+									<thead>
+										<tr>
+											<th>方向</th>
+											<th>开仓</th>
+											<th>平仓</th>
+											<th>开仓溢价</th>
+											<th>平仓溢价</th>
+											<th>盈亏(%)</th>
+											<th>持有天数</th>
+										</tr>
+									</thead>
+									<tbody>
+										<tr v-for="(trade, idx) in tradeRows" :key="(trade.entry_date || 'entry') + '_' + idx" class="row">
+											<td class="mono">{{ humanizeTradeDirection(trade.direction) }}</td>
+											<td class="mono">{{ trade.entry_date || '-' }}</td>
+											<td class="mono">{{ trade.exit_date || '-' }}</td>
+											<td class="mono">{{ formatTradePercent(trade.entry_premium_pct) }}</td>
+											<td class="mono">{{ formatTradePercent(trade.exit_premium_pct) }}</td>
+											<td class="mono">{{ formatTradePercent(trade.pnl_pct) }}</td>
+											<td class="mono">{{ trade.holding_days ?? '-' }}</td>
+										</tr>
+										<tr v-if="tradeRows.length === 0">
+											<td colspan="7" style="color: var(--muted)">暂无交易明细</td>
+										</tr>
+									</tbody>
+								</table>
+							</div>
+						</div>
+					</div>
+				</section>
+			`,
+			data() {
+				return {
+					codeInput: '',
+					activeCode: '',
+					recentCodes: [],
+					detail: null,
+					backtest: null,
+					loading: false,
+					detailError: '',
+					backtestError: '',
+					premiumChart: null,
+					equityChart: null,
+					requestToken: 0,
+					isAlive: true,
+				}
+			},
+			computed: {
+				stock() {
+					return (this.detail && this.detail.stock) ? this.detail.stock : {}
+				},
+				premiumSeries() {
+					return Array.isArray(this.detail && this.detail.premium_series) ? this.detail.premium_series : []
+				},
+				pairTradingJson() {
+					return prettyJson(this.detail && this.detail.pair_trading ? this.detail.pair_trading : {})
+				},
+				multiFactorJson() {
+					return prettyJson(this.detail && this.detail.multi_factor ? this.detail.multi_factor : {})
+				},
+				mlPredictionJson() {
+					return prettyJson(this.detail && this.detail.ml_prediction ? this.detail.ml_prediction : {})
+				},
+				pairTradingSummary() {
+					const payload = this.detail && this.detail.pair_trading ? this.detail.pair_trading : {}
+					return buildLabeledSummary(
+						payload.signal ? `当前建议：${humanizeDirection(payload.signal)}` : null,
+						payload.confidence !== undefined ? `置信度：${formatPercent((_toNum(payload.confidence) || 0) * 100)}` : null,
+						(payload.last_signal_at || payload.last_updated)
+							? `最近信号时间：${formatDisplayValue(payload.last_signal_at || payload.last_updated)}`
+							: (payload.tradeable !== undefined
+								? `是否可执行：${payload.tradeable ? '可以' : `暂不建议（${humanizeBlockReason(payload.block_reason || '未知原因')}）`}`
+								: '关注溢价偏离和均值回归信号。')
+					)
+				},
+				multiFactorSummary() {
+					const payload = this.detail && this.detail.multi_factor ? this.detail.multi_factor : {}
+					const factors = payload.factor_scores || {}
+					return buildLabeledSummary(
+						payload.total_score !== undefined ? `综合评分：${formatPercent((_toNum(payload.total_score) || 0) * 100)}` : null,
+						factors.valuation !== undefined ? `估值得分：${formatPercent((_toNum(factors.valuation) || 0) * 100)}` : null,
+						(payload.rebalance_at || factors.as_of || payload.last_updated)
+							? `参考时间：${formatDisplayValue(payload.rebalance_at || factors.as_of || payload.last_updated)}`
+							: (factors.momentum !== undefined
+								? `趋势得分：${formatPercent((_toNum(factors.momentum) || 0) * 100)}`
+								: '关注估值、质量和动量是否共振。')
+					)
+				},
+				mlPredictionSummary() {
+					const payload = this.detail && this.detail.ml_prediction ? this.detail.ml_prediction : {}
+					return buildLabeledSummary(
+						payload.predicted_direction ? `模型判断：${humanizeDirection(payload.predicted_direction)}` : null,
+						payload.confidence !== undefined ? `置信度：${formatPercent((_toNum(payload.confidence) || 0) * 100)}` : null,
+						(payload.generated_at || payload.last_updated)
+							? `生成时间：${formatDisplayValue(payload.generated_at || payload.last_updated)}`
+							: (payload.predicted_change !== undefined
+								? `预计变动幅度：${formatFixed(payload.predicted_change, 2)}%`
+								: '重点看方向、置信度和预期收益。')
+					)
+				},
+				latestPremiumLabel() {
+					return formatPercent(this.stock.latest_premium_pct)
+				},
+				premiumCountLabel() {
+					if (!this.activeCode) return '-'
+					if (!this.detail && this.loading) return '加载中'
+					if (!this.detail) return '-'
+					return String(this.premiumSeries.length)
+				},
+				metricRows() {
+					return Object.entries((this.backtest && this.backtest.metrics) || {}).map(([key, value]) => ({
+						key,
+						label: humanizeMetricKey(key),
+						value: (key === 'win_rate' || key === 'win_rate_pct') && _toNum(value) !== null
+							? formatPercent((_toNum(value) || 0) * (key === 'win_rate' ? 100 : 1))
+							: formatDisplayValue(value),
+					}))
+				},
+				tradeRows() {
+					return compactTableRows(this.backtest && this.backtest.trades, 6)
+				},
+				equityRows() {
+					const rows = Array.isArray(this.backtest && this.backtest.equity_curve) ? this.backtest.equity_curve : []
+					return rows.slice(-16)
+				},
+			},
+			mounted() {
+				this.recentCodes = readStoredCodes(RECENT_RESEARCH_KEY)
+				this._onResize = () => {
+					if (this.premiumChart) this.premiumChart.resize()
+					if (this.equityChart) this.equityChart.resize()
+				}
+				window.addEventListener('resize', this._onResize)
+				if (this.selectedCode) {
+					this.applySelectedCode(this.selectedCode)
+				} else {
+					this.renderPremiumChart()
+					this.renderEquityChart()
+				}
+			},
+			unmounted() {
+				this.isAlive = false
+				window.removeEventListener('resize', this._onResize)
+				if (this.premiumChart) this.premiumChart.dispose()
+				if (this.equityChart) this.equityChart.dispose()
+				this.premiumChart = null
+				this.equityChart = null
+			},
+			watch: {
+				selectedCode(newCode) {
+					const normalized = normalizeCode(newCode)
+					if (normalized && normalized !== this.activeCode) {
+						this.applySelectedCode(normalized)
+					}
+				},
+				refreshKey() {
+					if (this.activeCode) {
+						this.fetchAll(this.activeCode)
+					}
+				}
+			},
+			methods: {
+				emitToast(payload) { this.$emit('toast', payload) },
+				humanizeBacktestMode,
+				humanizeTradeDirection,
+				pushRecent(code) {
+					const normalized = normalizeCode(code)
+					if (!normalized) return
+					this.recentCodes = [normalized, ...this.recentCodes.filter(item => item !== normalized)].slice(0, 5)
+					writeStoredCodes(RECENT_RESEARCH_KEY, this.recentCodes)
+				},
+				clearRecent() {
+					this.recentCodes = []
+					writeStoredCodes(RECENT_RESEARCH_KEY, [])
+					this.emitToast({ title: '已清空', message: '最近查看记录已清空。' })
+				},
+				useExample(code) {
+					this.codeInput = normalizeCode(code)
+					this.loadFromInput()
+				},
+				loadRecent(code) {
+					this.codeInput = normalizeCode(code)
+					this.loadFromInput()
+				},
+				saveToWatchlist() {
+					if (!this.activeCode) return
+					this.$emit('save-watchlist', this.activeCode)
+				},
+				formatTradePercent(value) {
+					return formatPercent(value)
+				},
+				applySelectedCode(code) {
+					const normalized = normalizeCode(code)
+					if (!normalized) return
+					this.codeInput = normalized
+					this.activeCode = normalized
+					this.resetDisplayState()
+					this.pushRecent(normalized)
+					this.fetchAll(normalized)
+				},
+				async loadFromInput() {
+					const normalized = normalizeCode(this.codeInput)
+					if (!normalized) {
+						this.emitToast({ title: '请输入代码', message: '请先输入有效的 A 股代码。' })
+						return
+					}
+					this.codeInput = normalized
+					this.activeCode = normalized
+					this.resetDisplayState()
+					this.pushRecent(normalized)
+					this.$emit('select-code', normalized)
+					await this.fetchAll(normalized)
+				},
+				resetDisplayState() {
+					this.detail = null
+					this.backtest = null
+					this.detailError = ''
+					this.backtestError = ''
+					if (this.equityChart) {
+						this.equityChart.dispose()
+						this.equityChart = null
+					}
+					this.renderPremiumChart()
+					this.renderEquityChart()
+				},
+				async fetchAll(code) {
+					const normalized = normalizeCode(code)
+					if (!normalized) return
+					const token = ++this.requestToken
+					this.loading = true
+					this.activeCode = normalized
+					this.detailError = ''
+					this.backtestError = ''
+					const requestCode = normalized
+					try {
+						const [detailRes, backtestRes] = await Promise.allSettled([
+							api.get(`/api/v1/research/${encodeURIComponent(requestCode)}`),
+							api.get(`/api/v1/research/${encodeURIComponent(requestCode)}/backtest`),
+						])
+
+						if (token !== this.requestToken || !this.isAlive) return
+
+						if (detailRes.status === 'fulfilled') {
+							this.detail = detailRes.value.data
+						} else {
+							this.detail = null
+							this.detailError = getErrorMessage(detailRes.reason)
+						}
+
+						if (backtestRes.status === 'fulfilled') {
+							this.backtest = backtestRes.value.data
+						} else {
+							this.backtest = null
+							this.backtestError = getErrorMessage(backtestRes.reason)
+						}
+
+						if (this.detailError || this.backtestError) {
+							this.emitToast({
+								title: '研究数据加载不完整',
+								message: [this.detailError, this.backtestError].filter(Boolean).join('；')
+							})
+						}
+					} finally {
+						if (token !== this.requestToken || !this.isAlive) return
+						this.loading = false
+						this.$nextTick(() => {
+							if (!this.isAlive) return
+							this.renderPremiumChart()
+							this.renderEquityChart()
+						})
+					}
+				},
+				renderEmptyChart(chart, text) {
+					if (!chart) return
+					chart.clear()
+					chart.setOption({
+						backgroundColor: 'transparent',
+						graphic: [{
+							type: 'text',
+							left: 'center',
+							top: 'middle',
+							style: {
+								text,
+								fill: 'rgba(255,255,255,0.45)',
+								font: '14px "IBM Plex Sans"'
+							}
+						}]
+					}, true)
+				},
+				renderPremiumChart() {
+					if (!this.$refs.premiumChartEl) {
+						if (this.premiumChart) {
+							this.premiumChart.dispose()
+							this.premiumChart = null
+						}
+						return
+					}
+					if (!this.premiumChart && this.$refs.premiumChartEl) {
+						this.premiumChart = echarts.init(this.$refs.premiumChartEl)
+					}
+					if (!this.premiumChart) return
+					const series = this.premiumSeries
+					if (!series.length) {
+						this.renderEmptyChart(this.premiumChart, '暂无溢价序列数据')
+						return
+					}
+					this.premiumChart.setOption({
+						backgroundColor: 'transparent',
+						grid: { left: 18, right: 18, top: 24, bottom: 24, containLabel: true },
+						tooltip: { trigger: 'axis' },
+						xAxis: {
+							type: 'category',
+							data: series.map(item => item.date || '-'),
+							axisLabel: { color: 'rgba(255,255,255,0.65)' },
+							axisLine: { lineStyle: { color: 'rgba(255,255,255,0.14)' } },
+						},
+						yAxis: {
+							type: 'value',
+							axisLabel: { color: 'rgba(255,255,255,0.65)', formatter: value => `${value}%` },
+							splitLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } },
+						},
+						series: [{
+							name: 'AH溢价(%)',
+							type: 'line',
+							smooth: true,
+							data: series.map(item => {
+								const value = _toNum(item.premium_pct)
+								return value === null ? null : value
+							}),
+							symbolSize: 6,
+							lineStyle: { color: 'rgba(59,130,246,0.95)', width: 2 },
+							itemStyle: { color: 'rgba(59,130,246,0.95)' },
+							areaStyle: { color: 'rgba(59,130,246,0.16)' },
+						}],
+					}, true)
+				},
+				renderEquityChart() {
+					if (!this.$refs.equityChartEl) {
+						if (this.equityChart) {
+							this.equityChart.dispose()
+							this.equityChart = null
+						}
+						return
+					}
+					if (!this.equityChart && this.$refs.equityChartEl) {
+						this.equityChart = echarts.init(this.$refs.equityChartEl)
+					}
+					if (!this.equityChart) return
+					const rows = this.equityRows
+					if (!rows.length) {
+						this.renderEmptyChart(this.equityChart, '暂无权益曲线数据')
+						return
+					}
+					this.equityChart.setOption({
+						backgroundColor: 'transparent',
+						grid: { left: 18, right: 18, top: 24, bottom: 24, containLabel: true },
+						tooltip: { trigger: 'axis' },
+						xAxis: {
+							type: 'category',
+							data: rows.map(item => item.date || '-'),
+							axisLabel: { color: 'rgba(255,255,255,0.65)' },
+							axisLine: { lineStyle: { color: 'rgba(255,255,255,0.14)' } },
+						},
+						yAxis: {
+							type: 'value',
+							axisLabel: { color: 'rgba(255,255,255,0.65)' },
+							splitLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } },
+						},
+						series: [{
+							name: '权益曲线',
+							type: 'line',
+							smooth: true,
+							data: rows.map(item => {
+								const value = _toNum(item.equity)
+								return value === null ? null : value
+							}),
+							symbolSize: 5,
+							lineStyle: { color: 'rgba(51,214,166,0.95)', width: 2 },
+							itemStyle: { color: 'rgba(51,214,166,0.95)' },
+							areaStyle: { color: 'rgba(51,214,166,0.14)' },
+						}],
+					}, true)
+				},
 			}
 		}
 
@@ -553,7 +1414,7 @@
 											<th class="th-sort" @click="toggleSort('sortBacktest','trades', -1)"><span class="inline-flex items-center gap-2">交易数<help-tip title="交易数" text="该股票对在回测区间内产生的交易笔数。"></help-tip></span><span class="sort-ind">{{ sortIndicator('sortBacktest','trades') }}</span></th>
 											<th class="th-sort" @click="toggleSort('sortBacktest','total_return_pct', -1)"><span class="inline-flex items-center gap-2">总收益(%)<help-tip title="总收益" text="该股票对的回测总收益(%)，包含简单交易成本扣减（估算）。"></help-tip></span><span class="sort-ind">{{ sortIndicator('sortBacktest','total_return_pct') }}</span></th>
 											<th class="th-sort" @click="toggleSort('sortBacktest','win_rate', -1)"><span class="inline-flex items-center gap-2">胜率<help-tip title="胜率" text="盈利交易笔数 / 总交易笔数。"></help-tip></span><span class="sort-ind">{{ sortIndicator('sortBacktest','win_rate') }}</span></th>
-											<th class="th-sort" @click="toggleSort('sortBacktest','mode', 1)"><span class="inline-flex items-center gap-2">模式<help-tip title="模式" text="本回测使用A/H收盘价计算溢价与相对收益（prices）。"></help-tip></span><span class="sort-ind">{{ sortIndicator('sortBacktest','mode') }}</span></th>
+											<th class="th-sort" @click="toggleSort('sortBacktest','mode', 1)"><span class="inline-flex items-center gap-2">模式<help-tip title="模式" text="本回测当前使用价格驱动模式，根据A/H价格序列计算溢价与相对收益。"></help-tip></span><span class="sort-ind">{{ sortIndicator('sortBacktest','mode') }}</span></th>
 										</tr>
 									</thead>
 									<tbody>
@@ -565,7 +1426,7 @@
 											<td class="mono">{{ r.metrics && r.metrics.trades ? r.metrics.trades : 0 }}</td>
 											<td class="mono">{{ r.metrics && r.metrics.total_return_pct !== undefined ? r.metrics.total_return_pct.toFixed(2) : '0.00' }}</td>
 											<td class="mono">{{ r.metrics && r.metrics.win_rate !== undefined ? (r.metrics.win_rate * 100).toFixed(1) + '%' : '0.0%' }}</td>
-											<td class="mono">{{ r.parameters && r.parameters.mode ? r.parameters.mode : '-' }}</td>
+											<td class="mono">{{ humanizeBacktestMode(r.parameters && r.parameters.mode ? r.parameters.mode : '-') }}</td>
 										</tr>
 										<tr v-if="!backtest || !backtest.results || backtest.results.length === 0">
 											<td colspan="5" style="color: var(--muted)">暂无回测结果（请先运行每日任务，或点击“刷新回测”）</td>
@@ -771,7 +1632,6 @@
 							</div>
 							<span class="badge">维度：估值 / 动量 / 流动性 / AH溢价</span>
 						</div>
-						<div class="mt-2 text-sm" style="color: var(--warn)">{{ data.data_warning || '估值使用固定PE/PB/股息率占位，仅供演示排序，不可作为投资依据。' }}</div>
 
 						<div class="mt-4 overflow-x-auto">
 							<table class="table">
@@ -780,8 +1640,8 @@
 										<th>#</th>
 										<th class="th-sort" @click="toggleSort('name', 1)">股票<span class="sort-ind">{{ sortIndicator('name') }}</span></th>
 										<th class="th-sort" @click="toggleSort('current_price', -1)">价格<span class="sort-ind">{{ sortIndicator('current_price') }}</span></th>
-										<th class="th-sort" @click="toggleSort('total_score', -1)"><span class="inline-flex items-center gap-2">总分<help-tip title="总分" text="按权重汇总的演示评分（估值使用固定PE/PB/股息率占位）。仅用于研究排序，不可作为投资依据。"></help-tip></span><span class="sort-ind">{{ sortIndicator('total_score') }}</span></th>
-										<th class="th-sort" @click="toggleSort('valuation', -1)"><span class="inline-flex items-center gap-2">估值<help-tip title="估值因子" text="当前使用固定PE=12、PB=1.5、股息率=3.0的占位值，不是真实个股估值。"></help-tip></span><span class="sort-ind">{{ sortIndicator('valuation') }}</span></th>
+										<th class="th-sort" @click="toggleSort('total_score', -1)"><span class="inline-flex items-center gap-2">总分<help-tip title="总分" text="按权重汇总的综合评分（估值/动量/流动性/AH溢价）。用于排序展示。"></help-tip></span><span class="sort-ind">{{ sortIndicator('total_score') }}</span></th>
+										<th class="th-sort" @click="toggleSort('valuation', -1)"><span class="inline-flex items-center gap-2">估值<help-tip title="估值因子" text="估值相关的简单评分（示例：PE/PB/股息率等）。具体口径以策略实现为准。"></help-tip></span><span class="sort-ind">{{ sortIndicator('valuation') }}</span></th>
 										<th class="th-sort" @click="toggleSort('momentum', -1)"><span class="inline-flex items-center gap-2">动量<help-tip title="动量因子" text="价格趋势/收益率相关评分（示例：N日收益）。"></help-tip></span><span class="sort-ind">{{ sortIndicator('momentum') }}</span></th>
 										<th class="th-sort" @click="toggleSort('liquidity', -1)"><span class="inline-flex items-center gap-2">流动性<help-tip title="流动性因子" text="成交量/换手等流动性相关评分，用于过滤难交易标的。"></help-tip></span><span class="sort-ind">{{ sortIndicator('liquidity') }}</span></th>
 										<th class="th-sort" @click="toggleSort('ah_premium', -1)"><span class="inline-flex items-center gap-2">AH溢价<help-tip title="AH溢价因子" text="AH溢价偏离度相关评分，用于捕捉两地定价差。"></help-tip></span><span class="sort-ind">{{ sortIndicator('ah_premium') }}</span></th>
@@ -945,14 +1805,14 @@
 										<div class="font-semibold">{{ p.name }}</div>
 										<div class="mono text-xs" style="color: var(--muted2)">{{ p.a_code }} / {{ p.h_code }}</div>
 									</div>
-								<div class="badge mono">{{ p.predicted_direction || '未知' }}</div>
+								<div class="badge mono">{{ humanizeDirection(p.predicted_direction || '未知') }}</div>
 							</div>
 							<div class="mt-3 grid grid-cols-3 gap-2 text-sm">
 								<div><div style="color: var(--muted2)">当前溢价</div><div class="mono">{{ p.current_premium }}</div></div>
-								<div><div style="color: var(--muted2)">预测变化</div><div class="mono">{{ p.predicted_change ?? '无' }}</div></div>
+								<div><div style="color: var(--muted2)">预计变动幅度</div><div class="mono">{{ p.predicted_change !== undefined ? formatFixed(p.predicted_change, 2) + '%' : '无' }}</div></div>
 								<div>
-									<div class="inline-flex items-center gap-2" style="color: var(--muted2)">置信度<help-tip title="置信度" text="由预测幅度缩放或规则固定值得到，不是胜率或校准概率。规则回退时请看 prediction_method。"></help-tip></div>
-									<div class="mono">{{ (p.confidence ?? 0).toFixed(2) }}</div>
+									<div class="inline-flex items-center gap-2" style="color: var(--muted2)">置信度<help-tip title="置信度" text="模型对方向判断的置信度(0~1)。这是模型输出，不等同于真实胜率。"></help-tip></div>
+									<div class="mono">{{ formatPercent((p.confidence ?? 0) * 100) }}</div>
 								</div>
 							</div>
 						</div>
@@ -1000,279 +1860,13 @@
 		}
 
 		const EtfSector = {
-			components: { HelpTip },
 			emits: ['toast'],
 			props: {
 				refreshKey: { type: Number, default: 0 },
 			},
 			template: `
 				<section class="grid md:grid-cols-12 gap-6">
-					<div class="md:col-span-12">
-						<div class="panel p-6">
-							<div class="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
-								<div>
-									<div class="text-lg font-semibold">ETF 趋势研判与推荐</div>
-									<div class="text-sm" style="color: var(--muted)">基于 ETF 日线历史计算 20/60/120 日收益、均线位置、波动率与突破状态，输出趋势标签与操作建议</div>
-								</div>
-								<div class="flex flex-wrap gap-2 items-center">
-									<span v-if="trendSummary.regime_label" class="badge" :class="badgeClass(trendSummary.regime_label)">{{ trendSummary.regime_label }}</span>
-									<span class="badge">覆盖 {{ trendCoverage.success_count || 0 }}/{{ trendCoverage.universe_count || 0 }}</span>
-									<span class="badge">生成 {{ trendBlock.generated_at || '-' }}</span>
-									<span class="badge" v-if="trendBlock.data_warning" style="color: var(--warn)">{{ trendBlock.data_warning }}</span>
-									<select class="input select mono" style="width: 96px" v-model="exportFormat">
-										<option value="xlsx">xlsx</option>
-										<option value="csv">csv</option>
-									</select>
-									<button class="btn btn-blue" @click="doTrendExport">导出趋势</button>
-									<button class="btn" @click="fetchAll" :disabled="loading">{{ loading ? '刷新中...' : '刷新' }}</button>
-								</div>
-							</div>
-							<div class="mt-4" v-if="health">
-								<span class="badge">数据源健康：{{ health.ok ? '正常' : '部分异常' }}</span>
-								<span class="text-sm" style="color: var(--muted); margin-left: 8px">{{ health.generated_at }}</span>
-							</div>
-							<div class="panel p-4 mt-4">
-								<div class="flex flex-col gap-3">
-									<div class="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-										<div class="text-sm font-semibold">自定义 ETF 池与参数</div>
-										<div class="text-xs" style="color: var(--muted)">默认展示存量报告；自定义参数时实时计算，失败时优先保留存量趋势</div>
-									</div>
-									<div class="grid md:grid-cols-12 gap-3 items-end">
-										<div class="md:col-span-5">
-											<div class="flex items-center gap-2 mb-1">
-												<label class="text-xs" style="color: var(--muted)">ETF 代码</label>
-												<help-tip text="支持逗号分隔代码；默认留空时使用系统 ETF 池，未知代码会以自定义 ETF 尝试抓取。"></help-tip>
-											</div>
-											<input v-model.trim="trendControls.codes" class="input mono" placeholder="510300,159915,518880" @keyup.enter="fetchAll" />
-										</div>
-										<div class="md:col-span-1">
-											<label class="text-xs" style="color: var(--muted)">短</label>
-											<input v-model.number="trendControls.lookback_short" type="number" min="5" max="250" class="input mono" />
-										</div>
-										<div class="md:col-span-1">
-											<label class="text-xs" style="color: var(--muted)">中</label>
-											<input v-model.number="trendControls.lookback_mid" type="number" min="5" max="250" class="input mono" />
-										</div>
-										<div class="md:col-span-1">
-											<label class="text-xs" style="color: var(--muted)">长</label>
-											<input v-model.number="trendControls.lookback_long" type="number" min="5" max="250" class="input mono" />
-										</div>
-										<div class="md:col-span-1">
-											<label class="text-xs" style="color: var(--muted)">突破</label>
-											<input v-model.number="trendControls.breakout_window" type="number" min="10" max="250" class="input mono" />
-										</div>
-										<div class="md:col-span-3 flex flex-wrap items-center gap-2 md:justify-end">
-											<label class="inline-flex items-center gap-2 text-sm" style="color: var(--muted)">
-												<input v-model="trendControls.onlyFocus" type="checkbox" />
-												<span>仅看优先关注</span>
-											</label>
-											<button class="btn btn-blue" @click="fetchAll" :disabled="loading">{{ loading ? '刷新中...' : '应用参数' }}</button>
-											<button class="btn" @click="resetTrendControls" :disabled="loading">重置默认</button>
-										</div>
-									</div>
-									<div class="text-xs" style="color: var(--muted)">{{ trendHasCustomSettings ? '当前使用实时自定义计算' : '当前展示最近一次存量趋势报告' }}</div>
-								</div>
-							</div>
-							<div class="mt-4" v-if="loading">加载中...</div>
-							<div class="mt-4" v-else>
-								<div class="grid md:grid-cols-4 gap-4">
-									<div class="kpi">
-										<div class="v" :style="{ color: scoreColor(trendSummary.avg_score, false) }">{{ fmtNum(trendSummary.avg_score, 1) }}</div>
-										<div class="l">平均趋势分</div>
-									</div>
-									<div class="kpi">
-										<div class="v" style="color: var(--accent)">{{ trendSummary.recommended_count || 0 }}</div>
-										<div class="l">优先关注</div>
-									</div>
-									<div class="kpi">
-										<div class="v" style="color: var(--warn)">{{ trendSummary.watch_count || 0 }}</div>
-										<div class="l">持有观察</div>
-									</div>
-									<div class="kpi">
-										<div class="v" :style="{ color: (trendCoverage.failed_count || 0) > 0 ? 'var(--bad)' : 'var(--muted)' }">{{ trendCoverage.failed_count || 0 }}</div>
-										<div class="l">抓取失败</div>
-									</div>
-								</div>
-
-								<div class="mt-4 text-sm" style="color: var(--muted)">{{ trendSummary.market_summary || '暂无市场总结。' }}</div>
-								<div class="mt-3">
-									<span v-for="tag in (trendSummary.market_tags || [])" :key="tag" class="badge" style="margin-right: 8px; margin-bottom: 8px">{{ tag }}</span>
-								</div>
-
-								<div class="grid md:grid-cols-2 gap-4 mt-4">
-									<div class="panel p-4">
-										<div class="text-sm font-semibold">最强趋势 ETF</div>
-										<div class="mt-3" v-if="!strongestEtfs.length" style="color: var(--muted)">暂无趋势样本</div>
-										<div class="mt-3" v-for="item in strongestEtfs" :key="'strong-'+item.code" style="display:flex; justify-content: space-between; gap: 12px; margin-bottom: 10px">
-											<div>
-												<div class="font-semibold">{{ item.name }}</div>
-												<div class="text-xs mono" style="color: var(--muted)">{{ item.code }} · {{ item.category || '-' }}</div>
-											</div>
-											<div style="text-align: right">
-												<div class="mono" :style="{ color: scoreColor(item.trend_score, false) }">{{ fmtNum(item.trend_score, 1) }}</div>
-												<div class="text-xs" style="color: var(--muted)">{{ item.trend_label || '-' }}</div>
-											</div>
-										</div>
-									</div>
-									<div class="panel p-4">
-										<div class="text-sm font-semibold">防守方向参考</div>
-										<div class="mt-3" v-if="!defensiveEtfs.length" style="color: var(--muted)">暂无防守型样本</div>
-										<div class="mt-3" v-for="item in defensiveEtfs" :key="'def-'+item.code" style="display:flex; justify-content: space-between; gap: 12px; margin-bottom: 10px">
-											<div>
-												<div class="font-semibold">{{ item.name }}</div>
-												<div class="text-xs mono" style="color: var(--muted)">{{ item.code }} · {{ item.category || '-' }}</div>
-											</div>
-											<div style="text-align: right">
-												<div class="mono" :style="{ color: scoreColor(item.trend_score, false) }">{{ fmtNum(item.trend_score, 1) }}</div>
-												<div class="text-xs" style="color: var(--muted)">{{ item.recommendation || '-' }}</div>
-											</div>
-										</div>
-									</div>
-								</div>
-
-								<div class="grid md:grid-cols-2 gap-4 mt-4">
-									<div class="panel p-4">
-										<div class="flex items-center justify-between gap-3">
-											<div>
-												<div class="text-sm font-semibold">历史节奏</div>
-												<div class="text-xs" style="color: var(--muted)">基于已落盘报告提取最近阶段的 ETF 趋势快照</div>
-											</div>
-											<span class="badge">最近 {{ trendHistory.length }} 期</span>
-										</div>
-										<div class="mt-3" v-if="!trendHistory.length" style="color: var(--muted)">暂无历史快照</div>
-										<div class="mt-3" v-for="item in trendHistory" :key="'hist-'+(item.generated_at || item.report_date || item.date)" style="display:flex; justify-content: space-between; gap: 12px; margin-bottom: 10px">
-											<div>
-												<div class="font-semibold">{{ item.date || item.generated_at || '-' }}</div>
-												<div class="text-xs" style="color: var(--muted)">{{ item.strongest_summary || '无强势摘要' }}</div>
-											</div>
-											<div style="text-align: right">
-												<div><span class="badge" :class="badgeClass(item.regime_label)">{{ item.regime_label || '-' }}</span></div>
-												<div class="text-xs mt-1" style="color: var(--muted)">关注 {{ item.recommended_count || 0 }} · 均分 {{ fmtNum(item.avg_score, 1) }}</div>
-											</div>
-										</div>
-									</div>
-
-									<div class="panel p-4">
-										<div class="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
-											<div>
-												<div class="text-sm font-semibold">简单回测</div>
-												<div class="text-xs" style="color: var(--muted)">按趋势得分定期轮动 Top ETF，不满足条件时持有现金</div>
-											</div>
-											<button class="btn btn-blue" @click="fetchTrendBacktest" :disabled="loadingBacktest">{{ loadingBacktest ? '回测中...' : '运行回测' }}</button>
-										</div>
-										<div class="grid grid-cols-3 gap-3 mt-3">
-											<label>
-												<div class="text-xs mb-1" style="color: var(--muted)">Top N</div>
-												<input v-model.number="trendBacktestControls.top_n" type="number" min="1" max="5" class="input mono" />
-											</label>
-											<label>
-												<div class="text-xs mb-1" style="color: var(--muted)">调仓日</div>
-												<input v-model.number="trendBacktestControls.rebalance_days" type="number" min="5" max="60" class="input mono" />
-											</label>
-											<label>
-												<div class="text-xs mb-1" style="color: var(--muted)">成本%</div>
-												<input v-model.number="trendBacktestControls.trade_cost_pct" type="number" min="0" max="2" step="0.05" class="input mono" />
-											</label>
-										</div>
-										<div class="mt-3" v-if="trendBacktest">
-											<div class="grid grid-cols-2 gap-3">
-												<div class="kpi">
-													<div class="v" :style="{ color: scoreColor(trendBacktestSummary.total_return_pct, true) }">{{ fmtSigned(trendBacktestSummary.total_return_pct, 2) }}</div>
-													<div class="l">总收益</div>
-												</div>
-												<div class="kpi">
-													<div class="v" :style="{ color: scoreColor(trendBacktestSummary.annualized_return_pct, true) }">{{ fmtSigned(trendBacktestSummary.annualized_return_pct, 2) }}</div>
-													<div class="l">年化收益</div>
-												</div>
-												<div class="kpi">
-													<div class="v" style="color: var(--warn)">{{ fmtSigned(trendBacktestSummary.max_drawdown_pct, 2) }}</div>
-													<div class="l">最大回撤</div>
-												</div>
-												<div class="kpi">
-													<div class="v">{{ fmtRatio(trendBacktestSummary.positive_period_ratio) }}</div>
-													<div class="l">正收益占比</div>
-												</div>
-											</div>
-											<div ref="trendBacktestChartEl" style="height: 180px; margin-top: 12px"></div>
-											<div class="mt-3 text-xs" style="color: var(--muted)">
-												调仓 {{ trendBacktestSummary.rebalance_count || 0 }} 次 · 现金 {{ trendBacktestSummary.cash_days || 0 }} 天 · 失败 {{ trendBacktestSummary.failed_count || 0 }} 只
-											</div>
-											<div class="mt-2" v-if="trendBacktestLatestHoldings.length">
-												<span v-for="item in trendBacktestLatestHoldings" :key="'hold-'+item.code" class="badge" style="margin-right: 8px; margin-bottom: 8px">{{ item.name || item.code }} {{ fmtSigned(item.score, 1, true, '') }}</span>
-											</div>
-										</div>
-										<div class="mt-3" v-else style="color: var(--muted)">点击“运行回测”获取轮动结果。</div>
-									</div>
-								</div>
-
-								<div class="mt-5 flex items-center justify-between gap-3">
-									<div class="text-sm font-semibold">趋势推荐列表</div>
-									<div class="text-xs" style="color: var(--muted)">{{ trendControls.onlyFocus ? '当前仅显示“优先关注”' : '默认按建议优先级与趋势分排序' }}</div>
-								</div>
-								<table class="table mt-3">
-									<thead>
-										<tr>
-											<th>ETF</th>
-											<th>分类</th>
-											<th class="right">趋势分</th>
-											<th>趋势判断</th>
-											<th>建议</th>
-											<th class="right">短周期</th>
-											<th class="right">中周期</th>
-											<th>关键信号</th>
-										</tr>
-									</thead>
-									<tbody>
-										<tr v-for="r in trendRows" :key="'trend-'+r.code" class="row">
-											<td>
-												<div class="font-semibold">{{ r.name }}</div>
-												<div class="mono text-xs" style="color: var(--muted)">{{ r.code }} <span v-if="r.last_date">· {{ r.last_date }}</span></div>
-											</td>
-											<td>
-												<div>{{ r.category || '-' }}</div>
-												<div class="text-xs" style="color: var(--muted)">{{ r.style || '-' }}</div>
-											</td>
-											<td class="right mono" :style="{ color: scoreColor(r.trend_score, false) }">{{ fmtNum(r.trend_score, 1) }}</td>
-											<td><span class="badge" :class="badgeClass(r.trend_label)">{{ r.trend_label || '-' }}</span></td>
-											<td><span class="badge" :class="badgeClass(r.recommendation)">{{ r.recommendation || '-' }}</span></td>
-											<td class="right mono" :style="{ color: scoreColor(r.ret_shortd ?? r.ret_20d, true) }">{{ fmtSigned(r.ret_shortd ?? r.ret_20d) }}</td>
-											<td class="right mono" :style="{ color: scoreColor(r.ret_midd ?? r.ret_60d, true) }">{{ fmtSigned(r.ret_midd ?? r.ret_60d) }}</td>
-											<td style="max-width: 360px">
-												<div class="text-sm">{{ formatReasons(r.reasons) }}</div>
-												<div class="text-xs mt-1" style="color: var(--muted)">MA短/中: {{ fmtNum(r.ma_short ?? r.ma20, 2) }} / {{ fmtNum(r.ma_mid ?? r.ma60, 2) }} · 波动 {{ fmtSigned(r.volatility_shortd_pct ?? r.volatility_20d_pct, 1, false, '%') }}</div>
-											</td>
-										</tr>
-						<tr v-if="!trendRows.length">
-							<td colspan="8" :style="{ color: isAllFetchFailedTrend(trendBlock) ? 'var(--bad)' : 'var(--muted)' }">{{ trendEmptyMessage }}</td>
-						</tr>
-									</tbody>
-								</table>
-
-								<div class="mt-3 text-xs" style="color: var(--muted)">
-									分析窗口：{{ (trendBlock.analysis_window && trendBlock.analysis_window.start_date) || '-' }} - {{ (trendBlock.analysis_window && trendBlock.analysis_window.end_date) || '-' }}
-									<span style="margin-left: 8px">参数 {{ trendParamSummary }}</span>
-									<span style="margin-left: 8px">样本不足 {{ trendCoverage.insufficient_count || 0 }} 只</span>
-									<span style="margin-left: 8px" v-if="trendCoverage.history_limited_count">历史有限 {{ trendCoverage.history_limited_count || 0 }} 只</span>
-									<span style="margin-left: 8px" v-if="trendCoverage.custom_universe">自定义池 {{ trendCoverage.universe_count || 0 }} 只</span>
-								</div>
-								<div class="mt-3" v-if="trendErrors.length">
-									<span class="badge badge-weak" v-for="err in trendErrors" :key="'err-'+err.code" style="margin-right: 8px; margin-bottom: 8px">{{ err.name || err.code }} 抓取失败</span>
-								</div>
-							</div>
-						</div>
-					</div>
-
-					<div class="md:col-span-12">
-						<div class="flex items-center justify-between panel p-4">
-							<div>
-								<div class="text-sm font-semibold">更多信息</div>
-								<div class="text-xs" style="color: var(--muted)">ETF 热榜、热概念、消息面收纳在这里</div>
-							</div>
-							<button class="btn btn-secondary" @click="showMoreInfo = !showMoreInfo">{{ showMoreInfo ? '收起' : '展开' }}</button>
-						</div>
-					</div>
-
-					<div class="md:col-span-8" v-if="showMoreInfo">
+					<div class="md:col-span-8">
 						<div class="panel p-6">
 							<div class="flex items-center justify-between">
 								<div>
@@ -1316,140 +1910,34 @@
 						</div>
 					</div>
 
-					<div class="md:col-span-12">
-						<div class="grid md:grid-cols-12 gap-4">
-							<div class="md:col-span-8">
-								<div class="panel p-6">
-									<div class="text-lg font-semibold">板块观察</div>
-									<div class="text-sm" style="color: var(--muted)">把行业强弱和板块趋势放在一起看，减少来回对照</div>
-									<div class="mt-4" v-if="!data || !data.boards || !data.boards.industry">
-										暂无数据
-									</div>
-									<div class="mt-4" v-else>
-										<div class="text-sm font-semibold">行业强弱</div>
-										<div class="grid md:grid-cols-2 gap-4 mt-2">
-											<div>
-												<div class="text-xs" style="color: var(--muted)">Top</div>
-												<div class="mt-2" v-for="r in (data.boards.industry.top_gainers || []).slice(0,6)" :key="'i1-'+r.name" style="display:flex; justify-content: space-between; gap: 8px">
-													<div>{{ r.name }}</div>
-													<div class="mono" style="color: rgba(51,214,166,0.95)">{{ (r.chg_pct||0).toFixed(2) }}%</div>
-												</div>
-											</div>
-											<div>
-												<div class="text-xs" style="color: var(--muted)">Bottom</div>
-												<div class="mt-2" v-for="r in (data.boards.industry.top_losers || []).slice(0,6)" :key="'i2-'+r.name" style="display:flex; justify-content: space-between; gap: 8px">
-													<div>{{ r.name }}</div>
-													<div class="mono" style="color: rgba(248,113,113,0.95)">{{ (r.chg_pct||0).toFixed(2) }}%</div>
-												</div>
-											</div>
-										</div>
-										<div style="height:1px; background: rgba(255,255,255,0.08); margin: 16px 0"></div>
-										<div class="text-sm font-semibold">板块趋势</div>
-										<div class="text-xs" style="color: var(--muted)" v-if="data.trend && data.trend.generated_at">{{ data.trend.generated_at }}</div>
-										<div class="grid md:grid-cols-3 gap-4 mt-2" v-if="data && data.trend && data.trend.industry && data.trend.industry.items">
-											<div>
-												<div class="text-xs" style="color: var(--muted)">行业 5日 Top</div>
-												<div class="mt-2" v-for="r in industryTrendTop" :key="'itop-'+r.name" style="display:flex; justify-content: space-between; gap: 8px">
-													<div>{{ r.name }}</div>
-													<div class="mono" style="color: rgba(51,214,166,0.95)">{{ fmtPct(r.ret_5d) }}%</div>
-												</div>
-											</div>
-											<div>
-												<div class="text-xs" style="color: var(--muted)">行业 5日 Bottom</div>
-												<div class="mt-2" v-for="r in industryTrendBottom" :key="'ibot-'+r.name" style="display:flex; justify-content: space-between; gap: 8px">
-													<div>{{ r.name }}</div>
-													<div class="mono" style="color: rgba(248,113,113,0.95)">{{ fmtPct(r.ret_5d) }}%</div>
-												</div>
-											</div>
-											<div>
-												<div class="text-xs" style="color: var(--muted)">概念 5日 Top</div>
-												<div class="mt-2" v-for="r in conceptTrendTop" :key="'ctop-'+r.name" style="display:flex; justify-content: space-between; gap: 8px">
-													<div>{{ r.name }}</div>
-													<div class="mono" style="color: rgba(51,214,166,0.95)">{{ fmtPct(r.ret_5d) }}%</div>
-												</div>
-											</div>
-										</div>
-									</div>
-								</div>
+					<div class="md:col-span-4">
+						<div class="panel p-6">
+							<div class="text-lg font-semibold">行业强弱（同花顺）</div>
+							<div class="text-sm" style="color: var(--muted)">展示涨幅 Top/Bottom</div>
+							<div class="mt-4" v-if="!data || !data.boards || !data.boards.industry">
+								暂无数据
 							</div>
-							<div class="md:col-span-4">
-								<div class="panel p-6" style="min-height: 100%; border-top: 3px solid rgba(51,214,166,0.65)">
-									<div class="text-lg font-semibold">板块研判</div>
-									<div class="mt-2 text-sm" style="color: var(--muted)">优先给出更可能继续发酵的方向，再区分已确认主线和偏拥挤方向</div>
-									<div class="mt-4">
-										<div class="text-xs" style="color: var(--muted)">潜在突破</div>
-										<div class="mt-2">
-											<div v-for="item in breakoutSummary.potentialBreakouts" :key="'breakout-'+item.theme" style="margin-bottom: 12px">
-												<div class="flex items-center gap-2" style="margin-bottom: 2px">
-													<div class="text-sm font-semibold">{{ item.theme }}</div>
-													<span class="badge badge-warn">{{ item.stageLabel || '准备中' }}</span>
-													<span class="badge">置信 {{ item.confidenceLabel }}</span>
-												</div>
-												<div class="text-xs" style="color: var(--muted)">为什么上榜：{{ item.reasonLine || '暂无说明' }}</div>
-												<div class="text-xs" style="color: var(--muted); margin-top: 4px">怎么验证：{{ item.evidenceLine || '继续观察行业强弱、板块趋势和ETF活跃度是否同步增强' }}</div>
-												<div class="mt-2 text-xs" style="display:grid; gap:4px; color: var(--muted)">
-													<div v-for="line in item.evidenceLines" :key="item.theme + '-' + line.label">{{ line.label }}：{{ line.value }}</div>
-												</div>
-												<div class="mt-1" v-if="item.etfLine"><span class="badge">{{ item.etfLine }}</span></div>
-											</div>
-											<span v-if="!breakoutSummary.potentialBreakouts.length" style="color: var(--muted)">暂无明确潜在突破方向</span>
-										</div>
-									</div>
-									<div class="mt-4">
-										<div class="text-xs" style="color: var(--muted)">已确认主线</div>
-										<div class="mt-2">
-											<div v-for="item in breakoutSummary.confirmedLeaders" :key="'leader-'+item.theme" style="margin-bottom: 12px">
-												<div class="flex items-center gap-2" style="margin-bottom: 2px">
-													<div class="text-sm font-semibold">{{ item.theme }}</div>
-													<span class="badge badge-strong">{{ item.stageLabel || '已确认' }}</span>
-													<span v-if="item.isCrowded" class="badge badge-weak">主线但偏拥挤</span>
-													<span class="badge">置信 {{ item.confidenceLabel }}</span>
-												</div>
-												<div class="text-xs" style="color: var(--muted)">为什么上榜：{{ item.reasonLine || '暂无说明' }}</div>
-												<div class="text-xs" style="color: var(--muted); margin-top: 4px">怎么验证：{{ item.evidenceLine || '继续观察趋势延续和ETF是否维持活跃' }}</div>
-												<div class="mt-2 text-xs" style="display:grid; gap:4px; color: var(--muted)">
-													<div v-for="line in item.evidenceLines" :key="item.theme + '-' + line.label">{{ line.label }}：{{ line.value }}</div>
-												</div>
-												<div class="mt-1" v-if="item.etfLine"><span class="badge">{{ item.etfLine }}</span></div>
-											</div>
-											<span v-if="!breakoutSummary.confirmedLeaders.length" style="color: var(--muted)">暂无明确已确认主线</span>
-										</div>
-									</div>
-									<div class="mt-4">
-										<div class="text-xs" style="color: var(--muted)">过热谨慎</div>
-										<div class="mt-2">
-											<div v-for="item in breakoutSummary.crowdedRisks" :key="'crowded-'+item.theme" style="margin-bottom: 12px">
-												<div class="flex items-center gap-2" style="margin-bottom: 2px">
-													<div class="text-sm font-semibold">{{ item.theme }}</div>
-													<span class="badge badge-weak">{{ item.stageLabel || '偏热' }}</span>
-													<span class="badge">置信 {{ item.confidenceLabel }}</span>
-												</div>
-												<div class="text-xs" style="color: var(--muted)">为什么上榜：{{ item.reasonLine || '暂无说明' }}</div>
-												<div class="text-xs" style="color: var(--muted); margin-top: 4px">怎么验证：{{ item.evidenceLine || '如果相关ETF继续放量且板块持续居前，就要警惕拥挤回撤' }}</div>
-												<div class="mt-2 text-xs" style="display:grid; gap:4px; color: var(--muted)">
-													<div v-for="line in item.evidenceLines" :key="item.theme + '-' + line.label">{{ line.label }}：{{ line.value }}</div>
-												</div>
-												<div class="mt-1" v-if="item.etfLine"><span class="badge">{{ item.etfLine }}</span></div>
-											</div>
-											<span v-if="!breakoutSummary.crowdedRisks.length" style="color: var(--muted)">暂无明显过热方向</span>
-										</div>
-									</div>
-									<div class="mt-4 text-xs" style="color: var(--muted)">更新时间：{{ breakoutSummary.updatedAt }}</div>
+							<div class="mt-4" v-else>
+								<div class="text-sm font-semibold">Top</div>
+								<div class="mt-2" v-for="r in (data.boards.industry.top_gainers || []).slice(0,6)" :key="'i1-'+r.name" style="display:flex; justify-content: space-between; gap: 8px">
+									<div>{{ r.name }}</div>
+									<div class="mono" style="color: rgba(51,214,166,0.95)">{{ (r.chg_pct||0).toFixed(2) }}%</div>
+								</div>
+								<div class="text-sm font-semibold" style="margin-top: 12px">Bottom</div>
+								<div class="mt-2" v-for="r in (data.boards.industry.top_losers || []).slice(0,6)" :key="'i2-'+r.name" style="display:flex; justify-content: space-between; gap: 8px">
+									<div>{{ r.name }}</div>
+									<div class="mono" style="color: rgba(248,113,113,0.95)">{{ (r.chg_pct||0).toFixed(2) }}%</div>
 								</div>
 							</div>
 						</div>
-					</div>
 
-					<div class="md:col-span-4" v-if="showMoreInfo">
-						<div class="panel p-6" style="height: 100%">
+						<div class="panel p-6" style="margin-top: 16px">
 							<div class="text-lg font-semibold">热概念（同花顺摘要）</div>
 							<div class="text-sm" style="color: var(--muted)">当前同花顺可用的是“概念摘要/解读”，后续可扩展为概念指数涨跌榜</div>
 							<div class="mt-4" v-if="!data || !data.boards || !data.boards.concept_hot">
 								暂无数据
 							</div>
 							<div class="mt-4" v-else>
-								<div class="text-xs" style="color: var(--muted)" v-if="data.boards.concept_hot.freshness && data.boards.concept_hot.freshness.latest_date">最新概念日期：{{ data.boards.concept_hot.freshness.latest_date }}</div>
-								<div class="mt-2 text-sm" style="color: var(--warn)" v-if="data.boards.concept_hot.freshness && data.boards.concept_hot.freshness.is_stale">概念摘要已过期，已自动隐藏旧数据</div>
 								<div v-for="it in (data.boards.concept_hot.items || []).slice(0,10)" :key="it.date + it.concept" style="margin-bottom: 10px">
 									<div class="text-sm" style="color: var(--muted)">{{ it.date }}</div>
 									<div class="text-sm font-semibold">{{ it.concept }}</div>
@@ -1459,7 +1947,7 @@
 						</div>
 					</div>
 
-					<div class="md:col-span-8" v-if="showMoreInfo">
+					<div class="md:col-span-12">
 						<div class="panel p-6">
 							<div class="flex items-center justify-between">
 								<div>
@@ -1471,8 +1959,6 @@
 								暂无数据
 							</div>
 							<div class="mt-4" v-else>
-								<div class="text-sm" style="color: var(--warn)" v-if="data.news_digest.freshness && data.news_digest.freshness.is_stale">RSS 新闻源已过期，旧闻已自动隐藏</div>
-								<div class="text-xs" style="color: var(--muted)" v-if="data.news_digest.freshness && data.news_digest.freshness.latest_published_at">最新新闻时间：{{ data.news_digest.freshness.latest_published_at }}</div>
 								<div class="text-sm" style="color: var(--muted)">热词：
 									<span v-for="k in (data.news_digest.hot_keywords || []).slice(0,10)" :key="k.keyword" class="badge" style="margin-left: 6px">{{ k.keyword }} {{ k.count }}</span>
 								</div>
@@ -1490,186 +1976,14 @@
 			data() {
 				return {
 					loading: false,
-					loadingBacktest: false,
-					showMoreInfo: false,
 					data: null,
-					trendData: null,
-					trendHistory: [],
-					trendBacktest: null,
-					backtestChart: null,
 					health: null,
-					exportFormat: 'xlsx',
 					sortEtf: { key: 'turnover', dir: -1 },
-					trendDefaults: {
-						codes: '',
-						lookback_short: 20,
-						lookback_mid: 60,
-						lookback_long: 120,
-						breakout_window: 60,
-						onlyFocus: false,
-					},
-					trendControls: {
-						codes: '',
-						lookback_short: 20,
-						lookback_mid: 60,
-						lookback_long: 120,
-						breakout_window: 60,
-						onlyFocus: false,
-					},
-					trendBacktestControls: {
-						top_n: 1,
-						rebalance_days: 20,
-						trade_cost_pct: 0.1,
-					},
 				}
 			},
 			computed: {
-				trendHasCustomSettings() {
-					const codes = (this.trendControls.codes || '').trim()
-					return Boolean(codes)
-						|| this.normalizeTrendNumber(this.trendControls.lookback_short, this.trendDefaults.lookback_short) !== this.trendDefaults.lookback_short
-						|| this.normalizeTrendNumber(this.trendControls.lookback_mid, this.trendDefaults.lookback_mid) !== this.trendDefaults.lookback_mid
-						|| this.normalizeTrendNumber(this.trendControls.lookback_long, this.trendDefaults.lookback_long) !== this.trendDefaults.lookback_long
-						|| this.normalizeTrendNumber(this.trendControls.breakout_window, this.trendDefaults.breakout_window) !== this.trendDefaults.breakout_window
-				},
-				trendQueryParams() {
-					const params = { source: this.trendHasCustomSettings ? 'live' : 'stored' }
-					if (!this.trendHasCustomSettings) return params
-					return {
-						...params,
-						codes: (this.trendControls.codes || '').trim() || undefined,
-						lookback_short: this.normalizeTrendNumber(this.trendControls.lookback_short, this.trendDefaults.lookback_short),
-						lookback_mid: this.normalizeTrendNumber(this.trendControls.lookback_mid, this.trendDefaults.lookback_mid),
-						lookback_long: this.normalizeTrendNumber(this.trendControls.lookback_long, this.trendDefaults.lookback_long),
-						breakout_window: this.normalizeTrendNumber(this.trendControls.breakout_window, this.trendDefaults.breakout_window),
-					}
-				},
-				trendBlock() {
-					if (this.trendData) return this.trendData
-					if (this.data && this.data.etf_trend) return this.data.etf_trend
-					return {}
-				},
-				trendSummary() {
-					return (this.trendBlock && this.trendBlock.summary) ? this.trendBlock.summary : {}
-				},
-				trendCoverage() {
-					return (this.trendBlock && this.trendBlock.coverage) ? this.trendBlock.coverage : {}
-				},
-				trendRows() {
-					const rows = (this.trendBlock && this.trendBlock.recommendations) ? this.trendBlock.recommendations.slice() : []
-					const filtered = this.trendControls.onlyFocus ? rows.filter(r => (r && r.recommendation) === '优先关注') : rows
-					filtered.sort((a, b) => {
-						const pa = Number.isFinite(Number(a && a.recommendation_priority)) ? Number(a.recommendation_priority) : 9
-						const pb = Number.isFinite(Number(b && b.recommendation_priority)) ? Number(b.recommendation_priority) : 9
-						if (pa !== pb) return pa - pb
-						const sa = Number.isFinite(Number(a && a.trend_score)) ? Number(a.trend_score) : -999
-						const sb = Number.isFinite(Number(b && b.trend_score)) ? Number(b.trend_score) : -999
-						if (sa !== sb) return sb - sa
-						return _cmp((a && a.code) || '', (b && b.code) || '')
-					})
-					return filtered
-				},
-				trendParamSummary() {
-					const p = (this.trendBlock && (this.trendBlock.parameters || (this.trendBlock.analysis_window && this.trendBlock.analysis_window.parameters))) || {}
-					return [
-						'S=' + (p.lookback_short ?? this.trendDefaults.lookback_short),
-						'M=' + (p.lookback_mid ?? this.trendDefaults.lookback_mid),
-						'L=' + (p.lookback_long ?? this.trendDefaults.lookback_long),
-						'B=' + (p.breakout_window ?? this.trendDefaults.breakout_window),
-					].join(' / ')
-				},
-				strongestEtfs() {
-					return (this.trendSummary && this.trendSummary.strongest_etfs) ? this.trendSummary.strongest_etfs : []
-				},
-				defensiveEtfs() {
-					return (this.trendSummary && this.trendSummary.defensive_etfs) ? this.trendSummary.defensive_etfs : []
-				},
-					trendErrors() {
-						return (this.trendSummary && this.trendSummary.errors) ? this.trendSummary.errors : []
-					},
-					trendEmptyMessage() {
-						return this.isAllFetchFailedTrend(this.trendBlock)
-							? 'ETF 趋势数据源异常，当前批量抓取全部失败，请稍后重试'
-							: '暂无 ETF 趋势推荐数据'
-					},
-					trendBacktestSummary() {
-					return (this.trendBacktest && this.trendBacktest.summary) ? this.trendBacktest.summary : {}
-				},
-				trendBacktestLatestHoldings() {
-					return (this.trendBacktest && this.trendBacktest.latest_holdings) ? this.trendBacktest.latest_holdings : []
-				},
-				industryTrendTop() {
-					const items = (this.data && this.data.trend && this.data.trend.industry && this.data.trend.industry.items) ? this.data.trend.industry.items : []
-					const ok = (items || []).filter(r => r && typeof r.ret_5d === 'number' && Number.isFinite(r.ret_5d))
-					ok.sort((a,b) => (b.ret_5d - a.ret_5d))
-					return ok.slice(0, 6)
-				},
-				industryTrendBottom() {
-					const items = (this.data && this.data.trend && this.data.trend.industry && this.data.trend.industry.items) ? this.data.trend.industry.items : []
-					const ok = (items || []).filter(r => r && typeof r.ret_5d === 'number' && Number.isFinite(r.ret_5d))
-					ok.sort((a,b) => (a.ret_5d - b.ret_5d))
-					return ok.slice(0, 6)
-				},
-					conceptTrendTop() {
-						const items = (this.data && this.data.trend && this.data.trend.concept && this.data.trend.concept.items) ? this.data.trend.concept.items : []
-						const ok = (items || []).filter(r => r && typeof r.ret_5d === 'number' && Number.isFinite(r.ret_5d))
-						ok.sort((a,b) => (b.ret_5d - a.ret_5d))
-						return ok.slice(0, 6)
-					},
-						breakoutSummary() {
-							const stageLabel = (value) => {
-								if (value === 'potential_breakout') return '潜在突破'
-								if (value === 'confirmed_leader') return '已确认'
-								if (value === 'crowded_risk') return '偏拥挤'
-								return value || ''
-							}
-							const confidenceLabel = (value) => {
-								const n = Number(value)
-								if (!Number.isFinite(n)) return '-'
-								if (n >= 0.75) return '高'
-								if (n >= 0.5) return '中'
-								return '低'
-							}
-							const buildEvidenceLines = (dims, isCrowded) => {
-								dims = dims || {}
-								const lines = [
-									{ label: '趋势', value: (dims.trend || {}).summary || '暂无' },
-									{ label: '加速', value: (dims.acceleration || {}).summary || '暂无' },
-									{ label: '相对强弱', value: (dims.relative_strength || {}).summary || '暂无同类对比' },
-									{ label: 'ETF验证', value: (dims.etf_confirmation || {}).summary || '暂无' },
-									{ label: 'ETF广度', value: (dims.etf_breadth || {}).summary || '暂无广度确认' },
-									{ label: '持续性', value: (dims.persistence || {}).summary || '暂无' },
-									{ label: '行业确认', value: (dims.industry_confirmation || {}).summary || '暂无' },
-									{ label: '交叉共振', value: (dims.source_confirmation || {}).summary || '暂无' },
-								]
-								if (isCrowded) lines.push({ label: '拥挤风险', value: (dims.crowding || {}).summary || '暂无' })
-								return lines
-							}
-							const toCards = (items, crowdedThemes = new Set()) => (Array.isArray(items) ? items : []).slice(0, 3).map(item => ({
-								theme: item && item.theme ? item.theme : '-',
-								stage: item && item.stage ? item.stage : '',
-								stageLabel: stageLabel(item && item.stage),
-								confidenceLabel: confidenceLabel(item && item.confidence),
-								isCrowded: crowdedThemes.has(item && item.theme),
-								reasonLine: (Array.isArray(item && item.reasons) ? item.reasons.slice(0, 4) : []).filter(Boolean).join('；'),
-								evidenceLine: (Array.isArray(item && item.evidence) ? item.evidence.slice(0, 3) : []).filter(Boolean).join('；'),
-								evidenceLines: buildEvidenceLines(item && item.reason_dimensions, crowdedThemes.has(item && item.theme) || (item && item.stage) === 'crowded_risk'),
-								etfLine: (Array.isArray(item && item.related_etfs) && item.related_etfs.length)
-									? `相关ETF：${item.related_etfs.slice(0, 2).map(it => it.name || it.code).join(' / ')}`
-									: '',
-						}))
-						const crowdedThemes = new Set(((this.data && this.data.crowded_risks) || []).map(item => item && item.theme).filter(Boolean))
-						const crowdedOnly = ((this.data && this.data.crowded_risks) || []).filter(item => item && item.theme && !(((this.data && this.data.confirmed_leaders) || []).some(leader => leader && leader.theme === item.theme)))
-						const updatedAt = ((this.data && this.data.generated_at) || (this.data && this.data.trend && this.data.trend.generated_at) || '-')
-						return {
-							potentialBreakouts: toCards(this.data && this.data.potential_breakouts),
-							confirmedLeaders: toCards(this.data && this.data.confirmed_leaders, crowdedThemes),
-							crowdedRisks: toCards(crowdedOnly),
-							updatedAt,
-						}
-					},
-					etfRows() {
-						const rows = (this.data && this.data.etf_market && this.data.etf_market.top_by_turnover) ? this.data.etf_market.top_by_turnover : []
+				etfRows() {
+					const rows = (this.data && this.data.etf_market && this.data.etf_market.top_by_turnover) ? this.data.etf_market.top_by_turnover : []
 					const st = this.sortEtf || { key: 'turnover', dir: -1 }
 					const key = st.key || 'turnover'
 					const dir = st.dir || -1
@@ -1684,18 +1998,7 @@
 				}
 			},
 			mounted() {
-				this.$nextTick(() => {
-					if (this.$refs.trendBacktestChartEl) {
-						this.backtestChart = echarts.init(this.$refs.trendBacktestChartEl)
-					}
-				})
 				this.fetchAll()
-			},
-			unmounted() {
-				if (this.backtestChart) {
-					this.backtestChart.dispose()
-					this.backtestChart = null
-				}
 			},
 			watch: {
 				refreshKey() {
@@ -1704,98 +2007,6 @@
 			},
 			methods: {
 				emitToast(payload) { this.$emit('toast', payload) },
-				normalizeTrendNumber(value, fallback) {
-					const n = Number(value)
-					return Number.isFinite(n) ? Math.round(n) : fallback
-				},
-				resetTrendControls() {
-					this.trendControls = { ...this.trendDefaults }
-					this.fetchAll()
-				},
-				badgeClass(label) {
-					if (!label) return ''
-					if (['优先关注', '强势上涨', '震荡偏强', '偏强轮动', '结构偏强'].includes(label)) return 'badge-strong'
-					if (['持有观察', '震荡', '震荡分化'].includes(label)) return 'badge-warn'
-					if (['暂不关注', '弱势下行', '震荡偏弱', '风险偏弱', '数据缺失', '样本不足'].includes(label)) return 'badge-weak'
-					return ''
-				},
-				scoreColor(v, isReturn) {
-					const n = Number(v)
-					if (!Number.isFinite(n)) return 'var(--muted)'
-					if (isReturn) return n >= 0 ? 'rgba(51,214,166,0.95)' : 'rgba(248,113,113,0.95)'
-					if (n >= 70) return 'rgba(51,214,166,0.95)'
-					if (n >= 50) return 'rgba(245,158,11,0.95)'
-					return 'rgba(248,113,113,0.95)'
-				},
-				fmtPct(v) {
-					if (v === null || v === undefined) return '-'
-					const n = Number(v)
-					if (!Number.isFinite(n)) return '-'
-					return n.toFixed(2)
-				},
-				fmtNum(v, digits = 2) {
-					if (v === null || v === undefined) return '-'
-					const n = Number(v)
-					if (!Number.isFinite(n)) return '-'
-					return n.toFixed(digits)
-				},
-				fmtSigned(v, digits = 2, withPlus = true, suffix = '%') {
-					if (v === null || v === undefined) return '-'
-					const n = Number(v)
-					if (!Number.isFinite(n)) return '-'
-					const prefix = withPlus && n > 0 ? '+' : ''
-					return prefix + n.toFixed(digits) + suffix
-				},
-				fmtRatio(v) {
-					if (v === null || v === undefined) return '-'
-					const n = Number(v)
-					if (!Number.isFinite(n)) return '-'
-					return (n * 100).toFixed(1) + '%'
-				},
-					formatReasons(items) {
-						if (!Array.isArray(items) || items.length === 0) return '暂无说明'
-						return items.join('；')
-					},
-					isAllFetchFailedTrend(block) {
-						if (!block || typeof block !== 'object') return false
-					const coverage = block.coverage || {}
-					const universeCount = Number(coverage.universe_count)
-					const successCount = Number(coverage.success_count)
-					const failedCount = Number(coverage.failed_count)
-					return Number.isFinite(universeCount)
-						&& universeCount > 0
-						&& successCount === 0
-						&& failedCount === universeCount
-				},
-					resolveTrendPayload(trendPayload, storedTrend, requestedLiveTrend) {
-						if (!requestedLiveTrend) return trendPayload || storedTrend || null
-						if (trendPayload && !this.isAllFetchFailedTrend(trendPayload)) return trendPayload
-						return storedTrend || trendPayload || null
-					},
-					isTimeoutError(err) {
-						if (!err) return false
-						return err.code === 'ECONNABORTED' || String(err.message || '').toLowerCase().includes('timeout')
-					},
-					renderTrendBacktestChart() {
-					if (!this.backtestChart && this.$refs.trendBacktestChartEl) {
-						this.backtestChart = echarts.init(this.$refs.trendBacktestChartEl)
-					}
-					if (!this.backtestChart) return
-					const curve = (this.trendBacktest && this.trendBacktest.equity_curve) ? this.trendBacktest.equity_curve : []
-					const dates = curve.map(item => item.date)
-					const values = curve.map(item => item.equity)
-					this.backtestChart.setOption({
-						backgroundColor: 'transparent',
-						grid: { left: 18, right: 12, top: 18, bottom: 24, containLabel: true },
-						tooltip: { trigger: 'axis' },
-						xAxis: { type: 'category', data: dates, axisLabel: { color: 'rgba(255,255,255,0.55)', showMaxLabel: true, showMinLabel: true } },
-						yAxis: { type: 'value', axisLabel: { color: 'rgba(255,255,255,0.55)' }, splitLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } } },
-						series: [
-							{ type: 'line', data: values, smooth: true, symbol: 'none', lineStyle: { width: 2, color: 'rgba(51,214,166,0.95)' }, areaStyle: { color: 'rgba(51,214,166,0.12)' } }
-						]
-					})
-					this.backtestChart.resize()
-				},
 				toggleSort(stateName, key, defaultDir) {
 					const st = this[stateName]
 					if (!st) return
@@ -1812,397 +2023,71 @@
 					if (!st || st.key !== key) return ''
 					return st.dir === 1 ? '▲' : '▼'
 				},
-					async fetchAll() {
-						this.loading = true
-						try {
-							const trendParams = this.trendQueryParams
-							const [blkRes, trendRes, healthRes, historyRes] = await Promise.allSettled([
-								api.get('/api/v1/etf-sector/', { params: { source: 'live' }, timeout: ETF_SECTOR_TIMEOUT }),
-								api.get('/api/v1/etf-sector/trend', { params: trendParams, timeout: ETF_SECTOR_TIMEOUT }),
-								api.get('/api/v1/data/health'),
-								api.get('/api/v1/etf-sector/trend/history', { params: { limit: 8 } }),
-							])
-							if (blkRes.status === 'fulfilled') {
-								this.data = blkRes.value.data
-							} else {
-								if (this.isTimeoutError(blkRes.reason)) {
-									throw new Error('ETF 页面实时数据加载超时，请稍后重试')
-								}
-								const storedBlkRes = await api.get('/api/v1/etf-sector/', { timeout: ETF_SECTOR_TIMEOUT })
-								this.data = storedBlkRes.data
-							}
-						const storedTrend = (this.data && this.data.etf_trend) ? this.data.etf_trend : null
-						let resolvedTrend = this.resolveTrendPayload(
-							trendRes.status === 'fulfilled' ? trendRes.value.data : null,
-							storedTrend,
-							trendParams.source === 'live'
-						)
-						if (!resolvedTrend && trendParams.source !== 'live') {
-							try {
-								const liveRes = await api.get('/api/v1/etf-sector/trend', { params: { ...trendParams, source: 'live' }, timeout: ETF_SECTOR_TIMEOUT })
-								resolvedTrend = liveRes && liveRes.data ? liveRes.data : null
-							} catch (_) {}
-						}
-						this.trendData = resolvedTrend
-						this.health = healthRes.status === 'fulfilled' ? healthRes.value.data : null
-						this.trendHistory = historyRes.status === 'fulfilled' && historyRes.value && historyRes.value.data && Array.isArray(historyRes.value.data.items)
-							? historyRes.value.data.items
-							: []
+				async fetchAll() {
+					this.loading = true
+					try {
+						const [blk, health] = await Promise.all([
+							api.get('/api/v1/etf-sector/'),
+							api.get('/api/v1/data/health'),
+						])
+						this.data = blk.data
+						this.health = health.data
 					} catch (e) {
 						this.emitToast({ title: '刷新失败', message: e && e.message ? e.message : String(e) })
 					} finally {
 						this.loading = false
 					}
-				},
-				async fetchTrendBacktest() {
-					this.loadingBacktest = true
-					try {
-						const params = {
-							codes: (this.trendControls.codes || '').trim() || undefined,
-							top_n: this.normalizeTrendNumber(this.trendBacktestControls.top_n, 1),
-							rebalance_days: this.normalizeTrendNumber(this.trendBacktestControls.rebalance_days, 20),
-							lookback_short: this.normalizeTrendNumber(this.trendControls.lookback_short, this.trendDefaults.lookback_short),
-							lookback_mid: this.normalizeTrendNumber(this.trendControls.lookback_mid, this.trendDefaults.lookback_mid),
-							trade_cost_pct: Number.isFinite(Number(this.trendBacktestControls.trade_cost_pct)) ? Number(this.trendBacktestControls.trade_cost_pct) : 0.1,
-						}
-						const res = await api.get('/api/v1/backtest/etf-trend', { params })
-						this.trendBacktest = res.data
-						this.$nextTick(() => this.renderTrendBacktestChart())
-					} catch (e) {
-						this.trendBacktest = null
-						this.emitToast({ title: 'ETF回测失败', message: e && e.message ? e.message : String(e) })
-					} finally {
-						this.loadingBacktest = false
-					}
-				},
-				doTrendExport() {
-					exportData('etf_trend', this.exportFormat, this.emitToast)
 				}
 			}
 		}
 
-		const DailyRecommendation = {
-			props: { refreshKey: { type: Number, default: 0 } },
-			data() { return { pre: null, post: null, loading: false } },
-			mounted() { this.fetchData() },
-			watch: { refreshKey() { this.fetchData() } },
-			computed: {
-				coverage() { return (this.pre && this.pre.coverage) || {} },
-				market() { return (this.pre && this.pre.market) || {} },
-				directions() { return (this.pre && this.pre.directions) || {} },
-				usableNow() {
-					const source = this.coverage.quote_basis || this.coverage.source || ''
-					if (this.coverage.stale) return '当前不能当作实时判断'
-					if (source === 'previous_close') return '可用于盘前准备，不是盘中实时'
-					if (source === 'mock') return '模拟数据，不能用于当日判断'
-					if (this.pre && this.pre.quality_gate && this.pre.quality_gate.passed === false) return '质量门槛未通过，不能作为正式观察'
-					return '先核对来源和时间后再使用'
-				},
-			},
-			methods: {
-				async fetchData() {
-					this.loading = true
-					try {
-						const [pre, post] = await Promise.allSettled([
-							api.get('/api/v1/recommendations/pre-market'),
-							api.get('/api/v1/recommendations/post-market'),
-						])
-						this.pre = pre.status === 'fulfilled' ? pre.value.data : null
-						this.post = post.status === 'fulfilled' ? post.value.data : null
-					} catch (e) { this.$emit('toast', { title: '推荐加载失败', message: e.message || String(e) }) }
-					finally { this.loading = false }
-				},
-				fmt(v) { if (v === null || v === undefined || v === '') return '待验证'; const n = Number(v); return Number.isFinite(n) ? (n > 0 ? '+' : '') + n.toFixed(2) + '%' : '待验证' },
-				statusClass(v) { return v === 'hit' ? 'badge-strong' : v === 'miss' ? 'badge-weak' : 'badge-warn' },
-				dirItems(key) { return ((this.directions && this.directions[key]) || []) },
-				firstText(items, field) { const row = (items || [])[0]; return row && row[field] ? row[field] : '暂无' },
-			},
-			template: `
-				<div class="grid grid-cols-1 gap-4">
-					<section class="panel p-5">
-						<div class="flex justify-between items-center"><div class="text-lg font-semibold">盘前决策卡</div><span class="badge">{{ pre && pre.as_of || '-' }}</span></div>
-						<div class="text-xs mt-2" style="color:var(--muted)">生成 {{ pre && pre.generated_at || '-' }} · 行情口径 {{ coverage.quote_basis || coverage.source || '-' }} · {{ coverage.label || '-' }}</div>
-						<div class="text-sm mt-2" style="color:var(--warn)">现在能不能用：{{ usableNow }}</div>
-						<div class="mt-4 grid md:grid-cols-4 gap-3">
-							<div class="kpi"><div class="l">市场环境</div><div class="v">{{ market.label || market.regime || '-' }}</div><div class="text-xs mt-1" style="color:var(--muted)">{{ market.status || '-' }} · {{ market.position_guidance || pre && pre.market_view || '-' }}</div></div>
-							<div class="kpi"><div class="l">当前主攻</div><div class="v text-base">{{ firstText(dirItems('current_attack'), 'direction') }}</div><div class="text-xs mt-1" style="color:var(--muted)">{{ firstText(dirItems('current_attack'), 'action') }}</div></div>
-							<div class="kpi"><div class="l">1~3个月方向</div><div class="v text-base">{{ firstText(dirItems('medium_term'), 'direction') }}</div><div class="text-xs mt-1" style="color:var(--muted)">{{ firstText(dirItems('medium_term'), 'action') }}</div></div>
-							<div class="kpi"><div class="l">回避 / 撤退</div><div class="v text-base">{{ firstText(dirItems('avoid_or_exit'), 'direction') }}</div><div class="text-xs mt-1" style="color:var(--muted)">{{ firstText(dirItems('avoid_or_exit'), 'action') }}</div></div>
-						</div>
-					</section>
-					<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-						<section class="panel p-5">
-							<div class="text-sm font-semibold">触发条件 / 否定条件</div>
-							<div class="mt-3 text-sm"><b>触发：</b>{{ firstText(dirItems('current_attack'), 'trigger') }}</div>
-							<div class="mt-2 text-sm"><b>否定：</b>{{ (pre && pre.falsification && pre.falsification.length ? pre.falsification.join('；') : firstText(dirItems('current_attack'), 'invalidation')) }}</div>
-							<div class="mt-3 text-xs" style="color:var(--muted)">来源 {{ (market.regime_evidence && market.regime_evidence.source) || coverage.source || '-' }} · 价格截至 {{ (market.regime_evidence && market.regime_evidence.price_as_of) || '-' }} · 有效期至下一份盘前报告</div>
-							<div v-if="pre && pre.data_status && pre.data_status !== 'ok'" class="text-xs mt-2" style="color:var(--warn)">数据状态：{{ pre.data_status === 'failed' ? '核心数据不可用' : '部分数据降级' }}</div>
-						</section>
-						<section class="panel p-5">
-							<div class="text-sm font-semibold">条件买单 / 开盘确认</div>
-							<div class="text-xs mt-1" style="color:var(--muted)">盘前是条件买单，开盘确认前不得成交。高开出区或量不够则取消，不换票。</div>
-							<div class="mt-3" v-for="(p,i) in (pre && pre.picks || [])" :key="p.code">
-								<div class="flex justify-between"><span><b>{{ i+1 }}. {{ p.name }}</b> <span class="mono">{{ p.code }}</span></span><span class="badge">{{ p.action || 'WATCH' }}</span></div>
-								<div class="text-xs mt-1" style="color:var(--muted)">触发：{{ p.trigger || '未给出' }}</div>
-								<div class="text-xs mt-1" style="color:var(--muted)">否定：{{ p.invalidation || '未给出' }}</div>
-								<div class="text-xs mt-1" style="color:var(--muted)">条件买入 {{ p.buy_zone || '待确认' }} · 止损 {{ p.stop_loss || '待确认' }} · 目标 {{ p.target || '待确认' }}</div>
-								<div class="text-xs mt-1" style="color:var(--muted)">仓位：{{ p.position_text || '未给出' }} · {{ p.fill_constraint || '开盘确认前不得成交' }}</div>
-							</div>
-							<div v-if="!(pre && pre.picks && pre.picks.length)" class="text-sm mt-3" style="color:var(--muted)">{{ pre && pre.empty_reason || '本次无正式观察标的' }}</div>
-							<div class="mt-4 text-sm font-semibold">ETF观察</div>
-							<div class="text-sm mt-2" v-for="e in (pre && pre.etf_picks || [])" :key="e.code">{{ e.name }} <span class="mono">{{ e.code }}</span> · {{ e.action || 'WATCH' }}</div>
-						</section>
-					</div>
-					<section class="panel p-5">
-						<div class="flex justify-between items-center"><div class="text-lg font-semibold">最近盘后复盘</div><span class="badge">{{ post && post.as_of || '-' }}</span></div>
-						<div v-if="post && post.items && post.items.length" class="mt-4"><div class="py-2 border-b border-gray-700" v-for="item in post.items" :key="item.prediction_id"><div class="flex justify-between"><span><b>{{ item.name }}</b> <span class="mono">{{ item.code }}</span></span><span class="badge" :class="statusClass(item.status)">{{ item.status }}</span></div><div class="text-xs mt-1" style="color:var(--muted)">T+1 {{ fmt(item.return_pct) }} · 修正 {{ item.correction }}</div><div class="text-xs mt-1" style="color:var(--muted)">T+5 {{ (item.outcomes||[]).find(x=>x.horizon===5) ? fmt((item.outcomes||[]).find(x=>x.horizon===5).return_pct) : '-' }} · T+20 {{ (item.outcomes||[]).find(x=>x.horizon===20) ? fmt((item.outcomes||[]).find(x=>x.horizon===20).return_pct) : '-' }}</div></div></div><div v-else class="text-sm mt-4" style="color:var(--muted)">暂无盘后复盘记录</div>
-					</section>
-				</div>`
-		}
-
-		const ReviewModule = {
-			emits: ['toast'],
-			props: {
-				refreshKey: { type: Number, default: 0 },
-			},
-			template: `
-				<section class="grid md:grid-cols-12 gap-6">
-					<div class="md:col-span-12 panel p-6">
-						<div class="flex items-center justify-between gap-4">
-							<div>
-								<div class="text-lg font-semibold">复盘模块</div>
-								<div class="text-sm" style="color: var(--muted)">把 ETF/板块判断翻译成适合人快速浏览的复盘结论</div>
-							</div>
-							<button class="btn" @click="fetchData" :disabled="loading">{{ loading ? '刷新中...' : '刷新' }}</button>
-						</div>
-						<div class="mt-4 text-sm" style="color: var(--muted)">{{ reviewSummary.headline || '等待复盘数据生成...' }}</div>
-						<div class="mt-4 grid md:grid-cols-5 gap-3">
-							<div class="kpi"><div class="v">{{ reviewSummary.prediction_count || 0 }}</div><div class="l">累计判断</div></div>
-							<div class="kpi"><div class="v">{{ reviewSummary.review_count || 0 }}</div><div class="l">已复盘</div></div>
-							<div class="kpi"><div class="v">{{ reviewSummary.pending_count || 0 }}</div><div class="l">待复盘</div></div>
-							<div class="kpi"><div class="v">{{ fmtRatio(reviewSummary.hit_rate) }}</div><div class="l">命中率</div></div>
-							<div class="kpi"><div class="v">{{ fmtSigned(reviewSummary.avg_excess_return_pct, 2) }}</div><div class="l">平均超额</div></div>
-						</div>
-						<div class="mt-4 text-xs" style="color: var(--muted)">更新时间：{{ data.generated_at || '-' }}</div>
-					</div>
-
-					<div class="md:col-span-6 panel p-6">
-						<div class="flex items-center justify-between gap-3">
-							<div class="text-sm font-semibold">每周摘要</div>
-							<div class="text-xs" style="color: var(--muted)">{{ weeklyPeriod }}</div>
-						</div>
-						<div class="mt-4 text-sm">{{ weeklySummary.headline || '暂无周度摘要' }}</div>
-						<div class="mt-4 space-y-2 text-sm" style="color: var(--muted)">
-							<div v-for="(line, idx) in weeklyBullets" :key="'weekly-'+idx">{{ line }}</div>
-						</div>
-					</div>
-
-					<div class="md:col-span-6 panel p-6">
-						<div class="text-sm font-semibold">月度复盘节奏</div>
-						<div class="mt-2 text-sm" style="color: var(--muted)">{{ monthlyStats.headline || '暂无月度样本' }}</div>
-						<div class="mt-4 grid md:grid-cols-3 gap-3">
-							<div v-for="card in monthlyCards" :key="card.month" class="kpi" style="text-align: left">
-								<div class="l">{{ card.month_label }}</div>
-								<div class="v">{{ fmtRatio(card.hit_rate) }}</div>
-								<div class="text-xs mt-1" style="color: var(--muted)">已复盘 {{ card.review_count || 0 }} / 待复盘 {{ card.pending_count || 0 }}</div>
-								<div class="text-xs mt-1" style="color: var(--muted)">平均超额 {{ fmtSigned(card.avg_excess_return_pct, 2) }}</div>
-							</div>
-							<div v-if="!monthlyCards.length" class="text-sm" style="color: var(--muted)">暂无月度卡片</div>
-						</div>
-					</div>
-
-					<div class="md:col-span-12 panel p-6">
-						<div class="text-sm font-semibold">置信度分层对比</div>
-						<div class="mt-2 text-sm" style="color: var(--muted)">{{ confidenceStats.headline || '暂无置信度对比' }}</div>
-						<div class="mt-4 grid md:grid-cols-3 gap-3">
-							<div v-for="bucket in confidenceBuckets" :key="bucket.bucket" class="panel p-4" style="min-height: 100%">
-								<div class="flex items-center justify-between gap-3">
-									<div class="font-semibold">{{ bucket.label }}</div>
-									<span class="badge" :class="confidenceBadge(bucket.bucket)">{{ bucket.prediction_count || 0 }} 条</span>
-								</div>
-								<div class="mt-3 grid grid-cols-2 gap-3">
-									<div class="kpi"><div class="v">{{ fmtRatio(bucket.hit_rate) }}</div><div class="l">命中率</div></div>
-									<div class="kpi"><div class="v">{{ fmtSigned(bucket.avg_excess_return_pct, 2) }}</div><div class="l">平均超额</div></div>
-								</div>
-								<div class="mt-3 text-xs" style="color: var(--muted)">{{ bucket.note }}</div>
-								<div class="mt-2 text-xs" style="color: var(--muted)">已复盘 {{ bucket.review_count || 0 }} 个窗口，待复盘 {{ bucket.pending_count || 0 }} 个</div>
-							</div>
-						</div>
-					</div>
-
-					<div class="md:col-span-12 panel p-6">
-						<div class="text-sm font-semibold">最近复盘记录</div>
-						<div class="mt-4 overflow-x-auto">
-							<table class="table">
-								<thead>
-									<tr>
-										<th>日期</th>
-										<th>对象 / 判断</th>
-										<th>信号说明</th>
-										<th>核心依据</th>
-										<th>T+5</th>
-										<th>T+20</th>
-									</tr>
-								</thead>
-								<tbody>
-									<tr v-for="item in reviewItems" :key="item.prediction_id">
-										<td class="mono">{{ item.report_date }}</td>
-										<td>
-											<div class="font-semibold">{{ item.entity_name }}</div>
-											<div class="mt-1 flex flex-wrap gap-2 items-center">
-												<span class="badge">{{ item.label_cn }}</span>
-												<span class="badge" :class="confidenceBadge(item.confidence_bucket)">{{ item.confidence_bucket_label }}</span>
-											</div>
-											<div class="text-xs mt-2" style="color: var(--muted)">{{ item.human_summary }}</div>
-										</td>
-										<td class="text-sm" style="max-width: 260px">
-											<div>{{ item.signal_direction_cn }} / {{ fmtRatio(item.confidence) }}</div>
-											<div class="text-xs mt-1" style="color: var(--muted)">{{ item.related_etf_summary === '-' ? item.confidence_note : '关联ETF：' + item.related_etf_summary }}</div>
-										</td>
-										<td class="text-sm" style="max-width: 320px">
-											<div>{{ item.reason_summary }}</div>
-											<div class="text-xs mt-1" style="color: var(--muted)">{{ formatReasons(item.reasons) }}</div>
-										</td>
-										<td>
-											<div v-if="item.outcome5"><span class="badge" :class="reviewBadge(item.outcome5.status)">{{ item.outcome5.status_cn }}</span></div>
-											<div class="text-xs mt-1" style="color: var(--muted)">{{ item.outcome5 ? item.outcome5.review_sentence : '-' }}</div>
-											<div v-if="formatErrorTags(item.outcome5)" class="text-xs mt-1" style="color: var(--muted)">标签：{{ formatErrorTags(item.outcome5) }}</div>
-										</td>
-										<td>
-											<div v-if="item.outcome20"><span class="badge" :class="reviewBadge(item.outcome20.status)">{{ item.outcome20.status_cn }}</span></div>
-											<div class="text-xs mt-1" style="color: var(--muted)">{{ item.outcome20 ? item.outcome20.review_sentence : '-' }}</div>
-											<div v-if="formatErrorTags(item.outcome20)" class="text-xs mt-1" style="color: var(--muted)">标签：{{ formatErrorTags(item.outcome20) }}</div>
-										</td>
-									</tr>
-									<tr v-if="!reviewItems.length"><td colspan="6" style="color: var(--muted)">暂无复盘记录</td></tr>
-								</tbody>
-							</table>
-						</div>
-					</div>
-				</section>
-			`,
-			data() {
-				return {
-					loading: false,
-					data: { summary: {}, monthly_stats: {}, confidence_stats: {}, weekly_summary: {}, items: [] },
-				}
-			},
-			computed: {
-				reviewSummary() { return this.data && this.data.summary ? this.data.summary : {} },
-				monthlyStats() { return this.data && this.data.monthly_stats ? this.data.monthly_stats : {} },
-				confidenceStats() { return this.data && this.data.confidence_stats ? this.data.confidence_stats : {} },
-				weeklySummary() { return this.data && this.data.weekly_summary ? this.data.weekly_summary : {} },
-				monthlyCards() {
-					return Array.isArray(this.monthlyStats.cards) ? this.monthlyStats.cards.slice(0, 3) : []
-				},
-				confidenceBuckets() {
-					return Array.isArray(this.confidenceStats.buckets) ? this.confidenceStats.buckets : []
-				},
-				weeklyBullets() {
-					const items = Array.isArray(this.weeklySummary.bullets) ? this.weeklySummary.bullets : []
-					return items.length ? items : ['暂无周度摘要']
-				},
-				weeklyPeriod() {
-					const start = this.weeklySummary.period_start
-					const end = this.weeklySummary.period_end
-					if (!start || !end) return '最近 7 天'
-					return `${this.formatDateLabel(start)} - ${this.formatDateLabel(end)}`
-				},
-				reviewItems() {
-					const items = Array.isArray(this.data && this.data.items) ? this.data.items : []
-					return items.slice(0, 30).map(item => ({
-						...item,
-						outcome5: (item.outcomes || []).find(x => x.horizon === 5),
-						outcome20: (item.outcomes || []).find(x => x.horizon === 20),
-					}))
-				},
-			},
-			mounted() { this.fetchData() },
-			watch: { refreshKey() { this.fetchData() } },
-			methods: {
-				emitToast(payload) { this.$emit('toast', payload) },
-				formatDateLabel(v) {
-					const text = String(v || '')
-					if (text.length === 8) return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`
-					return text || '-'
-				},
-				fmtRatio(v) {
-					const n = Number(v)
-					return Number.isFinite(n) ? (n * 100).toFixed(1) + '%' : '-'
-				},
-				fmtSigned(v, digits = 2) {
-					const n = Number(v)
-					if (!Number.isFinite(n)) return '-'
-					return (n > 0 ? '+' : '') + n.toFixed(digits) + '%'
-				},
-				formatReasons(items) {
-					return Array.isArray(items) && items.length ? items.slice(0, 3).join('；') : '暂无说明'
-				},
-				formatErrorTags(item) {
-					const tags = Array.isArray(item && item.error_tags) ? item.error_tags : []
-					return tags.map(tag => tag && tag.label).filter(Boolean).join('、')
-				},
-				confidenceBadge(bucket) {
-					if (bucket === 'high') return 'badge-strong'
-					if (bucket === 'low') return 'badge-weak'
-					return 'badge-warn'
-				},
-				reviewBadge(status) {
-					if (status === 'hit' || status === 'weak_hit') return 'badge-strong'
-					if (status === 'miss') return 'badge-weak'
-					if (status === 'pending') return 'badge-warn'
-					if (status === 'neutral') return 'badge-warn'
-					return ''
-				},
-				async fetchData() {
-					this.loading = true
-					try {
-						const res = await api.get('/api/v1/review/etf-sector', { params: { limit_reports: 40 }, timeout: ETF_SECTOR_TIMEOUT })
-						this.data = res.data || { summary: {}, monthly_stats: {}, confidence_stats: {}, weekly_summary: {}, items: [] }
-					} catch (e) {
-						this.emitToast({ title: '复盘加载失败', message: e && e.message ? e.message : String(e) })
-					} finally {
-						this.loading = false
-					}
-				},
-			},
-		}
-
 		const app = Vue.createApp({
 			components: {
+				'watchlist-tab': WatchlistTab,
+				'research-tab': ResearchTab,
 				'pair-trading': PairTrading,
 				'multi-factor': MultiFactor,
 				'ml-prediction': MLPrediction,
 				'etf-sector': EtfSector,
-				'review-module': ReviewModule,
-				'daily-recommendation': DailyRecommendation,
 			},
 			data() {
 				return {
-					currentTab: 'daily_recommend',
-					showSecondaryTabs: false,
+					currentTab: 'pair_trading',
+					selectedResearchCode: '',
 					refreshKey: 0,
 					updating: false,
-						tabs: [
-						{ id: 'daily_recommend', short: '00', name: '每日推荐' },
+					tabs: [
 						{ id: 'pair_trading', short: '01', name: '配对交易' },
 						{ id: 'multi_factor', short: '02', name: '多因子' },
 						{ id: 'ml_prediction', short: '03', name: 'ML预测' },
 						{ id: 'etf_sector', short: '04', name: 'ETF&板块' },
-						{ id: 'review', short: '05', name: '复盘' },
+						{ id: 'watchlist', short: '05', name: '自选' },
+						{ id: 'research', short: '06', name: '个股研究' },
 					],
 					toast: { show: false, title: '', message: '' },
 				}
 			},
-			computed: {
-				primaryTabs() {
-					return (this.tabs || []).filter(tab => tab.id === 'daily_recommend' || tab.id === 'etf_sector' || tab.id === 'review')
-				},
-				secondaryTabs() {
-					return (this.tabs || []).filter(tab => tab.id !== 'daily_recommend' && tab.id !== 'etf_sector' && tab.id !== 'review')
-				},
-			},
 			methods: {
+				setResearchCode(code) {
+					this.selectedResearchCode = normalizeCode(code)
+				},
+				async saveToWatchlist(code) {
+					const normalized = normalizeCode(code)
+					if (!normalized) return
+					try {
+						await api.post(`/api/v1/watchlist/${encodeURIComponent(normalized)}`)
+						this.refreshKey += 1
+						this.showToast({ title: '已加入自选', message: `${normalized} 已加入自选列表。` })
+					} catch (e) {
+						this.showToast({ title: '加入失败', message: getErrorMessage(e) })
+					}
+				},
+				openResearch(code) {
+					const normalized = normalizeCode(code)
+					if (!normalized) return
+					this.selectedResearchCode = normalized
+					this.currentTab = 'research'
+				},
 				showToast(payload) {
 					this.toast.title = payload.title || '提示'
 					this.toast.message = payload.message || ''

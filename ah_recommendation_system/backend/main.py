@@ -42,11 +42,11 @@ from ah_recommendation_system.backend.api.etf_sector_routes import (
 from ah_recommendation_system.backend.api.data_health_routes import (
     router as data_router,
 )  # noqa: E402
+from ah_recommendation_system.backend.api.research_routes import (
+    router as research_router,
+)  # noqa: E402
 from ah_recommendation_system.backend.api.report_routes import (
     router as report_router,
-)  # noqa: E402
-from ah_recommendation_system.backend.api.review_routes import (
-    router as review_router,
 )  # noqa: E402
 from ah_recommendation_system.backend.api.stock_routes import (
     router as stock_router,
@@ -54,8 +54,8 @@ from ah_recommendation_system.backend.api.stock_routes import (
 from ah_recommendation_system.backend.api.strategy_routes import (
     router as strategy_router,
 )  # noqa: E402
-from ah_recommendation_system.backend.api.stock_recommend_routes import (
-    router as stock_recommend_router,
+from ah_recommendation_system.backend.api.watchlist_routes import (
+    router as watchlist_router,
 )  # noqa: E402
 from ah_recommendation_system.backend.config import LOGGING_CONFIG  # noqa: E402
 from ah_recommendation_system.backend.data.price_fetcher import get_price_fetcher  # noqa: E402
@@ -172,11 +172,11 @@ app.include_router(strategy_router)
 app.include_router(export_router)
 app.include_router(stock_router)
 app.include_router(report_router)
-app.include_router(review_router)
 app.include_router(backtest_router)
 app.include_router(etf_sector_router)
 app.include_router(data_router)
-app.include_router(stock_recommend_router)
+app.include_router(watchlist_router)
+app.include_router(research_router)
 
 
 @app.get("/", response_class=HTMLResponse)
