@@ -2,13 +2,20 @@
 from pathlib import Path
 from datetime import date, timedelta
 import json
-from . import research
+from . import research, pair_review
 from .engine import dump
 STATE_VERSION=research.VERSION+'-rotation-streak-v1'
 DEFAULT_STATE=Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account/rotation')/f'{STATE_VERSION}.json'
 
-def run_weekly(state_path=DEFAULT_STATE,research_runner=None,**kwargs):
+def run_weekly(state_path=DEFAULT_STATE,research_runner=None,pair_state_path=None,taxonomy=None,
+               taxonomy_path=None,name_exclusions=pair_review.DEFAULT_NAME_EXCLUSIONS,**kwargs):
+    if taxonomy_path:
+        if taxonomy is not None:raise ValueError('use taxonomy or taxonomy_path, not both')
+        taxonomy=json.loads(Path(taxonomy_path).read_text(encoding='utf-8'))
     result=(research_runner or research.run_research)(**kwargs)
+    # An explicitly custom legacy path keeps test/validation outputs isolated too.
+    pair_path=pair_state_path or (pair_review.DEFAULT_STATE if Path(state_path)==DEFAULT_STATE else Path(state_path).with_name('pair-review-v1.json'))
+    pairs=pair_review.run_pair_review(result,state_path=pair_path,taxonomy=taxonomy,name_exclusions=name_exclusions)
     s=result['summary'];day=date.fromisoformat(s['asof']);week=day-timedelta(days=day.weekday())
     leader=result['leader']['code'] if result['leader'] else None
     path=Path(state_path);old={}
@@ -33,9 +40,10 @@ def run_weekly(state_path=DEFAULT_STATE,research_runner=None,**kwargs):
     lines=['【每周ETF轮换研究·只报告，不自动换仓】',f"历史资格快照池：{s['attempted_assets']}只；共同5分钟窗口 {s['window_start']}→{s['window_end']}。",f"成功模拟{s['successful_runs']}次，失败{s['failed_runs']}次；最低佣金1元、T+1、滑点0.05%。"]
     if s.get('model_excluded_runs',0):lines.append(f"模型资格排除{s['model_excluded_runs']}个窗口；只在相同完整合格覆盖签名下累计连续周。")
     if degraded:lines.append('数据覆盖降级：存在失败候选，不推进连续周状态，不触发复核门槛。')
-    if leader:lines.append(f"轮换领先者：{leader}，完成往返{result['leader']['full_cycles']}次（领先589720；非持仓，不套用第三ETF相关性门槛）。")
-    else:lines.append('没有完整窗口的非持仓候选在完成往返次数上领先589720。')
-    lines.append(f"同候选连续{count}周；"+('达到两周人工复核门槛。' if state['review_due'] else '未达到有效两周人工复核门槛。'))
+    if leader:lines.append(f"legacy reference（旧全局参考，非逐持仓建议）：{leader}，完成往返{result['leader']['full_cycles']}次（仅次数领先589720）。")
+    else:lines.append('legacy reference：旧全局参考无领先者，不代表逐持仓双轨结论。')
+    lines.append(f"legacy reference兼容计数{count}周（不作为逐持仓复核证据）。")
+    lines.extend(pair_review.report_lines(pairs))
     def money(v):return '不可用' if v is None else f'{v:,.2f}'
     def number(v):return '不可用' if v is None else str(int(v))
     lines.append(f"完整四窗口可排名{s.get('rankable_rows','未知')}只；其余占位失败行不算成功。")
@@ -55,14 +63,16 @@ def run_weekly(state_path=DEFAULT_STATE,research_runner=None,**kwargs):
     report='\n'.join(lines)
     output=s.get('output_path')
     if output:(Path(output)/'weekly-report.txt').write_text(report,encoding='utf-8')
-    return dict(state=state,holdings=result['holdings'],report=report,research=result)
+    return dict(state=state,pair_review=pairs,holdings=result['holdings'],report=report,research=result)
 
 def main(argv=None,now=None):
     import argparse
     from .engine import DEFAULT_INPUT
     p=argparse.ArgumentParser(description='周度研究中文报告')
     p.add_argument('--input-path',default=str(DEFAULT_INPUT));p.add_argument('--output-path');p.add_argument('--bars-dir');p.add_argument('--asof');p.add_argument('--sessions',type=int,default=63);p.add_argument('--offline',action='store_true');p.add_argument('--limit',type=int);p.add_argument('--workers',type=int,default=8);p.add_argument('--state-path',default=str(DEFAULT_STATE))
+    p.add_argument('--pair-state-path');p.add_argument('--taxonomy-path');p.add_argument('--include-hong-kong',action='store_true',help='关闭周报pair temporary name-based港股过滤，不改研究资格池')
     args=vars(p.parse_args(argv))
+    args['name_exclusions']=() if args.pop('include_hong_kong') else pair_review.DEFAULT_NAME_EXCLUSIONS
     if args['asof'] is None and not args['offline']:
         from datetime import datetime
         from zoneinfo import ZoneInfo

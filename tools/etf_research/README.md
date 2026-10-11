@@ -12,7 +12,7 @@
 
 `grid_model.py` 从原104日研究模型逐字复制，仅将 `fee()` 最低佣金5元改为1元：万一、最低1元。保留前5分钟收盘信号、下一根开盘 IOC近似、T+1、100股整手、0.05%滑点、1%当根成交量参与上限、现金/成本约束。full/early/late/recent20 一次模拟供全部排名消费。
 
-* **轮换视图**：完整有效四窗口、非当前持仓，full完成往返次数严格领先589720；按往返次数、完成循环净差价、净差价/平均库存成本排序。**不加 corr<0.8 的互补门槛**。
+* **legacy轮换参考视图**：完整有效四窗口、非当前持仓，full完成往返次数严格领先589720；按往返次数、完成循环净差价、净差价/平均库存成本排序。仅保留研究历史参考，新周检使用下述逐持仓双轨判定。**不加 corr<0.8 的互补门槛**。
 * **综合研究/第三ETF互补视图**：沿用原窗口循环数、空闲卖出日、普通/下跌相关性门槛，以及35% idle效率、20% full效率、15% recent20效率、15%较弱半窗效率、15%低下跌相关性百分位评分。持仓不参与leader/候选评分。
 
 weekly只调用 `research.run_research()` 一次，展示所有三持仓（失败也展示）、轮换leader及综合研究排名；不另取日线、不另做模拟。同候选连续相邻两周仅人工复核，同周重复不累加、跳周清零；旧日线状态版本不继承。offline/smoke/历史日期/非63日窗口/自定义资格池不继承生产连续周，也不写生产状态或宣称复核达标。`full_pool` 仅代表所选资格池已全量尝试，不等于321生产池或完整成功；另用 `production_pool`、`production_scope`、覆盖计数及 `latest_claim` 区分。
@@ -32,6 +32,24 @@ python -m pytest tools/etf_research/test_research.py -q
 CLI还支持 `--sessions`、`--workers`。input目录含 `eligibility.csv` 与 `bars/{code}-m5.csv`。默认源为 managed Hermes home 下 `cache/grid-broad-20260923`，默认输出为 `cache/grid-research/{run timestamp}`，默认周状态在 `cache/grid-account/rotation/{STATE_VERSION}.json`。数据缺失/抓取失败不推进连续周；合法模型流动性/整手排除允许在相同完整合格覆盖签名下累计，覆盖改变重置；默认weekly在休市/收盘未确认时不运行，手动 `--asof` 可以研究。新输出目录不能位于历史输入目录内。
 
 `--limit N` 为N只非持仓加全部持仓的 smoke，明确非全池；offline永远不宣称最新。输出 `result.json`、`summary.json`、`ranking.csv`、`runs.csv`、`daily-returns.csv`、`bars/`、`data-checks.json`、`errors.json`、追加式 `progress.jsonl`，weekly额外 `weekly-report.txt`。JSON NaN/Infinity统一为null。占位排名行不等于成功；successful_assets、failed_assets、rankable_rows分别明确披露，模拟覆盖严格满足successful_runs+failed_runs=attempted_assets×4。
+
+## 逐持仓双轨周检（pair-review-v1）
+
+`weekly`仍只调用研究一次；`pair_review.py`消费同一套四窗口结果，不改研究资格池、模型、账本或订单。`sz159363`与`sh589720`分别比较，`sz159992`保持exit-only，不建立替换线。旧全局state及返回字段保留兼容，报告标为`legacy reference`，不能作为新pair证据。
+
+每持仓有同类替换（`same_index`/`same_theme`）和跨主题（`cross_theme`）两条线；每线最多1个priority leader、3个observe。同类优先same_index，其内按full往返、full成本效率、code排序。候选必须非持仓且四窗口完整，基准也须完整。full_cycles与full_cycle_net_per_avg_cost_pct均严格领先且recent20两指标均不低于基准才是priority；中期领先近期任一落后仅observe。未知分类仅observe待核，不累计priority。相关性仅展示；与保留持仓abs corr>=0.8警示高重叠，**不加硬相关性门槛、不宣称互补**。前后半窗、期末槽/成本、平均占用、未闭合天数、库存浮盈亏只作风险观察，不增设波动趋势否决。
+
+默认加载本目录`taxonomy.json`（缺失时全部unknown），可`taxonomy=`注入或`--taxonomy-path`指定。官方schema：`{version, assets: {code: {name, index_id, index_name, theme, verified: true, sources: [URL], verified_date}}}`；亦兼容`entries/theme_id`。必须双方verified且sources非空，不凭ETF名称推断同类；同指数要求非空相同index_id，或至少一方ID缺失而官方index_name非空且完全一致（两方非空ID冲突时不回退名称）；同主题要求非空相同theme。lookup显式兼容裸6位与`sh`/`sz`前缀代码，原code存储与输出不改；裸代码有多个前缀匹配时不猜。当前官方taxonomy有11条记录、9项核验成功、2项待核（159992、515120因官方页面未取得可靠正文，verified=false，保留来源待核），仅局部覆盖，报告披露池内已核及未知数，不能宣称全池分类完成。taxonomy来源核验由独立研究维护，不把测试fixture当官方证据。保留`科创板创新药`与`创新药`细分theme，不统一broad_theme；cross_theme只是细分分类，细分分类不等于无重叠，也不证明组合互补。
+
+当前temporary name-based有限过滤排除名称含`港股`/`恒生`/`H股`（忽略大小写），仅pair周报、不改生产资格池。`--include-hong-kong`关闭；API `name_exclusions=()`关闭或传自定义token。该代理过滤不证明实际港股暴露已全部排除。
+
+新独立状态默认在managed home `cache/grid-account/rotation/pair-review-v1.json`，`--pair-state-path`可覆盖。仅相同candidate/holding/track连续相邻2周priority触发`HUMAN_ROTATION_REVIEW`，永不自动换仓。新版本状态（newv，当前`pair-review-v1`）仅保存人工复核证据，`executable=False`；任何state/streak/review_due都禁止auto下单或迁移账本，不授权自动资金调整。同周幂等、跳周/换候选/全局四窗口coverage集合/过滤/taxonomy内容或版本/研究方法版本变化重置；不读取旧全局streak。原子临时文件+fsync+replace后读回校验。offline/smoke/历史/custom或其他非production_scope不读不写生产pair状态、不继承、不review；数据降级可展示比较但冻结计数，不写、不review。合法模型资格排除维持相同完整覆盖时可累计。
+
+```bash
+python -m tools.etf_research.weekly --taxonomy-path tools/etf_research/taxonomy.json
+python -m tools.etf_research.weekly --asof 2026-10-09 --include-hong-kong --pair-state-path D:/scratch/pair-review.json
+python -m pytest tools/etf_research -q
+```
 
 ## 已验证与限制
 
