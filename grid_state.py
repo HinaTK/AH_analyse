@@ -47,7 +47,7 @@ def record(path, side, qty, price, day):
         raise ValueError('持久化序号与交易记录不一致，拒绝覆盖')
     grid = chr(ord(previous['max_grid']) + 1) if side == 'buy' and previous['max_grid'] else ('A' if side == 'buy' else previous['max_grid'])
     inputs = [(t['side'], t['qty'], t['price']) for t in previous['trades']]
-    updated = build(inputs + [(side, qty, price)])
+    updated = build(inputs + [(side, qty, price)], code=previous['code'], name=previous['name'])
     if updated['trades'][-1]['lot'] != grid:
         raise ValueError('序号生成不一致')
     for old, new in zip(previous['trades'], updated['trades']):

@@ -6,7 +6,7 @@ import argparse
 
 INPUT = [('buy',9200,'0.877'),('buy',9400,'0.859'),('buy',9600,'0.829'),('sell',9600,'0.846'),('buy',9600,'0.833'),('buy',9900,'0.806'),('buy',10000,'0.794'),('sell',10000,'0.806'),('sell',9900,'0.818')]
 
-def build(inputs=None):
+def build(inputs=None, code='sh589720', name='科创创新药ETF国泰'):
     trades, records, opened = [], [], {}
     qty = 0
     invested = D(0)
@@ -27,8 +27,8 @@ def build(inputs=None):
         price = D(p)
         amount = n*price
         fee = max(D('1'),amount*D('0.0001')).quantize(D('0.01'))
-        ident = f'589720-{seq:03d}'
-        trade = dict(id=ident,sequence=seq,code='sh589720',side=side,qty=n,price=p,lot=grid,date=None,fee=str(fee),amount=f'{amount:.2f}',source='user_confirmed_replacement')
+        ident = f'{code[-6:]}-{seq:03d}'
+        trade = dict(id=ident,sequence=seq,code=code,side=side,qty=n,price=p,lot=grid,date=None,fee=str(fee),amount=f'{amount:.2f}',source='user_confirmed_replacement')
         trades.append(trade)
         qty += n if side=='buy' else -n
         invested += amount+fee if side=='buy' else -(amount-fee)
@@ -44,7 +44,7 @@ def build(inputs=None):
             fees=fee+D(buy['fee'])
             records.append(dict(lot=grid,buy_id=buy['id'],sell_id=ident,qty=n,buy_price=buy['price'],sell_price=p,gross=f'{gross:.2f}',fees=f'{fees:.2f}',net=f'{gross-fees:.2f}'))
     remaining=sum(D(x['amount'])+D(x['fee']) for x in opened.values())
-    return dict(code='sh589720',name='科创创新药ETF国泰',trades=trades,qty=qty,sellable_qty=None,date_status='交易日期未提供；禁止推导T+1或作为自动出票依据',net_invested=f'{invested:.2f}',max_grid=chr(64+depth) if depth else None,net_unit_cost=f'{invested/qty:.8f}' if qty else None,remaining_buy_cost=f'{remaining:.2f}',remaining_unit_cost=f'{remaining/qty:.8f}' if qty else None,open_grid_positions=list(opened.values()),t_records=records,t_net=f"{sum(D(x['net']) for x in records):.2f}",supersedes='589720全部旧票据和旧成交推导；不代表其他ETF或账户现金已对账')
+    return dict(code=code,name=name,trades=trades,qty=qty,sellable_qty=None,date_status='交易日期未提供；禁止推导T+1或作为自动出票依据',net_invested=f'{invested:.2f}',max_grid=chr(64+depth) if depth else None,net_unit_cost=f'{invested/qty:.8f}' if qty else None,remaining_buy_cost=f'{remaining:.2f}',remaining_unit_cost=f'{remaining/qty:.8f}' if qty else None,open_grid_positions=list(opened.values()),t_records=records,t_net=f"{sum(D(x['net']) for x in records):.2f}",supersedes=f'{code[-6:]}全部旧票据和旧成交推导；不代表其他ETF或账户现金已对账')
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser()
