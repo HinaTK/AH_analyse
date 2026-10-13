@@ -1,0 +1,106 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>网格交易筛选报告</title>
+<style>
+ *{box-sizing:border-box}
+ body{font-family:-apple-system,"Microsoft YaHei","Segoe UI",sans-serif;background:linear-gradient(180deg,#667eea 0%,#764ba2 8%,#f1f2f8 14%);margin:0;color:#1e293b;min-height:100vh}
+ .wrap{max-width:960px;margin:0 auto;padding:16px 16px 40px}
+ .hero{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);border-radius:20px;padding:28px 24px 20px;color:#fff;margin-bottom:16px;box-shadow:0 8px 32px rgba(102,126,234,.3);position:relative;overflow:hidden}
+ .hero::after{content:"";position:absolute;top:-30px;right:-30px;width:180px;height:180px;background:rgba(255,255,255,.08);border-radius:50%}
+ .hero h1{font-size:26px;margin:0 0 6px;font-weight:800;letter-spacing:1px;position:relative;z-index:1}
+ .hero .sub{font-size:13px;opacity:.85;margin-bottom:14px;position:relative;z-index:1}
+ .dedup-note{margin:14px 0 4px;padding:11px 16px;background:#ecfdf5;border-left:4px solid #10b981;border-radius:10px;font-size:13px;color:#065f46} .dedup-note b{color:#047857}
+ .why{margin:8px 0 2px;padding:8px 12px;background:#f0f9ff;border-left:4px solid #0ea5e9;border-radius:10px;font-size:12.5px;color:#0c4a6e}
+ .warn{margin:8px 0 2px;padding:8px 12px;background:#fef2f2;border-left:4px solid #ef4444;border-radius:10px;font-size:12.5px;color:#b91c1c}
+ .stats{display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1}
+ .stat{background:rgba(255,255,255,.15);backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.2);border-radius:12px;padding:8px 14px;min-width:72px}
+ .stat b{display:block;font-size:20px;font-weight:800}
+ .stat span{font-size:10px;opacity:.8}
+ .method{color:#475569;font-size:12px;background:linear-gradient(135deg,#eef2ff,#f0f9ff);border:1px solid #e0e7ff;border-radius:14px;padding:12px 14px;margin-bottom:16px;line-height:1.7}
+ .meta2{color:#64748b;font-size:12px;margin-bottom:16px;text-align:center}
+ .card{background:#fff;border:1px solid #eef0f5;border-radius:16px;padding:0;margin-bottom:20px;box-shadow:0 2px 12px rgba(0,0,0,.05);overflow:hidden;transition:box-shadow .2s,transform .2s}
+ .card:hover{box-shadow:0 8px 28px rgba(0,0,0,.1);transform:translateY(-2px)}
+ .card-rec{border-color:#c7d2fe;box-shadow:0 4px 20px rgba(99,102,241,.12)}
+ .hd{display:flex;align-items:center;gap:8px;padding:14px 16px 10px;flex-wrap:wrap}
+ .nm{font-weight:800;font-size:17px;color:#1e293b}
+ .cd{color:#94a3b8;font-size:12px;font-family:monospace}
+ .kd{font-size:11px;padding:2px 9px;border-radius:20px;font-weight:600}
+ .kd-黄金{background:#fef3c7;color:#b45309} .kd-商品{background:#fed7aa;color:#9a3412} .kd-跨境{background:#dbeafe;color:#1d4ed8} .kd-LOF{background:#e0e7ff;color:#4338ca}
+ .idx{font-size:11px;padding:2px 9px;border-radius:20px;font-weight:600;background:#dcfce7;color:#15803d}
+ .pr{margin-left:auto;font-weight:800;font-size:16px} .pr em{font-size:12px;font-style:normal;font-weight:600}
+ .rank{background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-size:13px;padding:3px 10px;border-radius:20px;font-weight:800;min-width:32px;text-align:center}
+ .score{color:#fff;font-size:12px;padding:3px 11px;border-radius:20px;font-weight:700}
+ .rec{background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;font-size:11px;padding:2px 9px;border-radius:20px;font-weight:700}
+ .pm-warn{background:#fee2e2;color:#dc2626;font-size:10px;padding:1px 6px;border-radius:8px;font-weight:600}
+ .pm-ok{background:#dcfce7;color:#16a34a;font-size:10px;padding:1px 6px;border-radius:8px;font-weight:600}
+ .bt-warn{background:#fee2e2;color:#dc2626;font-size:10px;padding:1px 6px;border-radius:8px;font-weight:600;margin-left:6px}
+ .keybox{display:flex;gap:1px;flex-wrap:wrap;background:#e2e8f0;margin:0 16px;border-radius:12px;overflow:hidden}
+ .kcell{flex:1;min-width:130px;background:linear-gradient(180deg,#fff 0%,#f8fafc 100%);padding:10px 14px;text-align:center}
+ .kl{display:block;font-size:11px;color:#94a3b8;font-weight:500;margin-bottom:3px}
+ .kv{display:block;font-size:19px;color:#e11d48;font-weight:800;line-height:1.2}
+ .kv2{display:block;font-size:11px;color:#94a3b8;margin-top:1px}
+ .hint{font-size:12px;color:#64748b;margin:10px 16px;line-height:1.6;background:#f8fafc;border-radius:10px;padding:8px 10px;border:1px solid #f1f5f9}
+ .hint b{color:#475569}
+ table.kv{width:calc(100% - 32px);border-collapse:separate;border-spacing:0;margin:0 16px 16px;font-size:13px;border-radius:10px;overflow:hidden}
+ table.kv td{border-bottom:1px solid #f1f5f9;padding:7px 10px}
+ table.kv tr:last-child td{border-bottom:none}
+ table.kv td:nth-child(odd){color:#94a3b8;background:#f8fafc;font-weight:500;width:22%}
+ table.kv td:nth-child(even){color:#1e293b;font-weight:600}
+ svg{display:block}
+ footer{text-align:center;color:#94a3b8;font-size:11px;padding:20px 0 0;line-height:1.6}
+ footer b{color:#64748b}
+ @media(max-width:600px){.hero h1{font-size:21px} .nm{font-size:15px} .kv{font-size:16px} .kcell{min-width:50%} .pr{font-size:14px;margin-left:0;width:100%} }
+</style></head><body><div class="wrap">
+<div class="hero">
+  <h1>📊 网格交易筛选报告</h1>
+  <div class="sub">生成时间：2026-10-13 14:21 ｜ 共选出 <b>1</b> 只标的 ｜ 综合评分（满分100，按榜内相对水平折算：榜首≈95、榜尾60）｜ 底层因子=黏合+波动+振幅+位置+趋势</div>
+  <div class="stats">
+    <div class="stat"><b>1</b><span>入选标的</span></div>
+    <div class="stat"><b>80.0</b><span>最高评分</span></div>
+    <div class="stat"><b>80.0</b><span>平均评分</span></div>
+    <div class="stat"><b>1</b><span>高溢价⚠</span></div>
+  </div>
+</div>
+
+
+<div class="method">①均线黏合（MA5/10/20/60离散度≤6.0%）；②横盘震荡（近1月振幅≤8.0%、近2月振幅≤12.0%、年化波动≤30.0%）；③<b>箱体有效性（硬条件）：近80日内必须至少有两个高点价格接近、能连成一条上轨，两个低点价格接近、能连成一条下轨</b>（判定宽度 1.0%，即高低点之间相差不超过这个幅度才算同一水平线），且当前价必须仍在箱体之内——已向上突破或向下跌破的一律不选；④短期趋势：近40日漂移跌破-5.0% 或近期创40日新低也剔除。⑤<b>压力/支撑位修正</b>：回看近250日，找出价格反复触碰（≥3次）的真实压力位/支撑位——把网格上界(卖出线)向上扩到最近的压力位（多次触碰的高点），把下界(买点)向下扩到最近的支撑位，这样区间只扩宽、不缩窄，更贴合人眼可见的前期反复触碰位置、减少卖飞与买早；若找不到这样的压力/支撑位，则上界沿用箱体上轨加1.5%缓冲、下界取箱体下轨触及价（不再用分位数估算）。网格间距取该ETF日均波幅的约七成（保底1%，每只不同）——费率偏高者可自行放宽间距。⑥高溢价硬过滤：跨境/LOF ETF 溢价率超过 --max_premium%（默认10%）直接剔除——网格按交易价设上下界，溢价回落后会额外亏损（已入选标的报告内仍标注溢价率）。按「综合评分」降序排列（满分100，按榜内相对水平折算，榜首≈95分），前3只标★推荐。</div>
+<div class="meta2">均线黏合≤6.0% · 近1月振幅≤8.0% · 近2月振幅≤12.0% · 年化波动≤30.0% · LOF成交额≥2000万 · A股ETF近5日均+前一日均≥10000万 · 跨境ETF近5日均≥5000万</div>
+
+        <div class="card card-rec">
+          <div class="hd">
+            <span class="rank">#1</span>
+            <span class="nm">标普500ETF国泰</span>
+            <span class="cd">159612</span>
+            <span class="kd kd-跨境">跨境</span>
+            
+            <span class="score" style="background:linear-gradient(135deg,#3b82f6,#06b6d4)">评分 80.0</span> <span class="rec">★ 推荐</span>
+            <span class="pr" style="color:#22c55e">2.107 <em>-0.0%</em></span>
+          </div>
+          <svg viewBox="0 0 640 220" width="100%" preserveAspectRatio="xMidYMid meet" style="border-radius:10px"><defs><linearGradient id="bg159612" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fafbff"/><stop offset="100%" stop-color="#f0f1f7"/></linearGradient><linearGradient id="area159612" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#6366f1" stop-opacity="0.18"/><stop offset="100%" stop-color="#6366f1" stop-opacity="0.01"/></linearGradient><linearGradient id="ch159612" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fee2e2" stop-opacity="0.5"/><stop offset="100%" stop-color="#dcfce7" stop-opacity="0.5"/></linearGradient></defs><rect width="640" height="220" fill="url(#bg159612)" rx="10" ry="10"/><rect x="10" y="28.6" width="620" height="66.2" fill="url(#ch159612)" rx="2"/><line x1="10" y1="61.5" x2="630" y2="61.5" stroke="#e5e7eb" stroke-width="0.5" stroke-dasharray="2 3"/><line x1="10" y1="107.0" x2="630" y2="107.0" stroke="#e5e7eb" stroke-width="0.5" stroke-dasharray="2 3"/><line x1="10" y1="152.5" x2="630" y2="152.5" stroke="#e5e7eb" stroke-width="0.5" stroke-dasharray="2 3"/><line x1="10" y1="28.6" x2="630" y2="28.6" stroke="#ef4444" stroke-width="1.2" stroke-dasharray="6 4"/><line x1="10" y1="94.8" x2="630" y2="94.8" stroke="#22c55e" stroke-width="1.2" stroke-dasharray="6 4"/><text x="630" y="24.6" fill="#ef4444" font-size="10" font-weight="600" text-anchor="end">上界 2.160</text><text x="630" y="107.8" fill="#22c55e" font-size="10" font-weight="600" text-anchor="end">下界 2.066</text><polyline fill="none" stroke="#f59e0b" stroke-width="1.0" stroke-dasharray="3 2" points="10.0,185.4 20.5,183.5 31.0,181.5 41.5,180.1 52.0,178.9 62.5,177.3 73.1,175.7 83.6,174.1 94.1,172.8 104.6,171.3 115.1,170.1 125.6,168.7 136.1,168.3 146.6,167.6 157.1,166.6 167.6,165.4 178.1,163.3 188.6,161.4 199.2,159.5 209.7,157.5 220.2,155.1 230.7,152.9 241.2,150.6 251.7,148.1 262.2,145.8 272.7,144.6 283.2,143.4 293.7,142.2 304.2,140.9 314.7,139.9 325.3,139.4 335.8,139.1 346.3,138.3 356.8,137.2 367.3,136.2 377.8,134.6 388.3,133.8 398.8,132.5 409.3,130.7 419.8,129.0 430.3,128.2 440.8,127.3 451.4,126.4 461.9,125.6 472.4,124.8 482.9,123.7 493.4,122.5 503.9,121.5 514.4,119.7 524.9,117.9 535.4,116.3 545.9,114.6 556.4,113.2 566.9,112.1 577.5,110.9 588.0,109.8 598.5,108.5 609.0,107.2 619.5,105.8 630.0,104.3"/><polyline fill="none" stroke="#3b82f6" stroke-width="1.0" stroke-dasharray="3 2" points="10.0,160.9 20.5,160.5 31.0,160.2 41.5,161.0 52.0,162.1 62.5,161.0 73.1,160.5 83.6,159.8 94.1,158.8 104.6,157.5 115.1,157.7 125.6,157.3 136.1,157.5 146.6,157.4 157.1,156.5 167.6,154.8 178.1,150.9 188.6,147.3 199.2,144.0 209.7,140.0 220.2,136.3 230.7,133.6 241.2,131.1 251.7,125.8 262.2,120.3 272.7,117.2 283.2,114.7 293.7,111.9 304.2,108.4 314.7,105.2 325.3,100.9 335.8,97.2 346.3,92.1 356.8,88.2 367.3,85.4 377.8,83.6 388.3,84.9 398.8,86.0 409.3,86.0 419.8,86.6 430.3,87.3 440.8,87.7 451.4,88.0 461.9,89.9 472.4,91.9 482.9,92.7 493.4,92.4 503.9,92.7 514.4,92.0 524.9,91.1 535.4,90.2 545.9,89.2 556.4,89.9 566.9,90.7 577.5,90.8 588.0,90.9 598.5,89.5 609.0,88.3 619.5,87.4 630.0,86.4"/><polyline fill="none" stroke="#a855f7" stroke-width="1.0" stroke-dasharray="3 2" points="10.0,153.9 20.5,148.8 31.0,144.2 41.5,147.1 52.0,150.8 62.5,151.7 73.1,155.6 83.6,159.7 94.1,160.0 104.6,157.0 115.1,160.4 125.6,161.5 136.1,167.2 146.6,165.6 157.1,163.1 167.6,153.2 178.1,137.7 188.6,118.2 199.2,103.1 209.7,89.2 220.2,80.1 230.7,79.6 241.2,79.3 251.7,74.5 262.2,72.1 272.7,75.0 283.2,80.0 293.7,82.9 304.2,90.4 314.7,96.5 325.3,95.2 335.8,91.6 346.3,88.2 356.8,84.6 367.3,83.9 377.8,84.1 388.3,88.6 398.8,93.5 409.3,94.7 419.8,93.9 430.3,94.8 440.8,90.7 451.4,87.5 461.9,90.0 472.4,93.4 482.9,96.9 493.4,98.7 503.9,101.7 514.4,98.9 524.9,93.1 535.4,84.9 545.9,78.7 556.4,76.9 566.9,79.3 577.5,82.8 588.0,87.0 598.5,90.0 609.0,87.2 619.5,81.3 630.0,76.2"/><polygon fill="url(#area159612)" points="10.0,149.8 20.5,135.7 31.0,132.2 41.5,164.6 52.0,171.7 62.5,154.1 73.1,155.5 83.6,152.6 94.1,166.0 104.6,156.9 115.1,171.0 125.6,161.1 136.1,180.9 146.6,158.3 157.1,144.2 167.6,121.6 178.1,83.5 188.6,83.5 199.2,82.8 209.7,74.3 220.2,76.5 230.7,80.7 241.2,82.1 251.7,58.8 262.2,62.3 272.7,91.3 283.2,105.4 293.7,96.9 304.2,96.2 314.7,92.7 325.3,84.9 335.8,87.0 346.3,80.0 356.8,78.6 367.3,89.2 377.8,85.6 388.3,109.6 398.8,104.7 409.3,84.2 419.8,85.6 430.3,89.9 440.8,89.2 451.4,88.4 461.9,96.9 472.4,102.6 482.9,107.5 493.4,98.3 503.9,103.3 514.4,82.8 524.9,73.6 535.4,66.6 545.9,67.3 556.4,94.1 566.9,94.8 577.5,91.3 588.0,87.7 598.5,82.1 609.0,80.0 619.5,65.2 630.0,65.9 630.0,198.0 10.0,198.0"/><polyline fill="none" stroke="#1e293b" stroke-width="1.8" points="10.0,149.8 20.5,135.7 31.0,132.2 41.5,164.6 52.0,171.7 62.5,154.1 73.1,155.5 83.6,152.6 94.1,166.0 104.6,156.9 115.1,171.0 125.6,161.1 136.1,180.9 146.6,158.3 157.1,144.2 167.6,121.6 178.1,83.5 188.6,83.5 199.2,82.8 209.7,74.3 220.2,76.5 230.7,80.7 241.2,82.1 251.7,58.8 262.2,62.3 272.7,91.3 283.2,105.4 293.7,96.9 304.2,96.2 314.7,92.7 325.3,84.9 335.8,87.0 346.3,80.0 356.8,78.6 367.3,89.2 377.8,85.6 388.3,109.6 398.8,104.7 409.3,84.2 419.8,85.6 430.3,89.9 440.8,89.2 451.4,88.4 461.9,96.9 472.4,102.6 482.9,107.5 493.4,98.3 503.9,103.3 514.4,82.8 524.9,73.6 535.4,66.6 545.9,67.3 556.4,94.1 566.9,94.8 577.5,91.3 588.0,87.7 598.5,82.1 609.0,80.0 619.5,65.2 630.0,65.9"/><circle cx="630.0" cy="65.9" r="4" fill="#1e293b" stroke="#fff" stroke-width="1.5"/><circle cx="630.0" cy="65.9" r="7" fill="none" stroke="#1e293b" stroke-width="1" opacity="0.3"/><text x="10" y="12" fill="#94a3b8" font-size="9" font-weight="500">2026-07-14  →  2026-10-13</text></svg>
+          <div class="keybox">
+            <div class="kcell"><span class="kl">上界(卖出线)</span><b class="kv">2.160</b></div>
+            <div class="kcell"><span class="kl">下界</span><b class="kv">2.066</b></div>
+            <div class="kcell"><span class="kl">中枢 / 基准价</span><b class="kv">2.113</b></div>
+            <div class="kcell"><span class="kl">网格间距</span><b class="kv">1.0%</b><span class="kv2">0.021元</span></div>
+          </div>
+          <div class="hint"><b>基准价填「中枢」，间距填 1.0%</b>（=日均波幅约七成，保底1%，直接抄进券商APP）。通道宽 4.5%，共 5 格。现价低于中枢 0.3%</div>
+          <div class="why">适合做网格：均线黏合1.9%、趋势平稳、价格居中、振幅温和。</div>
+          <div class="warn">⚠ 当前溢价 <b>7.9%</b>：网格按交易价设上下界，溢价回落后会额外亏损，请谨慎。</div>
+          <table class="kv">
+            <tr><td>均线黏合度</td><td>1.9%</td><td>近1月振幅</td><td>4.0%</td></tr>
+            <tr><td>近2月振幅</td><td>4.7%</td><td>年化波动率</td><td>14.4%</td></tr>
+            <tr><td>趋势漂移(40日)</td><td>0.1%</td><td>日均波幅ADR</td><td>0.8%（近20日）</td></tr>
+            <tr><td>溢价率</td><td style="color:#ef4444;font-weight:700">+7.89% <span class="pm-warn">溢价7.9%⚠</span></td><td>净值日期</td><td>2026-10-09</td></tr>
+            <tr><td>当前所处档</td><td>第 1 档 / 共 5 格</td><td>近5日均成交额</td><td>3725.4万（估算）</td></tr>
+            <tr><td>前一日成交额</td><td colspan="3">2943.1万（估算）</td></tr>
+            <tr><td>最佳间距</td><td colspan="3"><span style="color:#dc2626;font-weight:800;font-size:1.15em">0.6%</span>（按日均波幅约七成定，近30日约 23 天穿线，比当前 1.0% 更勤）。是否照抄看你的费率：每格利润要盖得住手续费，费率高请保留当前间距</td></tr>
+            <tr><td>区间确认</td><td colspan="3">近80日箱体有效 <b>35</b> 日 · 上轨碰线 1 次 · 下轨碰线 5 次</td></tr>
+            <tr><td>下界口径</td><td colspan="3">箱体支撑线口径：反复触碰的低点连线（非历史最低价）——与其他工具按最低价算的结果不同属正常</td></tr>
+          </table>
+        </div>
+<footer>
+  <b>⚠ 风险提示</b>：本报告由 AI 基于公开行情数据自动生成，仅供学习与研究网格交易策略，不构成任何投资建议或实盘指导。<br>
+  网格交易有亏损风险，投资需谨慎。数据来源：腾讯财经 / 天天基金。<br>
+  
+</footer>
+</div></body></html>
