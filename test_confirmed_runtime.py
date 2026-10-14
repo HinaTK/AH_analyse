@@ -12,12 +12,13 @@ class RuntimeTests(unittest.TestCase):
         import confirmed_runtime as runtime
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for code in runtime.CODES:
+            codes = runtime.H.held_codes()
+            for code in codes:
                 state = confirmed_589720.build(code=code, name=code)
                 state['sellable_qty'] = state['qty']
                 (root / f'confirmed-{code[-6:]}.json').write_text(json.dumps(state))
             ticket = runtime.plan(root)
-            self.assertEqual({a['code'] for a in ticket['actions']}, set(runtime.CODES))
+            self.assertEqual({a['code'] for a in ticket['actions'] if a['side'] == 'sell'}, set(runtime.CODES))
             self.assertEqual(len(ticket['actions']), 4)
             self.assertFalse(ticket['executable'])
             self.assertIsNone(ticket['cash'])
@@ -41,7 +42,8 @@ class RuntimeTests(unittest.TestCase):
         import confirmed_runtime as runtime
         self.assertTrue(hasattr(runtime, 'monitor'), 'same-state monitor missing')
         now = datetime(2026, 10, 14, 10, tzinfo=timezone(timedelta(hours=8)))
-        quotes = {code: dict(last='0.8', high='0.9', low='0.7', time='20261014100000') for code in runtime.CODES}
+        codes = runtime.H.held_codes()
+        quotes = {code: dict(last='0.8', high='0.9', low='0.7', time='20261014100000') for code in codes}
         self.assertTrue(runtime.quotes_are_live(quotes, now))
         quotes['sz159363']['time'] = '20261014092900'
         self.assertFalse(runtime.quotes_are_live(quotes, now))
@@ -71,7 +73,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(runtime.monitor(ticket,quotes,{},'2026-10-14'))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for code in runtime.CODES:
+            codes = runtime.H.held_codes()
+            for code in codes:
                 state = confirmed_589720.build([('buy',4600,'1.28')],code=code,name=code)
                 state['sellable_qty'] = 4600
                 (root / f'confirmed-{code[-6:]}.json').write_text(json.dumps(state))
@@ -82,7 +85,8 @@ class RuntimeTests(unittest.TestCase):
         import confirmed_runtime as runtime
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for code in runtime.CODES:
+            codes = runtime.H.held_codes()
+            for code in codes:
                 state = confirmed_589720.build(code=code,name=code)
                 state.update(qty=1,sellable_qty=1)
                 (root / f'confirmed-{code[-6:]}.json').write_text(json.dumps(state))
@@ -93,7 +97,8 @@ class RuntimeTests(unittest.TestCase):
         import confirmed_runtime as runtime
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for code in runtime.CODES:
+            codes = runtime.H.held_codes()
+            for code in codes:
                 state = confirmed_589720.build(code=code,name=code)
                 state['sellable_qty'] = state['qty']
                 (root / f'confirmed-{code[-6:]}.json').write_text(json.dumps(state))
@@ -139,16 +144,17 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(hasattr(runtime, 'eod_report'), 'confirmed EOD consumer missing')
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for code in runtime.CODES:
+            codes = runtime.H.held_codes()
+            for code in codes:
                 state = confirmed_589720.build(code=code,name=code)
                 state['sellable_qty'] = state['qty']
                 (root / f'confirmed-{code[-6:]}.json').write_text(json.dumps(state))
             now = datetime(2026,10,14,15,20,tzinfo=timezone(timedelta(hours=8)))
-            quotes = {code:dict(time='20261014150000',last='0.8',high='0.9',low='0.7') for code in runtime.CODES}
-            bars = {code:[dict(date='2026-10-14',close='0.8')] for code in runtime.CODES}
+            quotes = {code:dict(time='20261014150000',last='0.8',high='0.9',low='0.7') for code in codes}
+            bars = {code:[dict(date='2026-10-14',close='0.8')] for code in codes}
             report = runtime.eod_report(root,now,quotes,bars)
             self.assertFalse(report['executable'])
-            self.assertEqual(set(report['state_hashes']),set(runtime.CODES))
+            self.assertEqual(set(report['state_hashes']), set(runtime.H.held_codes()))
             self.assertEqual(report['decisions']['sh589720']['t_net'], state['t_net'])
             quotes['sh589720']['time'] = '20261013150000'
             with self.assertRaises(ValueError):
@@ -192,7 +198,8 @@ class FillTests(unittest.TestCase):
             home = Path(directory)
             root = home / 'cache/grid-account'
             root.mkdir(parents=True)
-            for code in runtime.CODES:
+            codes = runtime.H.held_codes()
+            for code in codes:
                 state = confirmed_589720.build(code=code,name=code)
                 state.update(sellable_qty=28200,sellable_updated_on='2026-10-14')
                 (root / f'confirmed-{code[-6:]}.json').write_text(json.dumps(state))

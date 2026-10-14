@@ -3,15 +3,18 @@ import json
 from pathlib import Path
 from decimal import Decimal as D, ROUND_HALF_UP
 
-CODES = ('sh589720', 'sz159363')
+import holdings as H
+
+CODES = ('sh589720', 'sz159363')          # legacy compatibility only
 BUDGETS = {'sh589720': D('8000'), 'sz159363': D('6000')}
 GAP = D('0.015')
-WARNING = '条件建议，非可直接执行委托：159992及账户现金未完成对账；须核对可用现金、组合/单ETF资金上限、银河可卖库存、冻结及在途委托；不自动下单，触价不等于成交。'
+WARNING = ('条件建议，非可直接执行委托：sz159992 处于迁移退出模式（停买、停接回、只卖不买），'
+           '00:01 已同步可卖份额；账户现金、银河冻结及在途委托未对账，不自动下单，触价不等于成交。')
 
 
 def load_states(root):
     result = {}
-    for code in CODES:
+    for code in H.held_codes():
         state = json.loads((Path(root) / f'confirmed-{code[-6:]}.json').read_text(encoding='utf-8'))
         if state['code'] != code:
             raise ValueError('ETF状态文件身份不符')
@@ -27,23 +30,28 @@ def price(value):
 
 def plan(root):
     states = load_states(root)
+    holdings = H.load_holdings()
+    budgets = H.lot_budgets(holdings)
+    names = H.names(holdings)
     actions = []
     for code, state in states.items():
+        active = H.is_active(code, holdings)
         top = state['open_grid_positions'][-1] if state['open_grid_positions'] else None
         depth = len(state['open_grid_positions'])
         if state['max_grid'] != (chr(64 + depth) if depth else None):
             raise ValueError('最大网格序号不一致')
         available = state.get('sellable_qty')
         if type(available) is not int or not 0 <= available <= state['qty']:
-            raise ValueError('保存的可卖库存无效')
-        if top and available >= top['qty'] and state['qty'] - top['qty'] >= (4600 if code == 'sz159363' else 0):
+            if active or available is not None:
+                raise ValueError('保存的可卖库存无效')
+        if active and top and type(available) is int and available >= top['qty'] and state['qty'] - top['qty'] >= (4600 if code == 'sz159363' else 0):
             actions.append(dict(code=code, side='sell', price=price(D(top['price']) * (1 + GAP)), qty=top['qty'], lot=state['max_grid'], buy_id=top['id']))
-        if depth < 26 and state['trades']:
+        if active and depth < 26 and state['trades'] and budgets.get(code) is not None:
             px = price(D(top['price'] if top else state['trades'][-1]['price']) / (1 + GAP))
-            qty = int(BUDGETS[code] / (D(px) * 100)) * 100
+            qty = int(budgets[code] / (D(px) * 100)) * 100
             if qty:
                 actions.append(dict(code=code, side='buy', price=px, qty=qty, lot=chr(65 + depth)))
-    return dict(actions=actions, executable=False, cash=None, warning=WARNING, states=states)
+    return dict(actions=actions, executable=False, cash=None, warning=WARNING, states=states, names=names)
 
 
 def phase(now):
@@ -63,7 +71,7 @@ def phase(now):
 
 
 def quotes_are_live(quotes, now):
-    if not quotes or set(quotes) != set(CODES):
+    if not quotes or set(quotes) != set(H.held_codes()):
         return False
     for quote in quotes.values():
         stamp = str(quote.get('time', ''))
@@ -84,11 +92,12 @@ def quotes_are_live(quotes, now):
 def fetch_quotes():
     import re
     import urllib.request
-    request = urllib.request.Request('https://qt.gtimg.cn/q=' + ','.join(CODES), headers={'User-Agent': 'Mozilla/5.0'})
+    codes = H.held_codes()
+    request = urllib.request.Request('https://qt.gtimg.cn/q=' + ','.join(codes), headers={'User-Agent': 'Mozilla/5.0'})
     with urllib.request.urlopen(request, timeout=15) as response:
         text = response.read().decode('gbk', errors='replace')
     result = {}
-    for code in CODES:
+    for code in codes:
         match = re.search(rf'v_{code}="([^"]*)"', text)
         if not match:
             raise ValueError('腾讯缺少ETF行情')
@@ -220,7 +229,7 @@ def eod_report(root, now, quotes, bars):
         if rows[-1]['date'] != now.date().isoformat() or not close.is_finite() or close <= 0 or abs(close - D(quotes[code]['last'])) > max(D('0.002'), close * D('0.005')):
             raise ValueError('日线与当日收盘快照不一致')
         decisions[code] = dict(close=str(close), qty=state['qty'], sellable_qty=state['sellable_qty'], max_grid=state['max_grid'], net_invested=state['net_invested'], net_unit_cost=state['net_unit_cost'], t_net=state['t_net'], completed_cycles=len(state['t_records']), reason='上移基准评估未验证，保持不改参数；历史日期不补造，未知日期周期不推导20日效率，禁止自动上移/换仓')
-    return dict(asof=now.date().isoformat(), policy_version='confirmed-grid-1.5-v1', executable=False, cash=None, warning=WARNING, decisions=decisions, actions=ticket['actions'], state_hashes={code:hashlib.sha256(json.dumps(state,sort_keys=True,ensure_ascii=False).encode()).hexdigest() for code,state in ticket['states'].items()}, source='腾讯日线和收盘快照交叉核验；仅已确认ETF状态')
+    return dict(asof=now.date().isoformat(), policy_version='confirmed-grid-1.5-v1', executable=False, cash=None, warning=WARNING, decisions=decisions, actions=ticket['actions'], state_hashes={code:hashlib.sha256(json.dumps(state,sort_keys=True,ensure_ascii=False).encode()).hexdigest() for code,state in ticket['states'].items()}, names=ticket.get('names'), source='腾讯日线和收盘快照交叉核验；仅已确认ETF状态')
 
 
 def eod_main():
@@ -260,10 +269,12 @@ def safe_entrypoint(function, *args):
 
 def render(ticket):
     lines = ['【统一已确认ETF网格 1.5%】', WARNING]
+    names = ticket.get('names') or {}
     for code, state in ticket['states'].items():
-        lines.append(f"{code} 持有={state['qty']} 保存可卖={state['sellable_qty']} 最大格={state['max_grid']} 净投入={state['net_invested']} 已完成T净收益={state['t_net']}")
+        tag = '（迁移退出：只读，不生成买卖建议）' if not H.is_active(code) else ''
+        lines.append(f"{code} {names.get(code,'')} {tag} 持有={state['qty']} 保存可卖={state['sellable_qty']} 最大格={state['max_grid']} 净投入={state['net_invested']} 已完成T净收益={state['t_net']}")
     for action in ticket['actions']:
         direction = '买' if action['side'] == 'buy' else '卖'
-        name = {'sh589720':'科创创新药ETF国泰','sz159363':'创业板人工智能ETF华宝'}[action['code']]
+        name = names.get(action['code'], '')
         lines.append(f"- {action['code']} {name} 条件{direction} {action['lot']}格 **{action['qty']:,}份** @ **{action['price']}**")
     return '\n'.join(lines)

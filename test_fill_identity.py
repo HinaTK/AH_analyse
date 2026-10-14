@@ -89,7 +89,7 @@ class FillIdentityTests(unittest.TestCase):
         root = home / 'cache/grid-account'
         root.mkdir(parents=True)
         (home / 'scripts').mkdir()
-        for code in confirmed_runtime.CODES:
+        for code in confirmed_runtime.H.held_codes():
             state = confirmed_589720.build(code=code, name=code)
             state['sellable_qty'] = state['qty']
             (root / f'confirmed-{code[-6:]}.json').write_text(json.dumps(state), encoding='utf-8')
