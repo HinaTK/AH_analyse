@@ -54,8 +54,7 @@ if __name__=='__main__':
     target=Path(args.output)
     target.parent.mkdir(parents=True,exist_ok=True)
     if target.exists():
-        backup=target.with_suffix('.previous.json')
-        backup.write_bytes(target.read_bytes())
+        parser.error('已有已确认状态，禁止用初始历史快照覆盖；新增成交必须走grid_state.record')
     tmp=target.with_suffix('.tmp')
     tmp.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
     tmp.replace(target)

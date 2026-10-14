@@ -27,10 +27,10 @@ class StateTests(unittest.TestCase):
             s = source.build()
             s['sellable_qty'] = 28200
             p.write_text(json.dumps(s), encoding='utf-8')
-            grid_state.record(p, 'buy', 9900, '0.806', '2026-10-14')
+            grid_state.record(p, 'buy', 9900, '0.806', '2026-10-14', execution_id='test-buy')
             bought = json.loads(p.read_text(encoding='utf-8'))
             self.assertEqual((bought['qty'], bought['sellable_qty'], bought['max_grid']), (38100,28200,'D'))
-            grid_state.record(p, 'sell', 9900, '0.818', '2026-10-14')
+            grid_state.record(p, 'sell', 9900, '0.818', '2026-10-14', execution_id='test-sell')
             sold = json.loads(p.read_text(encoding='utf-8'))
             self.assertEqual((sold['qty'], sold['sellable_qty'], sold['max_grid']), (28200,18300,'C'))
             self.assertEqual(sold['trades'][-1]['lot'], 'D')
