@@ -88,9 +88,35 @@ def rollover(path, day):
         return state
 
 
-def record(path, side, qty, price, day, execution_id=None):
+def record(path, side, qty, price, day=None, execution_id=None, *, received_at=None,
+           message_id=None, fill_item_key='0', ingestion_at=None):
     from confirmed_589720 import build
     from decimal import Decimal
+    started_at = datetime.now(timezone(timedelta(hours=8)))
+    supplied_day, supplied_received_at = day, received_at
+    if message_id is not None and (not isinstance(message_id, str) or not message_id.strip()):
+        raise ValueError('message-id不能为空')
+    if not isinstance(fill_item_key, str) or not fill_item_key.strip():
+        raise ValueError('fill-item-key不能为空')
+    if message_id is None and fill_item_key != '0':
+        raise ValueError('fill-item-key需要message-id')
+    if received_at is None:
+        received_at = ingestion_at or started_at.isoformat()
+        date_source = 'local_ingestion_beijing'
+    else:
+        stamp = datetime.fromisoformat(received_at)
+        if stamp.tzinfo is None or stamp.utcoffset() is None:
+            raise ValueError('received-at必须包含时区')
+        date_source = 'received_at_beijing'
+    stamp = datetime.fromisoformat(received_at)
+    if stamp.tzinfo is None or stamp.utcoffset() is None:
+        raise ValueError('接收时间必须包含时区')
+    if stamp > started_at:
+        raise ValueError('接收时间不能在未来')
+    if day is None:
+        day = stamp.astimezone(timezone(timedelta(hours=8))).date().isoformat()
+    else:
+        date_source = 'explicit_date'
     date.fromisoformat(day)
     if side not in ('buy', 'sell') or type(qty) is not int or qty <= 0 or not Decimal(price).is_finite() or Decimal(price) <= 0:
         raise ValueError('非法成交')
@@ -98,15 +124,48 @@ def record(path, side, qty, price, day, execution_id=None):
         previous = json.loads(Path(path).read_text(encoding='utf-8'))
         from confirmed_state_validation import validate_state
         validate_state(previous)
+        if message_id is not None:
+            matches = [t for t in previous['trades']
+                       if (t.get('message_id'), t.get('fill_item_key')) == (message_id, fill_item_key)]
+            if len(matches) > 1:
+                raise ValueError('重复来源消息成交身份，拒绝写账')
+            if matches:
+                trade = matches[0]
+                if ((trade['side'], trade['qty'], trade['price']) != (side, qty, price)
+                        or (execution_id is not None and execution_id != trade['id'])
+                        or (supplied_day is not None and day != trade['date'])
+                        or (supplied_received_at is not None and
+                            (received_at != trade.get('received_at') or
+                             (supplied_day is None and day != trade['date'])))):
+                    raise ValueError('同一来源消息成交数据冲突')
+                return previous
         if execution_id is None:
-            raise ValueError('必须提供显式成交ID，禁止推定成交')
+            if not isinstance(message_id, str) or not message_id.strip():
+                raise ValueError('自动成交ID必须提供适配器稳定message-id；人工重试可使用显式ID')
+            import re
+            prefix = previous['code'][-6:] + '-'
+            numbers = [int(t['id'][len(prefix):]) for t in previous['trades']
+                       if re.fullmatch(re.escape(prefix) + r'\d+', t['id'])]
+            numbers.extend(t['sequence'] for t in previous['trades'])
+            execution_id = f'{prefix}{max(numbers, default=0) + 1:03d}'
         if not isinstance(execution_id, str) or not execution_id.strip():
             raise ValueError('成交ID不能为空')
         for trade in previous['trades']:
             if trade['id'] == execution_id:
-                if (trade['side'], trade['qty'], trade['price'], trade['date']) != (side, qty, price, day):
+                if ((trade['side'], trade['qty'], trade['price']) != (side, qty, price)
+                        or (supplied_day is not None and trade['date'] != day)
+                        or (supplied_received_at is not None and
+                            (trade.get('received_at') != received_at or
+                             (supplied_day is None and trade['date'] != day)))
+                        or (message_id is not None and
+                            (trade.get('message_id'), trade.get('fill_item_key')) !=
+                            (message_id, fill_item_key))):
                     raise ValueError('同一成交ID数据冲突')
                 return previous
+        if day > started_at.date().isoformat():
+            raise ValueError('成交日期不能在未来')
+        if any(t.get('date') and t['date'] > day for t in previous['trades']):
+            raise ValueError('历史补录日期乱序，需独立核对')
         available = previous.get('sellable_qty')
         if type(available) is not int or not 0 <= available <= previous['qty']:
             raise ValueError('可卖份额尚未初始化或无效')
@@ -123,7 +182,10 @@ def record(path, side, qty, price, day, execution_id=None):
         mapping[rebuilt['trades'][-1]['id']] = execution_id
         for old, new in zip(previous['trades'], rebuilt['trades']):
             new.update(old)
-        rebuilt['trades'][-1].update(id=execution_id, date=day, source='explicit_confirmed_fill')
+        rebuilt['trades'][-1].update(id=execution_id, date=day, source='explicit_confirmed_fill',
+                                    received_at=received_at, date_source=date_source)
+        if message_id is not None:
+            rebuilt['trades'][-1].update(message_id=message_id, fill_item_key=fill_item_key)
         for cycle in rebuilt['t_records']:
             cycle['buy_id'] = mapping[cycle['buy_id']]
             cycle['sell_id'] = mapping[cycle['sell_id']]

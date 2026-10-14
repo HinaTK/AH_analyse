@@ -173,7 +173,7 @@ class FillTests(unittest.TestCase):
             self.assertEqual(saved['trades'][-1]['id'],'race-1')
             self.assertEqual(grid_state.rollover(path,'2026-10-14'),saved)
 
-    def test_record_requires_explicit_id_instead_of_synthesizing_fill(self):
+    def test_record_without_message_identity_or_explicit_id_fails_closed(self):
         import grid_state
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'state.json'

@@ -177,21 +177,31 @@ def intraday_main():
 def confirm_main(argv=None):
     import argparse
     from grid_state import record
+    from datetime import datetime, timezone, timedelta
+    started_at = datetime.now(timezone(timedelta(hours=8))).isoformat()
     parser = argparse.ArgumentParser()
     parser.add_argument('result', choices=('成功','失败'))
     parser.add_argument('--code', choices=CODES)
     parser.add_argument('--side', choices=('buy','sell'))
     parser.add_argument('--qty', type=int)
     parser.add_argument('--price')
-    parser.add_argument('--date')
-    parser.add_argument('--id', dest='execution_id')
+    parser.add_argument('--date', help='可选历史日期覆盖；未来/乱序/早于库存结算日拒绝')
+    parser.add_argument('--id', dest='execution_id', help='兼容显式成交ID；稳定ID支持重试')
+    parser.add_argument('--received-at', help='适配器提供原消息接收ISO时间，必须含时区；省略为本地入口接收时间')
+    parser.add_argument('--message-id', help='适配器稳定来源消息身份；自动成交ID必需，非用户输入')
+    parser.add_argument('--fill-item-key', default='0', help='同一消息中的稳定成交项键，单笔默认0')
     args = parser.parse_args(argv)
     if args.result == '失败':
         print('未成交：不修改任何成交/库存状态')
         return
-    if any(value is None for value in (args.code,args.side,args.qty,args.price,args.date,args.execution_id)):
-        parser.error('成功必须显式提供--code --side --qty --price --date --id；禁止按整票推定成交')
-    state = record(root_from_home() / f'confirmed-{args.code[-6:]}.json', args.side, args.qty, args.price, args.date, execution_id=args.execution_id)
+    if any(value is None for value in (args.code,args.side,args.qty,args.price)):
+        parser.error('成功必须显式提供--code --side --qty --price；禁止按整票推定成交')
+    if args.execution_id is None and not args.message_id:
+        parser.error('自动成交ID需要适配器--message-id；人工兼容路径可提供--id，不能按价量去重')
+    state = record(root_from_home() / f'confirmed-{args.code[-6:]}.json', args.side, args.qty,
+                   args.price, args.date, execution_id=args.execution_id,
+                   received_at=args.received_at, message_id=args.message_id,
+                   fill_item_key=args.fill_item_key, ingestion_at=started_at)
     print(json.dumps({key:state[key] for key in ('code','qty','sellable_qty','max_grid')}, ensure_ascii=False))
     print('现在的剩余操作建议')
     print(render(plan(root_from_home())))
