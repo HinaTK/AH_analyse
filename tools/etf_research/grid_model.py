@@ -34,7 +34,7 @@ def simulate(frame,gap=.02,t0=False,slip=.0005,trace=False):
     core_qty,core_cost=purchase(10000,initial_p)
     q,c=purchase(5000,initial_p)
     if min(core_qty,q)<=0:raise ValueError('price too high for board lot')
-    if core_qty+4*q>vol[0]*.01:raise ValueError('initial orders exceed 1% first bar volume')
+    if core_qty+4*q>vol[0]*.01*100:raise ValueError('initial orders exceed 1% first bar volume')
     cash-=core_cost
     slots=[]
     def record(side,i,qty,p,commission,slot,signal=None,initial=False,pnl=0):
@@ -49,9 +49,22 @@ def simulate(frame,gap=.02,t0=False,slip=.0005,trace=False):
         else:
             slots.append({'qty':0,'cost':0.0,'target':initial_p/(1+gap)**(k-3),'initial':False,'bought_day':0,'bought_index':0})
     qty_total=core_qty+4*q
+
     initial_qty=qty_total;initial_cash=cash
+
     available=qty_total if t0 else 0
+
     cost_held=core_cost+4*c;max_cost=cost_held;min_cash=cash
+
+    # Initial cash/cost assertion: ensure model invariants hold from the start
+
+    if cash < 50000 - 1e-6 or cost_held > 50000 + 1e-6:
+
+        raise AssertionError('initial capital invariant violated: cash=%s cost_held=%s' % (cash, cost_held))
+
+    if not (available >= 0 and available <= qty_total):
+
+        raise AssertionError('initial availability invariant violated: available=%s qty_total=%s' % (available, qty_total))
     realized=0.0;cycle_pnl=0.0;cycles=0;sales=0;initial_sales=0;blocked=0;cancelled=0
     hold_days=[];cycle_costs=[];sale_dates=set();equities=[];costs=[];cash_series=[]
     for i in range(n):
@@ -73,7 +86,7 @@ def simulate(frame,gap=.02,t0=False,slip=.0005,trace=False):
                 p=price(opens[i],side=='buy',slip)
                 if side=='sell':
                     qty=s['qty']
-                    if p+1e-10>=s['target'] and qty<=vol[i]*.01:
+                    if p+1e-10>=s['target'] and qty<=vol[i]*.01*100:
                         commission=fee(qty*p);proceeds=qty*p-commission;profit=proceeds-s['cost']
                         cash+=proceeds;qty_total-=qty;available-=qty;cost_held-=s['cost'];realized+=profit
                         sales+=1;sale_dates.add(dates[i]);fees+=commission;trades+=1
@@ -85,7 +98,7 @@ def simulate(frame,gap=.02,t0=False,slip=.0005,trace=False):
                     else:cancelled+=1
                 else:
                     qty,cost=purchase(5000,p)
-                    if qty and p<=s['target']+1e-10 and qty<=vol[i]*.01 and cash-cost>=50000-1e-7 and cost_held+cost<=50000+1e-7:
+                    if qty and p<=s['target']+1e-10 and qty<=vol[i]*.01*100 and cash-cost>=50000-1e-7 and cost_held+cost<=50000+1e-7:
                         cash-=cost;qty_total+=qty;cost_held+=cost
                         if t0:available+=qty
                         commission=fee(qty*p);fees+=commission;trades+=1
@@ -109,7 +122,7 @@ def simulate(frame,gap=.02,t0=False,slip=.0005,trace=False):
     bh=initial_cash+initial_qty*closes[-1]
     maxq,maxc=purchase(50000,initial_p)
     maxbh=100000-maxc+maxq*closes[-1]
-    result={'gap':gap,'t0':t0,'slip':slip,'start':times[0],'end':times[-1],'days':len(all_dates),'bars':n,'cycles':cycles,'cycle_net':cycle_pnl,'cycle_return_on_40k_pct':cycle_pnl/40000*100,'sales':sales,'initial_sales':initial_sales,'realized_total':realized,'inventory_pnl':open_pnl,'inventory_loss':max(0,-open_pnl),'account_pnl':final-100000,'return_pct':(final/100000-1)*100,'max_drawdown_pct':dd.min()*100,'same_exposure_bh_pct':(bh/100000-1)*100,'max_exposure_bh_pct':(maxbh/100000-1)*100,'excess_same_bh_pct':(final-bh)/100000*100,'fees':fees,'trades':trades,'avg_cost':float(np.mean(costs)),'max_cost':max_cost,'end_cost':cost_held,'min_cash':min_cash,'end_cash':cash,'median_cycle_days':float(np.median(hold_days)) if hold_days else None,'p90_cycle_days':float(np.percentile(hold_days,90)) if hold_days else None,'max_unclosed_cycle_days':max(unclosed) if unclosed else 0,'max_no_sale_days':worst_streak,'settlement_blocks':blocked,'cancelled_signals':cancelled,'identity_error':final-100000-realized-open_pnl,'end_slots':sum(s['qty']>0 for s in slots)}
+    result={'gap':gap,'t0':t0,'slip':slip,'start':times[0],'end':times[-1],'days':len(all_dates),'bars':n,'cycles':cycles,'cycle_net':cycle_pnl,'cycle_return_on_40k_pct':cycle_pnl/(4*c)*100 if c else 0.0,'sales':sales,'initial_sales':initial_sales,'realized_total':realized,'inventory_pnl':open_pnl,'inventory_loss':max(0,-open_pnl),'account_pnl':final-100000,'return_pct':(final/100000-1)*100,'max_drawdown_pct':dd.min()*100,'same_exposure_bh_pct':(bh/100000-1)*100,'max_exposure_bh_pct':(maxbh/100000-1)*100,'excess_same_bh_pct':(final-bh)/100000*100,'fees':fees,'trades':trades,'avg_cost':float(np.mean(costs)),'max_cost':max_cost,'end_cost':cost_held,'min_cash':min_cash,'end_cash':cash,'median_cycle_days':float(np.median(hold_days)) if hold_days else None,'p90_cycle_days':float(np.percentile(hold_days,90)) if hold_days else None,'max_unclosed_cycle_days':max(unclosed) if unclosed else 0,'max_no_sale_days':worst_streak,'settlement_blocks':blocked,'cancelled_signals':cancelled,'identity_error':final-100000-realized-open_pnl,'end_slots':sum(s['qty']>0 for s in slots)}
     if trace:
         result['events']=events
         result['equity_curve']=[{'time':t,'equity':e,'cost':c,'cash':ca} for t,e,c,ca in zip(times,equities,costs,cash_series)]

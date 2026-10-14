@@ -1,0 +1,64 @@
+{
+  "start": "2026-09-01 09:35:00",
+  "end": "2026-10-13 15:00:00",
+  "bars": 1200,
+  "sessions": 25,
+  "cycles": 2,
+  "cycle_net": 163.2,
+  "inventory_pnl": 0.0,
+  "account_pnl": 163.2,
+  "account_return_pct": 0.408,
+  "max_drawdown_pct": -0.38,
+  "peak_cost": 7878.4,
+  "end_cash": 40163.2,
+  "end_qty": 0,
+  "blocked_settlement": 0,
+  "cancelled_signals": 13,
+  "events": [
+    {
+      "side": "buy",
+      "time": "2026-09-01 09:40:00",
+      "qty": 3800,
+      "price": 2.073,
+      "cost": 7878.4
+    },
+    {
+      "side": "sell",
+      "time": "2026-09-21 14:50:00",
+      "qty": 3800,
+      "price": 2.094,
+      "pnl": 77.80000000000018,
+      "buy_time": "2026-09-01 09:40:00"
+    },
+    {
+      "side": "buy",
+      "time": "2026-09-24 14:45:00",
+      "qty": 3800,
+      "price": 2.073,
+      "cost": 7878.4
+    },
+    {
+      "side": "sell",
+      "time": "2026-10-08 09:55:00",
+      "qty": 3800,
+      "price": 2.096,
+      "pnl": 85.40000000000055,
+      "buy_time": "2026-09-24 14:45:00"
+    }
+  ],
+  "assumptions": {
+    "symbol": "sz159612",
+    "anchor": 2.105,
+    "lower": 2.066,
+    "upper": 2.16,
+    "gap": 0.01,
+    "lot_budget": 8000,
+    "max_inventory_cost": 40000,
+    "cash": 40000,
+    "starting_shares": 0,
+    "slip": 0.0005,
+    "volume_cap": 0.01,
+    "commissions": "max(1 yuan, turnover*0.0001) per side",
+    "fixed_levels_known": "2026-10-13; earlier simulation is hindsight"
+  }
+}
