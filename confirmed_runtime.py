@@ -242,7 +242,7 @@ def eod_main():
         return '收盘未确认或休市：不生成评估'
     quotes = fetch_quotes()
     bars = {}
-    for code in CODES:
+    for code in H.held_codes():
         request = urllib.request.Request(f'https://ifzq.gtimg.cn/appstock/app/fqkline/get?param={code},day,,,80,qfq',headers={'User-Agent':'Mozilla/5.0'})
         with urllib.request.urlopen(request, timeout=15) as response:
             data = json.load(response)
