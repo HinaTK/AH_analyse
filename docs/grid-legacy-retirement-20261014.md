@@ -2,7 +2,7 @@
 
 Actual quarantine: `D:/Hermes Agent CN Desktop/data/hermes-home/archives/retired-grid/2026-10-14_103636/`.
 
-135 files moved reversibly: 33 managed scripts/bytecode, 100 old account files (ledger/migration/tickets, historical confirmed snapshots and legacy message/trend evidence), 2 untracked repository scratch scripts (`test_grid_runtime_guard.py`, `register_fills.py`). Nothing irreversibly deleted; the empty tickets directory was removed. Archived files and trading history are not committed here.
+141 files moved reversibly: 33 managed scripts/bytecode, 106 old account files (ledger/migration/tickets, historical confirmed snapshots and legacy message/trend evidence), 2 untracked repository scratch scripts (`test_grid_runtime_guard.py`, `register_fills.py`). Nothing irreversibly deleted; the empty tickets directory was removed. Archived files and trading history are not committed here.
 
 `manifest.json` records every original/destination path, byte size and SHA-256, plus 18 protected file hashes and the 7 cron references. `verification.json` records initial verified counts. Every archived file was read back and matched its source hash; every source was absent. To restore individual evidence, copy the explicit manifest destination to a non-runtime examination directory. Restoring obsolete runtime paths requires a separate authorization; do not replay archived scripts or tickets.
 
@@ -10,7 +10,7 @@ Actual quarantine: `D:/Hermes Agent CN Desktop/data/hermes-home/archives/retired
 
 - Only authoritative `confirmed-589720.json`, `confirmed-159363.json`, `confirmed-159992.json`, and active `confirmed-intraday-alerts.json` remain as confirmed JSON files. Runtime locks stay.
 - Seven confirmed-grid deployed launchers remain byte-identical, along with all new runtime modules.
-- `grid_weekly_rotation.py`, `run_rotation.py`, `grid_rotation_review.py`, `grid_intraday_bars.py` and all research tools/caches remain. Historical EOD/rotation evidence is retained.
+- `grid_weekly_rotation.py`, `run_rotation.py`, `grid_rotation_review.py`, `grid_intraday_bars.py` and all research tools/caches remain. Historical rotation research evidence is retained; six legacy EOD reports were also moved into quarantine, since their `history_count`/old policy summaries must not guide the new runtime.
 - Confirmed holdings remain 589720 **38000 / D**, saved sellable 28200; 159363 **34400 / G**, saved sellable 29000. No transaction was processed.
 
 Exact authoritative hashes before/after tests and actual read-only entry execution:
