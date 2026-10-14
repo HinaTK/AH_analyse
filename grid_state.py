@@ -63,6 +63,8 @@ def rollover(path, day):
     date.fromisoformat(day)
     with locked(path):
         state = json.loads(Path(path).read_text(encoding='utf-8'))
+        from confirmed_state_validation import validate_state
+        validate_state(state, allow_uninitialized_sellable=True)
         if state.get('sellable_updated_on', '') >= day:
             return state
         qty = 0
@@ -94,6 +96,8 @@ def record(path, side, qty, price, day, execution_id=None):
         raise ValueError('非法成交')
     with locked(path):
         previous = json.loads(Path(path).read_text(encoding='utf-8'))
+        from confirmed_state_validation import validate_state
+        validate_state(previous)
         if execution_id is None:
             raise ValueError('必须提供显式成交ID，禁止推定成交')
         if not isinstance(execution_id, str) or not execution_id.strip():

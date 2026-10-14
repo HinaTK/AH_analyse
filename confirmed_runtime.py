@@ -15,26 +15,8 @@ def load_states(root):
         state = json.loads((Path(root) / f'confirmed-{code[-6:]}.json').read_text(encoding='utf-8'))
         if state['code'] != code:
             raise ValueError('ETF状态文件身份不符')
-        from confirmed_589720 import build
-        rebuilt = build([(t['side'], t['qty'], t['price']) for t in state['trades']], code=code, name=state['name'])
-        if len({t['id'] for t in state['trades']}) != len(state['trades']):
-            raise ValueError('重复成交ID')
-        for key in ('qty', 'max_grid', 'net_invested', 'net_unit_cost', 't_net', 'remaining_buy_cost'):
-            if state[key] != rebuilt[key]:
-                raise ValueError('已保存状态与成交记录不一致：' + key)
-        mapping = {}
-        for stored, derived in zip(state['trades'], rebuilt['trades']):
-            if any(stored[key] != derived[key] for key in ('code','lot','sequence','side','qty','price','fee','amount')):
-                raise ValueError('保存成交标签/金额与权威重放不一致')
-            mapping[derived['id']] = stored['id']
-        for cycle in rebuilt['t_records']:
-            cycle['buy_id'] = mapping[cycle['buy_id']]
-            cycle['sell_id'] = mapping[cycle['sell_id']]
-        if state['t_records'] != rebuilt['t_records']:
-            raise ValueError('经济周期成交ID链接不一致')
-        expected_open = [(mapping[t['id']], t['lot'],t['qty'],t['price']) for t in rebuilt['open_grid_positions']]
-        if [(t['id'],t['lot'],t['qty'],t['price']) for t in state['open_grid_positions']] != expected_open:
-            raise ValueError('经济网格持仓与成交记录不一致')
+        from confirmed_state_validation import validate_state
+        validate_state(state, allow_uninitialized_sellable=True)
         result[code] = state
     return result
 
@@ -65,7 +47,7 @@ def plan(root):
 
 
 def phase(now):
-    from tools.etf_research.calendar import is_session
+    from confirmed_calendar import is_session
     hhmm = now.hour * 100 + now.minute
     try:
         session = is_session(now.date())
