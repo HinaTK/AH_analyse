@@ -232,7 +232,29 @@ def eod_report(root, now, quotes, bars):
     return dict(asof=now.date().isoformat(), policy_version='confirmed-grid-1.5-v1', executable=False, cash=None, warning=WARNING, decisions=decisions, actions=ticket['actions'], state_hashes={code:hashlib.sha256(json.dumps(state,sort_keys=True,ensure_ascii=False).encode()).hexdigest() for code,state in ticket['states'].items()}, names=ticket.get('names'), source='腾讯日线和收盘快照交叉核验；仅已确认ETF状态')
 
 
-def eod_main():
+def render_eod(report):
+    """Human-readable EOD summary for Feishu delivery; never a broker order."""
+    lines = ['【收盘效率与轮换检查 ' + report.get('asof', '') + '】']
+    warning = report.get('warning', '')
+    if warning:
+        lines.append('⚠️ ' + warning)
+    names = report.get('names') or {}
+    for code, d in report.get('decisions', {}).items():
+        name = names.get(code, '')
+        lines.append(
+            f"{code} {name} 收盘={d['close']} 持有={d['qty']:,} 可卖={d['sellable_qty']:,} "
+            f"最大格={d['max_grid']} 净投入={d['net_invested']} 单位成本={d['net_unit_cost']} "
+            f"T净收益={d['t_net']} 完成T={d['completed_cycles']}"
+        )
+    for action in report.get('actions', []):
+        direction = '买' if action['side'] == 'buy' else '卖'
+        name = names.get(action['code'], '')
+        lines.append(f"- {action['code']} {name} 条件{direction} {action['lot']}格 **{action['qty']:,}份** @ **{action['price']}**")
+    lines.append('来源：' + report.get('source', '腾讯日线和收盘快照交叉核验；仅已确认ETF状态'))
+    return '\n'.join(lines)
+
+
+def eod_main(render=False):
     from datetime import datetime, timezone, timedelta
     import urllib.request
     from grid_state import save, locked
@@ -255,6 +277,8 @@ def eod_main():
     path = root / 'eod' / f'{now.date().isoformat()}.json'
     with locked(path):
         save(path,report)
+    if render:
+        return render_eod(report)
     return json.dumps(report,ensure_ascii=False,indent=2)
 
 
