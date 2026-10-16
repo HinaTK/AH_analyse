@@ -66,7 +66,7 @@ def metrics(pool,runs,traces,returns):
     rank['score']=np.nan;rank.loc[valid,'score']=0.
     for col,w in WEIGHTS.items():rank.loc[valid,'score']+=abs(w)*rank.loc[valid,col].rank(pct=True,ascending=w>0)
     return rank.sort_values(['qualification','score','code'],ascending=[False,False,True],na_position='last').reset_index(drop=True)
-def run_research(input_path=DEFAULT_INPUT,output_path=None,asof=None,sessions=63,offline=False,limit=None,workers=8,bars_dir=None):
+def run_research(input_path=DEFAULT_INPUT,output_path=None,asof=None,sessions=63,offline=False,limit=None,workers=8,bars_dir=None,lot_budget=5000,gap=0.02):
     if sessions<20:raise ValueError('sessions must be >=20')
     asof=asof or latest_session();inp=Path(input_path);pool=load_universe(inp/'eligibility.csv');universe=len(pool)
     import hashlib
@@ -123,7 +123,7 @@ def run_research(input_path=DEFAULT_INPUT,output_path=None,asof=None,sessions=63
             save_errors();continue
         for w,f in windows.items():
             try:
-                result=model.simulate(f,gap=.02,t0=False,slip=.0005,trace=w=='full')
+                result=model.simulate(f,gap=gap,t0=False,slip=.0005,trace=w=='full',lot_budget=lot_budget)
                 if w=='full':traces[c]=result.pop('events');result.pop('equity_curve')
                 if abs(result['identity_error'])>1e-6:raise ValueError('identity error')
                 result['cycle_net_per_avg_cost_pct']=result['cycle_net']/result['avg_cost']*100;runs[(c,w)]=result;progress(dict(stage='simulate',code=c,window=w,result=result))

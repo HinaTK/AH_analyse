@@ -71,6 +71,8 @@ def main(argv=None):
     parser.add_argument('--offline',action='store_true')
     parser.add_argument('--limit',type=int)
     parser.add_argument('--workers',type=int,default=8)
+    parser.add_argument('--lot_budget',type=int,default=5000)
+    parser.add_argument('--gap',type=float,default=0.02)
     result=run_research(**vars(parser.parse_args(argv)))
     print(dump(result['summary']))
     return result

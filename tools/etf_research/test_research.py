@@ -189,3 +189,40 @@ def test_universe_keeps_all_eligible_and_all_holdings(tmp_path):
     pool=r.load_universe(p)
     assert set(pool.code)=={'sh510050',*r.HOLDINGS}
     assert not pool.code.duplicated().any()
+
+
+def test_lot_budget_scales_core_and_initial_lots():
+    """RED->GREEN: simulate() must scale core_qty and initial lot qty with lot_budget."""
+    r=module()
+    model=r.get_model()
+    d=bars(['2026-10-08','2026-10-09'])
+
+    r5=model.simulate(d,trace=True)
+    core5=[e for e in r5['events'] if e['slot']=='core'][0]
+    init5=[e for e in r5['events'] if e.get('initial') and e['slot']!='core'][0]
+
+    r6=model.simulate(d,lot_budget=6000,trace=True)
+    core6=[e for e in r6['events'] if e['slot']=='core'][0]
+    init6=[e for e in r6['events'] if e.get('initial') and e['slot']!='core'][0]
+
+    assert core6['qty'] > core5['qty'], 'core qty must increase with lot_budget'
+    assert init6['qty'] > init5['qty'], 'initial lot qty must increase with lot_budget'
+    ratio_core=core6['qty']/core5['qty']
+    assert 1.1 < ratio_core < 1.3, f'core ratio {ratio_core:.3f} not near 1.2'
+    ratio_init=init6['qty']/init5['qty']
+    assert 1.1 < ratio_init < 1.3, f'init lot ratio {ratio_init:.3f} not near 1.2'
+
+
+def test_run_research_accepts_lot_budget_and_gap(tmp_path):
+    """run_research must accept lot_budget and gap kwargs and pass them to simulate."""
+    r=module()
+    inp=tmp_path/'synthetic-input';inp.mkdir();(inp/'bars').mkdir()
+    pd.DataFrame([dict(code=c,name=c,eligible=True) for c in [*r.HOLDINGS,'sh510050']]).to_csv(inp/'eligibility.csv',index=False)
+    days=pd.bdate_range('2026-06-30',periods=63).strftime('%Y-%m-%d').tolist()
+    for code in [*r.HOLDINGS,'sh510050']:
+        bars(days).to_csv(inp/'bars'/f'{code}-m5.csv',index=False)
+    out=tmp_path/'synthetic-custom'
+    result=r.run_research(input_path=inp,output_path=out,offline=True,asof=days[-1],
+                          lot_budget=6000,gap=0.015)
+    assert result['summary']['attempted_runs']==16
+    assert result['summary']['successful_runs']+result['summary']['failed_runs']==16

@@ -11,7 +11,7 @@ from tools.etf_research import engine
 from tools.etf_research.grid_model import simulate
 from tools.etf_research.research import latest_session
 
-def run(code, gap=0.02, sessions=63, slip=0.0005):
+def run(code, gap=0.02, sessions=63, slip=0.0005, lot_budget=5000):
     prefixed = code
     if not prefixed.startswith(('sh', 'sz')):
         if code.startswith(('5', '6', '9')):
@@ -48,7 +48,7 @@ def run(code, gap=0.02, sessions=63, slip=0.0005):
     print(f"  first bar: {sub.time.iloc[0]}, vol={sub.volume.iloc[0]} lots ({first_vol_shares:.0f} shares), 1% limit={pct1:.0f} shares")
 
     try:
-        result = simulate(sub, gap=gap, t0=False, slip=slip, trace=True)
+        result = simulate(sub, gap=gap, t0=False, slip=slip, trace=True, lot_budget=lot_budget)
     except ValueError as e:
         if 'initial orders exceed 1% first bar volume' in str(e):
             print(f"  WARNING: {e}")

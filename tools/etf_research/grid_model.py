@@ -21,7 +21,7 @@ def purchase(budget,p):
     return qty,qty*p+fee(qty*p) if qty else 0
 
 
-def simulate(frame,gap=.02,t0=False,slip=.0005,trace=False):
+def simulate(frame,gap=.02,t0=False,slip=.0005,trace=False,lot_budget=5000):
     rows=frame[['time','open','close','volume']].to_numpy()
     if len(rows)<2:raise ValueError('too few bars')
     times=[str(x) for x in rows[:,0]]
@@ -31,8 +31,8 @@ def simulate(frame,gap=.02,t0=False,slip=.0005,trace=False):
     day_ids={x:i for i,x in enumerate(all_dates)}
     n=len(rows);cash=100000.0;events=[];trades=0;fees=0.0
     initial_p=price(opens[0],True,slip)
-    core_qty,core_cost=purchase(10000,initial_p)
-    q,c=purchase(5000,initial_p)
+    core_qty,core_cost=purchase(lot_budget*2,initial_p)
+    q,c=purchase(lot_budget,initial_p)
     if min(core_qty,q)<=0:raise ValueError('price too high for board lot')
     if core_qty+4*q>vol[0]*.01*100:raise ValueError('initial orders exceed 1% first bar volume')
     cash-=core_cost
@@ -97,7 +97,7 @@ def simulate(frame,gap=.02,t0=False,slip=.0005,trace=False):
                         s.update(qty=0,cost=0.0,target=p/(1+gap),initial=False)
                     else:cancelled+=1
                 else:
-                    qty,cost=purchase(5000,p)
+                    qty,cost=purchase(lot_budget,p)
                     if qty and p<=s['target']+1e-10 and qty<=vol[i]*.01*100 and cash-cost>=50000-1e-7 and cost_held+cost<=50000+1e-7:
                         cash-=cost;qty_total+=qty;cost_held+=cost
                         if t0:available+=qty
