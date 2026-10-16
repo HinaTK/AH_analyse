@@ -4,6 +4,20 @@ import sys
 from pathlib import Path
 
 REPO = Path(os.environ.get('ETF_RESEARCH_REPO', 'D:/Code/AH_analyse'))
+# Frozen Hermes embeds only its own dependencies; research needs a full Python.
+# Never reuse sys.executable here: in Desktop it is the Hermes application.
+if getattr(sys, 'frozen', False) and __name__ == '__main__':
+    import subprocess
+
+    python = os.environ.get(
+        'ETF_RESEARCH_PYTHON',
+        'C:/Users/Administrator/AppData/Local/Programs/Python/Python312/python.exe',
+    )
+    raise SystemExit(subprocess.run(
+        [python, '-u', '-m', 'tools.etf_research.weekly', *sys.argv[1:]],
+        cwd=REPO,
+    ).returncode)
+
 sys.path.insert(0, str(REPO))
 # Desktop's frozen runtime already imports its own tools package. Extend its
 # search path without replacing the runtime module or any of its children.
