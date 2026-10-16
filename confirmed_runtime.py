@@ -144,7 +144,7 @@ def ops_main(argv=None):
     import argparse
     from datetime import datetime, timezone, timedelta
     parser = argparse.ArgumentParser()
-    parser.add_argument('--phase', choices=('auto','preview','execute'), default='auto')
+    parser.add_argument('--phase', choices=('auto','preview','execute','grid'), default='auto')
     parser.add_argument('--result', choices=('成功','失败'))
     args = parser.parse_args(argv)
     if args.result:
@@ -155,6 +155,10 @@ def ops_main(argv=None):
         print('休市或非连续交易时段：不生成执行建议')
         return
     ticket = plan(root_from_home())
+    if args.phase == 'grid':
+        print('【09:24 盘前网格条件建议：按已确认账本计算，不依赖实时行情】')
+        print(render(ticket))
+        return
     quotes = fetch_quotes()
     live = quotes_are_live(quotes, now)
     ticket['phase'] = 'execute' if current == 'execute' and live and args.phase != 'preview' else 'preview'
