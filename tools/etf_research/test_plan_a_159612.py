@@ -37,6 +37,21 @@ def test_no_same_day_sell_and_no_buy_outside_box():
     assert result['inventory_pnl'] < 0
 
 
+def test_flat_after_selling_above_box_rearms_when_price_returns():
+    bars = frame([('2026-10-08', '09:35:00', 2.080),
+                  ('2026-10-08', '09:40:00', 2.080),
+                  ('2026-10-09', '09:35:00', 2.200),
+                  ('2026-10-09', '09:40:00', 2.200),
+                  ('2026-10-12', '09:35:00', 2.200),
+                  ('2026-10-12', '09:40:00', 2.080),
+                  ('2026-10-12', '09:45:00', 2.080)])
+    result = simulate(bars)
+    sides = [(e['side'], str(e['time'])[:10]) for e in result['events']]
+    assert sides == [('buy', '2026-10-08'), ('sell', '2026-10-09'), ('buy', '2026-10-12')]
+    # Never rebuys above the box while price stays above it.
+    assert all(e['price'] <= 2.160 for e in result['events'] if e['side'] == 'buy')
+
+
 def test_cap_and_no_lifetime_reinvestment_above_cap():
     bars = frame([('2026-10-08', '09:35:00', 2.080),
                   ('2026-10-08', '09:40:00', 2.080),

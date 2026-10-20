@@ -34,7 +34,8 @@ def simulate(frame,gap=.02,t0=False,slip=.0005,trace=False,lot_budget=5000):
     core_qty,core_cost=purchase(lot_budget*2,initial_p)
     q,c=purchase(lot_budget,initial_p)
     if min(core_qty,q)<=0:raise ValueError('price too high for board lot')
-    if core_qty+4*q>vol[0]*.01*100:raise ValueError('initial orders exceed 1% first bar volume')
+    # Sina 5m volume is in shares, same unit as qty.
+    if core_qty+4*q>vol[0]*.01:raise ValueError('initial orders exceed 1% first bar volume')
     cash-=core_cost
     slots=[]
     def record(side,i,qty,p,commission,slot,signal=None,initial=False,pnl=0):
@@ -86,7 +87,7 @@ def simulate(frame,gap=.02,t0=False,slip=.0005,trace=False,lot_budget=5000):
                 p=price(opens[i],side=='buy',slip)
                 if side=='sell':
                     qty=s['qty']
-                    if p+1e-10>=s['target'] and qty<=vol[i]*.01*100:
+                    if p+1e-10>=s['target'] and qty<=vol[i]*.01:
                         commission=fee(qty*p);proceeds=qty*p-commission;profit=proceeds-s['cost']
                         cash+=proceeds;qty_total-=qty;available-=qty;cost_held-=s['cost'];realized+=profit
                         sales+=1;sale_dates.add(dates[i]);fees+=commission;trades+=1
@@ -98,7 +99,7 @@ def simulate(frame,gap=.02,t0=False,slip=.0005,trace=False,lot_budget=5000):
                     else:cancelled+=1
                 else:
                     qty,cost=purchase(lot_budget,p)
-                    if qty and p<=s['target']+1e-10 and qty<=vol[i]*.01*100 and cash-cost>=50000-1e-7 and cost_held+cost<=50000+1e-7:
+                    if qty and p<=s['target']+1e-10 and qty<=vol[i]*.01 and cash-cost>=50000-1e-7 and cost_held+cost<=50000+1e-7:
                         cash-=cost;qty_total+=qty;cost_held+=cost
                         if t0:available+=qty
                         commission=fee(qty*p);fees+=commission;trades+=1
@@ -122,7 +123,7 @@ def simulate(frame,gap=.02,t0=False,slip=.0005,trace=False,lot_budget=5000):
     bh=initial_cash+initial_qty*closes[-1]
     maxq,maxc=purchase(50000,initial_p)
     maxbh=100000-maxc+maxq*closes[-1]
-    result={'gap':gap,'t0':t0,'slip':slip,'start':times[0],'end':times[-1],'days':len(all_dates),'bars':n,'cycles':cycles,'cycle_net':cycle_pnl,'cycle_return_on_40k_pct':cycle_pnl/(4*c)*100 if c else 0.0,'sales':sales,'initial_sales':initial_sales,'realized_total':realized,'inventory_pnl':open_pnl,'inventory_loss':max(0,-open_pnl),'account_pnl':final-100000,'return_pct':(final/100000-1)*100,'max_drawdown_pct':dd.min()*100,'same_exposure_bh_pct':(bh/100000-1)*100,'max_exposure_bh_pct':(maxbh/100000-1)*100,'excess_same_bh_pct':(final-bh)/100000*100,'fees':fees,'trades':trades,'avg_cost':float(np.mean(costs)),'max_cost':max_cost,'end_cost':cost_held,'min_cash':min_cash,'end_cash':cash,'median_cycle_days':float(np.median(hold_days)) if hold_days else None,'p90_cycle_days':float(np.percentile(hold_days,90)) if hold_days else None,'max_unclosed_cycle_days':max(unclosed) if unclosed else 0,'max_no_sale_days':worst_streak,'settlement_blocks':blocked,'cancelled_signals':cancelled,'identity_error':final-100000-realized-open_pnl,'end_slots':sum(s['qty']>0 for s in slots)}
+    result={'gap':gap,'t0':t0,'slip':slip,'start':times[0],'end':times[-1],'days':len(all_dates),'bars':n,'cycles':cycles,'cycle_net':cycle_pnl,'initial_lots_cost':4*c,'cycle_return_on_initial_lots_pct':cycle_pnl/(4*c)*100 if c else 0.0,'sales':sales,'initial_sales':initial_sales,'realized_total':realized,'inventory_pnl':open_pnl,'inventory_loss':max(0,-open_pnl),'account_pnl':final-100000,'return_pct':(final/100000-1)*100,'max_drawdown_pct':dd.min()*100,'same_exposure_bh_pct':(bh/100000-1)*100,'max_exposure_bh_pct':(maxbh/100000-1)*100,'excess_same_bh_pct':(final-bh)/100000*100,'fees':fees,'trades':trades,'avg_cost':float(np.mean(costs)),'max_cost':max_cost,'end_cost':cost_held,'min_cash':min_cash,'end_cash':cash,'median_cycle_days':float(np.median(hold_days)) if hold_days else None,'p90_cycle_days':float(np.percentile(hold_days,90)) if hold_days else None,'max_unclosed_cycle_days':max(unclosed) if unclosed else 0,'max_no_sale_days':worst_streak,'settlement_blocks':blocked,'cancelled_signals':cancelled,'identity_error':final-100000-realized-open_pnl,'end_slots':sum(s['qty']>0 for s in slots)}
     if trace:
         result['events']=events
         result['equity_curve']=[{'time':t,'equity':e,'cost':c,'cash':ca} for t,e,c,ca in zip(times,equities,costs,cash_series)]

@@ -1,4 +1,8 @@
-"""grid_model.py volume unit bug: shares vs lots 100x mismatch."""
+"""Sina 5m `volume` is in shares (股): its daily sum equals Tencent 手 x 100.
+
+The model's 1% participation cap must therefore compare share quantities with
+1% of the bar's share volume, without any lots->shares multiplier.
+"""
 import importlib
 import pandas as pd
 import pytest
@@ -26,49 +30,44 @@ def vshaped(days, first_vol, rest_vol):
     return pd.DataFrame(rows)
 
 
-def module():
-    return importlib.import_module('tools.etf_research.research')
+def model():
+    return importlib.import_module('tools.etf_research.research').get_model()
 
 
-def test_initial_volume_check_compares_shares_to_shares_not_lots():
-    """grid_model.py:37 compares core_qty+4*q (shares) against vol[0]*.01 (lots).
+def test_initial_orders_rejected_above_one_percent_of_share_volume():
+    # Initial core+4 lots ~= 29,400 shares at ~1.02; 1% of 2,000,000 shares = 20,000.
+    d = vshaped(['2026-10-08', '2026-10-09'], first_vol=2_000_000, rest_vol=10_000_000)
+    with pytest.raises(ValueError, match='1% first bar volume'):
+        model().simulate(d)
 
-    Sina K-line volume is in lots (100 shares). At price ~1.0, core_qty+4*q ~= 29,500 shares.
-    With vol=500,000 lots: 1% of lots = 5,000 (wrongly blocks), 1% of shares = 500,000 (correct).
-    """
-    r = module()
-    model = r.get_model()
-    d = vshaped(['2026-10-08', '2026-10-09'], first_vol=500000, rest_vol=500000)
-    result = model.simulate(d, trace=True)
+
+def test_initial_orders_accepted_within_one_percent_of_share_volume():
+    d = vshaped(['2026-10-08', '2026-10-09'], first_vol=5_000_000, rest_vol=10_000_000)
+    result = model().simulate(d, trace=True)
     assert abs(result['identity_error']) < 1e-6
     assert result['cycles'] > 0
 
 
-def test_initial_volume_check_159569_real_symptom():
-    """159569 first bar vol=1,464,800 lots wrongly rejects ~22,900 shares.
+def test_grid_orders_cancelled_above_one_percent_of_share_volume():
+    # ~4,900-share lots vs 1% of 300,000 shares = 3,000: every grid order is capped.
+    d = vshaped(['2026-10-08', '2026-10-09', '2026-10-13'], first_vol=100_000_000, rest_vol=300_000)
+    result = model().simulate(d, trace=True)
+    assert result['sales'] == 0 and result['cycles'] == 0
+    assert result['cancelled_signals'] > 0
+    assert [e['side'] for e in result['events'] if not e['initial']] == []
 
-    This symptom is caused by line 37, not lines 76/88: the unfixed threshold
-    (14,648) already exceeds the buy qty (~4,800-5,500 shares), so the buy-side
-    checks never reject a valid trade here.
-    """
-    r = module()
-    model = r.get_model()
-    d = vshaped(['2026-10-08', '2026-10-09'], first_vol=1464800, rest_vol=1464800)
-    result = model.simulate(d, trace=True)
+
+def test_grid_orders_fill_within_one_percent_of_share_volume():
+    d = vshaped(['2026-10-08', '2026-10-09', '2026-10-13'], first_vol=100_000_000, rest_vol=10_000_000)
+    result = model().simulate(d, trace=True)
     assert abs(result['identity_error']) < 1e-6
-    assert result['cycles'] > 0
+    assert result['sales'] > 0 and result['cycles'] > 0
 
 
-def test_sell_and_buy_volume_checks_use_share_denominator():
-    """grid_model.py:76 and :88 compare share-denominated qty against lot-denominated
-    vol[i]*.01. First bar vol is large enough to pass line 37; later bars are low
-    enough that the unfixed sell/buy checks reject (~4,800 shares vs 3,000 lots).
-    """
-    r = module()
-    model = r.get_model()
-    d = vshaped(['2026-10-08', '2026-10-09', '2026-10-13'],
-                first_vol=5000000, rest_vol=300000)
-    result = model.simulate(d, trace=True)
-    assert abs(result['identity_error']) < 1e-6
-    assert result['sales'] > 0
-    assert result['cycles'] > 0
+def test_cycle_return_is_on_initial_trading_lots_cost():
+    d = vshaped(['2026-10-08', '2026-10-09'], first_vol=5_000_000, rest_vol=10_000_000)
+    result = model().simulate(d, lot_budget=5000)
+    assert 'cycle_return_on_40k_pct' not in result
+    lots_cost = result['initial_lots_cost']
+    assert 19_000 < lots_cost <= 20_000
+    assert result['cycle_return_on_initial_lots_pct'] == pytest.approx(result['cycle_net'] / lots_cost * 100)

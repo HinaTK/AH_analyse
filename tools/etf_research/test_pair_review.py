@@ -128,6 +128,27 @@ def test_filters_strict_metrics_completeness_and_observe_cap():
     assert p.evaluate(r,taxonomy=tax)['holdings']['sh589720']['tracks']['same_class']['priority'] is None
 
 
+def test_second_priority_qualifier_is_shown_as_observe_not_dropped():
+    p=api();r=fixture();tax=taxonomy()
+    r['ranking']=[row('sh510001',20,4), row('sh510002',15,3)]
+    group=p.evaluate(r,taxonomy=tax)['holdings']['sz159363']['tracks']['same_class']
+    assert group['priority']['code']=='sh510001'
+    assert [x['code'] for x in group['observe']]==['sh510002']
+    assert group['observe'][0]['status']=='observe'
+    assert '已有priority leader' in group['observe'][0]['reason']
+
+
+def test_degraded_freeze_does_not_attach_old_count_to_other_candidate(tmp_path):
+    p=api();r=fixture();tax=taxonomy();path=tmp_path/'pairs.json'
+    def run():return p.run_pair_review(r,state_path=path,taxonomy=tax)['state']['pairs']['sz159363/same_class']
+    assert run()==dict(holding='sz159363',track='same_class',candidate='sh510001',consecutive_weeks=1,review_due=False,executable=False)
+    r['summary'].update(asof='2026-10-16',data_failed_runs=1)
+    assert run()['consecutive_weeks']==1
+    r['ranking'][0]['recent20_cycles']=2
+    frozen=run()
+    assert frozen['candidate'] is None and frozen['consecutive_weeks']==0
+
+
 def test_pair_state_adjacent_idempotent_resets_and_legacy_isolation(tmp_path):
     p=api();r=fixture();tax=taxonomy();path=tmp_path/'pairs.json'
     path.write_text('{"version":"legacy","consecutive_weeks":50}')

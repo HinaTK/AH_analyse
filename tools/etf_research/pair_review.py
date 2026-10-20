@@ -90,7 +90,9 @@ def evaluate(result, taxonomy=None, name_exclusions=DEFAULT_NAME_EXCLUSIONS):
             track = 'same_class' if classification in ('same_index', 'same_theme') else 'cross_theme'
             if priority and groups[track]['priority'] is None:
                 groups[track]['priority'] = candidate
-            elif not priority and len(groups[track]['observe']) < 3:
+            elif len(groups[track]['observe']) < 3:
+                if priority:
+                    candidate.update(status='observe', reason=candidate['reason'] + '；本线已有priority leader，仅观察')
                 groups[track]['observe'].append(candidate)
         output['holdings'][holding] = dict(baseline=baseline, tracks=groups, unknown=unknown)
     return output
@@ -146,7 +148,7 @@ def run_pair_review(result, state_path=DEFAULT_STATE, taxonomy=None, name_exclus
                 elif old.get('week') == (date.fromisoformat(week) - timedelta(days=7)).isoformat():
                     count = previous['consecutive_weeks'] + 1
             if degraded:
-                count = previous.get('consecutive_weeks', 0)
+                count = previous.get('consecutive_weeks', 0) if candidate and previous.get('candidate') == candidate else 0
             pairs[key] = dict(holding=holding, track=track, candidate=candidate,
                               consecutive_weeks=count, review_due=count >= 2 and production and not degraded,
                               executable=False)

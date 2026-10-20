@@ -40,6 +40,9 @@ def simulate(frame, *, anchor=2.105, lower=2.066, upper=2.160,
         day = str(bar['time'])[:10]
         if i:
             signal = float(rows[i - 1]['close'])
+            # Flat with the buy level outside the box: fall back to the anchor entry rule.
+            if not lots and not lower <= next_buy <= upper:
+                next_buy = anchor / (1 + gap)
             # Inventory pool is T+1 by default. One action at most per 5m bar.
             sellable = [x for x in lots if x['date'] < day and signal >= x['target']]
             if sellable:

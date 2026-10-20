@@ -1,15 +1,17 @@
 """Run grid_model.simulate() on a single ETF by bare 6-digit code.
 Standalone: fetches its own bars, picks last N trading days, simulates.
-Handles the 1% first-bar-volume constraint by catching and reporting.
+Model eligibility exclusions (1% first-bar volume, board lot) are reported, not raised.
 Usage: python -m tools.etf_research.run_single <code> [gap] [sessions] [slip]
 """
 import sys, json
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from tools.etf_research import engine
 from tools.etf_research.grid_model import simulate
 from tools.etf_research.research import latest_session
+
+MODEL_EXCLUSIONS = ('initial orders exceed 1% first bar volume', 'price too high for board lot')
 
 def run(code, gap=0.02, sessions=63, slip=0.0005, lot_budget=5000):
     prefixed = code
@@ -32,6 +34,8 @@ def run(code, gap=0.02, sessions=63, slip=0.0005, lot_budget=5000):
         close=('close', 'last'), volume=('volume', 'sum')).reset_index()
     daily = daily.sort_values('time')
     dates = list(daily['time'].iloc[-sessions:])
+    if not dates:
+        raise ValueError(f"no bars on or before {asof}")
     print(f"  window: {dates[0]} -> {dates[-1]} ({len(dates)} trading days)")
 
     sub = frame[frame.time.str[:10].isin(dates)].reset_index(drop=True)
@@ -42,19 +46,16 @@ def run(code, gap=0.02, sessions=63, slip=0.0005, lot_budget=5000):
     if min_bars < 40:
         raise ValueError(f"insufficient intraday coverage: min bars/day = {min_bars}")
 
-    # first bar volume check
-    first_vol_shares = sub.volume.iloc[0] * 100  # lots -> shares
-    pct1 = first_vol_shares * 0.01
-    print(f"  first bar: {sub.time.iloc[0]}, vol={sub.volume.iloc[0]} lots ({first_vol_shares:.0f} shares), 1% limit={pct1:.0f} shares")
+    # Sina 5m volume is in shares.
+    first_vol = sub.volume.iloc[0]
+    print(f"  first bar: {sub.time.iloc[0]}, vol={first_vol:.0f} shares, 1% limit={first_vol * 0.01:.0f} shares")
 
     try:
         result = simulate(sub, gap=gap, t0=False, slip=slip, trace=True, lot_budget=lot_budget)
     except ValueError as e:
-        if 'initial orders exceed 1% first bar volume' in str(e):
+        if str(e) in MODEL_EXCLUSIONS:
             print(f"  WARNING: {e}")
-            print(f"  The model's initial order (core 10k + 4×5k = ~30k shares at ~1.4 price ≈ 21k shares)")
-            print(f"  exceeds 1% of first bar volume ({pct1:.0f} shares).")
-            print(f"  This is a model constraint, not a real-trading problem.")
+            print(f"  Model eligibility exclusion (core {lot_budget * 2} + 4x{lot_budget} initial orders), not a real-trading verdict.")
             print(f"  Skipping simulation for {code}.")
             return None
         raise
@@ -82,7 +83,7 @@ def main():
 
     print("\n=== RESULTS ===")
     keys = ['code', 'prefixed_code', 'gap', 'window_start', 'window_end', 'sessions',
-            'days', 'bars', 'cycles', 'cycle_net', 'cycle_return_on_40k_pct',
+            'days', 'bars', 'cycles', 'cycle_net', 'initial_lots_cost', 'cycle_return_on_initial_lots_pct',
             'sales', 'initial_sales', 'realized_total',
             'inventory_pnl', 'inventory_loss', 'account_pnl', 'return_pct',
             'max_drawdown_pct', 'same_exposure_bh_pct', 'max_exposure_bh_pct',
