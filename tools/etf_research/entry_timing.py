@@ -5,10 +5,9 @@ high-volatility ETFs. A close above the 20-day average is an entry only when a
 low in the last 3 sessions came back to the 20-day line and the close is no more
 than 2 ATR above it; otherwise it is not an entry, and a close above the
 5/10/20/30/60-day averages that is at or above 3% under the prior 20-session high
-is rejected outright. A close under the 60-day average allows only a probe, and
-only after the fall has stopped (close above the 5-day average and today's low
-above the prior 20-session low); the probe exits on a close through that prior
-low. A full position requires at least 3 consecutive closes above a 60-day
+is rejected outright. A close under the 60-day average is always a probe, whether or not that average
+is still falling. The probe exits on a close through the lowest low of the last
+20 sessions. A full position requires at least 3 consecutive closes above a 60-day
 average that is not falling, plus the 20-day pullback with the close holding the
 20-day line.
 """
@@ -108,7 +107,7 @@ def _levels(frame):
     out['touch'] = out['low'] <= out['ma20'] + TOUCH_ATR * out['atr']
     out['prior_high'] = out['high'].shift(1).rolling(HIGH_LOOKBACK).max()
     out['ma60_prev'] = out['ma60'].shift(SLOPE_DAYS)
-    out['exit_low'] = out['low'].shift(1).rolling(EXIT_LOOKBACK).min()
+    out['exit_low'] = out['low'].rolling(EXIT_LOOKBACK).min()
     return out
 
 
@@ -161,7 +160,6 @@ def judge_entry(frame, asof=None):
     extension = (close - ma[20]) / atr
     in_entry_zone = recent_touch and extension <= EXTEND_ATR
     ma60_falling = ma[60] < ma60_prev
-    stabilized = close > ma[5] and low > prior_low
     days_above = _days_above_ma60(levelled, today)
 
     if close > ma[20] and not in_entry_zone:
@@ -182,18 +180,11 @@ def judge_entry(frame, asof=None):
         return result
     if close < ma[60]:
         slope = f"60日线{ma[60]:.3f}，{SLOPE_DAYS}个交易日前为{ma60_prev:.3f}，{'仍在下行' if ma60_falling else '未下行'}"
-        if not stabilized:
-            result.update(verdict='wait', label=LABELS['wait'])
-            result['reasons'] = [
-                slope,
-                f'收盘{close:.3f}在60日线下方，尚未止跌：需收盘站上5日线{ma[5]:.3f}且当日最低高于前20日最低{prior_low:.3f}',
-            ]
-            return result
         result.update(verdict='probe_only', label=LABELS['probe_only'], exit_price=prior_low)
         result['reasons'] = [
             slope,
-            f'收盘{close:.3f}在60日线下方，已站上5日线{ma[5]:.3f}，当日最低{low:.3f}未破前20日最低',
-            f'只能试错仓；收盘跌破{prior_low:.3f}退出',
+            f'收盘{close:.3f}在60日线下方',
+            f'只能试错仓；收盘跌破近20日最低{prior_low:.3f}退出',
         ]
         return result
     if days_above >= HOLD_DAYS and not ma60_falling and recent_touch and close >= ma[20]:

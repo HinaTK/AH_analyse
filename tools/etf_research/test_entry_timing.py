@@ -46,11 +46,12 @@ def test_pullback_to_the_20_day_in_an_uptrend_is_not_rejected():
     assert result['verdict'] == 'full'
 
 
-def test_falling_knife_under_the_60_day_waits_instead_of_probing():
-    result = judge_entry(bars([2 - i * 0.01 for i in range(80)]))
-    assert result['verdict'] == 'wait'
-    assert result['exit_price'] is None
-    assert any('尚未止跌' in reason for reason in result['reasons'])
+def test_close_under_the_60_day_is_a_probe_even_while_still_falling():
+    frame = bars([2 - i * 0.01 for i in range(80)])
+    result = judge_entry(frame)
+    assert result['verdict'] == 'probe_only'
+    assert result['exit_price'] == frame['low'].iloc[-20:].min()
+    assert any('试错仓' in reason for reason in result['reasons'])
 
 
 def test_stabilized_bounce_under_a_falling_60_day_is_a_probe_with_exit_below_close():
@@ -58,7 +59,7 @@ def test_stabilized_bounce_under_a_falling_60_day_is_a_probe_with_exit_below_clo
     frame = bars(closes)
     result = judge_entry(frame)
     assert result['verdict'] == 'probe_only'
-    assert result['exit_price'] == frame['low'].iloc[-21:-1].min()
+    assert result['exit_price'] == frame['low'].iloc[-20:].min()
     assert result['exit_price'] < result['close']
     assert any('仍在下行' in reason for reason in result['reasons'])
 
