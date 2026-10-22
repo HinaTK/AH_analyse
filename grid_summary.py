@@ -188,6 +188,50 @@ def summarize_account(home: Path) -> dict[str, Any]:
     return {"etfs": etfs, "totals": totals}
 
 
+def account_total_pnl(summary: dict, last_prices: dict) -> dict:
+    """Total account P&L — market value minus net invested, EXACTLY ONCE.
+
+    Regression: 2026-10-22 the reported total was pnl + t_net, double-counting
+    realized T profit (sell inflow already reduces net_invested). This function
+    computes and documents the only correct formula and refuses to add t_net.
+
+    last_prices: {code: Decimal price}
+    """
+    from decimal import Decimal
+
+    per: dict = {}
+    tot_mv = Decimal("0")
+    tot_ni = Decimal("0")
+    for code, e in summary["etfs"].items():
+        px = Decimal(str(last_prices[code]))
+        mv = (px * Decimal(e["qty"])).quantize(Decimal("0.01"))
+        ni = Decimal(e["net_invested"])
+        per[code] = {
+            "name": e["name"],
+            "qty": e["qty"],
+            "last_price": str(px),
+            "market_value": _fmt(mv),
+            "net_invested": e["net_invested"],
+            "pnl": _fmt(mv - ni),
+            "pnl_pct": _fmt((mv - ni) / ni * 100),
+        }
+        tot_mv += mv
+        tot_ni += ni
+    total = tot_mv - tot_ni
+    return {
+        "etfs": per,
+        "market_value_total": _fmt(tot_mv),
+        "net_invested_total": _fmt(tot_ni),
+        "total_pnl": _fmt(total),
+        "total_pnl_pct": _fmt(total / tot_ni * 100),
+        "t_net_reported_separately": _fmt(sum(
+            (Decimal(e["t_net"]) for e in summary["etfs"].values()), Decimal("0"))),
+        "t_net_added": False,
+        "note": ("total = market_value - net_invested; t_net is already "
+                 "reflected via sell inflow; never add again"),
+    }
+
+
 def main() -> None:
     import argparse
 
