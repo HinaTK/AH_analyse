@@ -1,0 +1,324 @@
+# -*- coding: utf-8 -*-
+"""市况判定数据采集（配套 caopan-baodian / market-phase-detection 能力卡）
+
+用途：为"现在是牛市还是熊市"提供客观量价证据，不做主观定性。
+输出每只标的：
+  - 最新收盘、MA20/30/60 位置
+  - 量能对比：近5日平均成交额 vs 近120日峰值成交额（地量检查：<1/3）
+  - 回撤：距近120日/250日最高收盘的跌幅
+  - 跌势验证：近5/10/20个交易日累计涨跌幅、连跌天数
+  - ADX(14) + DI+/DI-（书口径：ADX<25 震荡，>=25 单边）
+数据源：东方财富公开K线接口（push2his.eastmoney.com），日线前复权。
+"""
+import json
+import os
+import sys
+import time
+import urllib.parse
+import urllib.request
+
+sys.stdout.reconfigure(encoding="utf-8")
+
+# (secid, 名称) —— 东财 secid: 1=沪, 0=深
+INSTRUMENTS = [
+    ("1.000001", "上证指数"),
+    ("1.000300", "沪深300"),
+    ("0.399006", "创业板指"),
+    ("1.000688", "科创50"),
+    ("1.589720", "589720科创创新药ETF"),
+    ("0.159363", "159363创业板人工智能ETF"),
+]
+
+
+def fetch_kline(secid: str, lmt: int = 300, klt: str = "101"):
+    params = {
+        "secid": secid,
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+        "klt": klt,     # 101=日线, 102=周线
+        "fqt": "1",     # 前复权
+        "end": "20500101",
+        "lmt": str(lmt),
+    }
+    url = ("https://push2his.eastmoney.com/api/qt/stock/kline/get?"
+           + urllib.parse.urlencode(params))
+    last_err = None
+    for attempt in range(3):  # 东财限流会瞬断，间隔重试
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "Mozilla/5.0",
+                              "Referer": "https://quote.eastmoney.com/"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = json.loads(r.read().decode("utf-8"))
+            break
+        except Exception as e:
+            last_err = e
+            if attempt == 2:
+                raise
+            time.sleep(3)
+    rows = []
+    for line in data.get("data", {}).get("klines", []):
+        p = line.split(",")
+        rows.append({
+            "date": p[0],
+            "open": float(p[1]), "close": float(p[2]),
+            "high": float(p[3]), "low": float(p[4]),
+            "volume": float(p[5]),   # 手
+            "amount": float(p[6]),   # 元
+            "pct": float(p[8]),      # 涨跌幅 %
+        })
+    return rows
+
+
+def ma(closes, n, offset=0):
+    """截至 len(closes)-1-offset 处的 n 日均线；数据不足返回 None。"""
+    end = len(closes) - offset
+    if end < n:
+        return None
+    return sum(closes[end - n:end]) / n
+
+
+def wilder_adx(rows, n=14):
+    """标准 Wilder DMI/ADX。返回 (adx, +DI, -DI) 或 None。"""
+    if len(rows) < 2 * n + 2:
+        return None
+    trs, pdms, mdms = [], [], []
+    for i in range(1, len(rows)):
+        h, l = rows[i]["high"], rows[i]["low"]
+        pc, ph, pl = rows[i - 1]["close"], rows[i - 1]["high"], rows[i - 1]["low"]
+        tr = max(h - l, abs(h - pc), abs(l - pc))
+        up, dn = h - ph, pl - l
+        pdm = up if up > dn and up > 0 else 0.0
+        mdm = dn if dn > up and dn > 0 else 0.0
+        trs.append(tr); pdms.append(pdm); mdms.append(mdm)
+
+    def wilder_smooth(xs):
+        out = [sum(xs[:n])]
+        for x in xs[n:]:
+            out.append(out[-1] - out[-1] / n + x)
+        return out
+
+    s_tr, s_pdm, s_mdm = wilder_smooth(trs), wilder_smooth(pdms), wilder_smooth(mdms)
+    dx_list = []
+    pdi_last = mdi_last = None
+    for i in range(len(s_tr)):
+        pdi = 100.0 * s_pdm[i] / s_tr[i] if s_tr[i] else 0.0
+        mdi = 100.0 * s_mdm[i] / s_tr[i] if s_tr[i] else 0.0
+        dx = 100.0 * abs(pdi - mdi) / (pdi + mdi) if (pdi + mdi) else 0.0
+        dx_list.append(dx)
+        pdi_last, mdi_last = pdi, mdi
+    adx_series = [sum(dx_list[:n]) / n]
+    for dx in dx_list[n:]:
+        adx_series.append((adx_series[-1] * (n - 1) + dx) / n)
+    return adx_series[-1], pdi_last, mdi_last
+
+
+def weekly_kdj(rows, n=9):
+    """对周K序列算标准 KDJ(9,3,3)，返回 [(K,D), ...]。
+
+    rows 应为周K线（klt=102，见 fetch_kline 的 klt 参数）；日期字段
+    形如 2026-10-23（周K最后一根交易日）。直接以每根周K为一期，
+    不做二次聚合。
+    """
+    k = d = 50.0
+    out = []
+    for r in rows:
+        hi, lo, c = r["high"], r["low"], r["close"]
+        rng = hi - lo
+        rsv = 50.0 if rng == 0 else 100.0 * (c - lo) / rng
+        k = (2.0 * k + rsv) / 3.0
+        d = (2.0 * d + k) / 3.0
+        out.append((k, d))
+    return out
+
+
+def kdj_golden_cross(series):
+    """最后一根是否金叉且 K<50（书口径：50 以下金叉才是底部进场信号）。"""
+    if len(series) < 2:
+        return False, None
+    (k1, d1), (k2, d2) = series[-2], series[-1]
+    golden = k1 <= d1 and k2 > d2
+    return golden, k2
+
+
+def adx_with_prev(rows, n=14):
+    """返回 (当前ADX, 前一交易日ADX)。数据不足返回 (None, None)。"""
+    cur = wilder_adx(rows, n)
+    prev = wilder_adx(rows[:-1], n) if len(rows) > n else None
+    return (cur[0], prev[0]) if cur and prev else (None, None)
+
+
+def _state_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "market_phase_state.json")
+
+
+def should_push(state, secid, date):
+    return state.get(secid) != date
+
+
+def record_push(state, secid, date):
+    state[secid] = date
+    return state
+
+
+def evaluate_phase_signals(metrics):
+    """右侧三信号判定（纯函数，供盘后监控用）。
+
+    三条全中才 trigger（承诺口径：信号齐了才推飞书）：
+      1. dilVolume: 近5日均额/峰值 < 1/3（地量，卖压衰竭）
+      2. adx_break: ADX 从 >=25 上方降到 <25（单边动能衰竭；一直在 25 下方不算）
+      3. kdj_golden: 周线 KDJ 金叉且 K<50（底部区金叉）
+    """
+    dil_volume = metrics["vol_ratio"] < 1.0 / 3.0
+    adx_break = metrics["adx_prev"] >= 25.0 > metrics["adx"]
+    kdj_golden = bool(metrics["kdj_golden"]) and metrics["kdj_k"] < 50.0
+    trigger = dil_volume and adx_break and kdj_golden
+    return {"dilVolume": dil_volume, "adx_break": adx_break,
+            "kdj_golden": kdj_golden, "kdj_k": metrics["kdj_k"],
+            "trigger": trigger}
+
+
+def build_alert(results):
+    """拼接触发警报的标的清单；无触发返回空串（空 stdout = cron 不推送）。"""
+    lines = []
+    for row in results:
+        sig = row.get("signals") or {}
+        if not sig.get("trigger"):
+            continue
+        parts = []
+        if sig.get("dilVolume"):
+            parts.append("地量")
+        if sig.get("adx_break"):
+            parts.append("ADX降破25")
+        if sig.get("kdj_golden"):
+            parts.append(f"周线金叉K={sig.get('kdj_k', 0):.1f}")
+        lines.append(f"[{row['name']}] {row['date']} 收盘 {row['close']}  "
+                     + " + ".join(parts))
+    return "\n".join(lines)
+
+
+def analyze(secid, name):
+    rows = fetch_kline(secid)
+    if len(rows) < 70:
+        print(f"[{name}] 数据不足（{len(rows)} 根）")
+        return
+    closes = [r["close"] for r in rows]
+    amounts = [r["amount"] for r in rows]
+    last = rows[-1]
+    c = last["close"]
+
+    # 均线位置
+    ma_pos = {}
+    for n in (20, 30, 60):
+        m = ma(closes, n)
+        ma_pos[n] = (c - m) / m * 100 if m else None
+
+    # 量能：近5日均额 vs 近120日峰值（地量 = <1/3）
+    win = min(120, len(amounts))
+    peak_amt = max(amounts[-win:])
+    avg5_amt = sum(amounts[-5:]) / 5
+    vol_ratio = avg5_amt / peak_amt
+
+    # 回撤
+    def dd(ndays):
+        w = min(ndays, len(closes))
+        return (c / max(closes[-w:]) - 1) * 100
+    dd120, dd250 = dd(120), dd(250)
+
+    # 近期跌势
+    def chg(ndays):
+        w = min(ndays + 1, len(closes))
+        return (c / closes[-w] - 1) * 100
+    chg5, chg10, chg20 = chg(5), chg(10), chg(20)
+
+    # 连跌天数（按收盘价）
+    down_streak = 0
+    for i in range(len(closes) - 1, 0, -1):
+        if closes[i] < closes[i - 1]:
+            down_streak += 1
+        else:
+            break
+
+    adx = wilder_adx(rows)
+
+    print(f"\n=== {name} （{last['date']} 收盘） ===")
+    print(f"  收盘: {c:.2f}   当日涨跌: {last['pct']:+.2f}%")
+    for n in (20, 30, 60):
+        v = ma_pos[n]
+        side = "上方" if (v or 0) > 0 else "下方"
+        print(f"  MA{n}: {side} {v:+.2f}%")
+    print(f"  量能: 近5日均额 {avg5_amt/1e8:.0f}亿 vs 近{win}日峰值 {peak_amt/1e8:.0f}亿"
+          f"  比值 {vol_ratio:.2f}  （地量阈值 <0.33）")
+    print(f"  回撤: 距120日高点 {dd120:+.1f}%   距250日高点 {dd250:+.1f}%")
+    print(f"  近期: 5日 {chg5:+.1f}% / 10日 {chg10:+.1f}% / 20日 {chg20:+.1f}%"
+          f"   连跌 {down_streak} 天")
+    if adx:
+        a, pdi, mdi = adx
+        regime = "单边" if a >= 25 else "震荡（书口径：指标失效）"
+        trend = "多头方向" if pdi > mdi else "空头方向"
+        print(f"  ADX(14): {a:.1f}  +DI {pdi:.1f} / -DI {mdi:.1f}"
+              f"  → {regime}，{trend}")
+
+
+def monitor_main():
+    """盘后监控主流程：日K算量能/ADX，周K算KDJ金叉，三信号齐→按日去重输出警报。
+
+    空输出=无信号（cron 静默）；有输出=推送文本。状态文件记录每标的最后触发日。
+    """
+    state = {}
+    if os.path.exists(_state_path()):
+        try:
+            with open(_state_path(), encoding="utf-8") as f:
+                state = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            state = {}
+
+    results = []
+    for secid, name in INSTRUMENTS:
+        try:
+            daily = fetch_kline(secid, lmt=300, klt="101")
+            time.sleep(0.8)  # 东财接口限流：连续请求会被断连
+            weekly = fetch_kline(secid, lmt=120, klt="102")
+            time.sleep(0.8)
+            if len(daily) < 70 or len(weekly) < 10:
+                continue
+            closes = [r["close"] for r in daily]
+            amounts = [r["amount"] for r in daily]
+            win = min(120, len(amounts))
+            vol_ratio = (sum(amounts[-5:]) / 5) / max(amounts[-win:])
+            adx_cur, adx_prev = adx_with_prev(daily)
+            golden, kdj_k = kdj_golden_cross(weekly_kdj(weekly))
+            if adx_cur is None:
+                continue
+            signals = evaluate_phase_signals({
+                "vol_ratio": vol_ratio, "adx": adx_cur, "adx_prev": adx_prev,
+                "kdj_golden": golden, "kdj_k": kdj_k if kdj_k is not None else 100.0,
+            })
+            results.append({"name": name, "secid": secid,
+                            "date": daily[-1]["date"], "close": closes[-1],
+                            "signals": signals})
+        except Exception as e:
+            print(f"[{name}] 获取失败: {e}", file=sys.stderr)
+
+    triggered = [r for r in results
+                 if r["signals"]["trigger"] and should_push(state, r["secid"], r["date"])]
+    if triggered:
+        print(build_alert(results))
+        for r in triggered:
+            record_push(state, r["secid"], r["date"])
+        with open(_state_path(), "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=1)
+
+
+def main():
+    print(f"数据源: 东方财富 push2his 日K线（前复权）；拉取时间: 本次运行")
+    for secid, name in INSTRUMENTS:
+        try:
+            analyze(secid, name)
+        except Exception as e:
+            print(f"\n[{name}] 获取失败: {e}")
+
+
+if __name__ == "__main__":
+    main()
