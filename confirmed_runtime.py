@@ -10,6 +10,10 @@ BUDGETS = {'sh589720': D('8000'), 'sz159363': D('6000')}
 GAP = D('0.015')
 WARNING = ('条件建议，非可直接执行委托：sz159992 处于迁移退出模式（停买、停接回、只卖不买），'
            '00:01 已同步可卖份额；账户现金、银河冻结及在途委托未对账，不自动下单，触价不等于成交。')
+DAILY_BAR_SOURCES = (
+    'https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param={code},day,,,80,qfq',
+    'https://ifzq.gtimg.cn/appstock/app/fqkline/get?param={code},day,,,80,qfq',
+)
 
 
 def load_states(root):
@@ -104,6 +108,27 @@ def fetch_quotes():
         fields = match.group(1).split('~')
         result[code] = dict(last=fields[3], prev=fields[4], time=fields[30], high=fields[33], low=fields[34])
     return result
+
+
+def fetch_daily_bars(code):
+    """Daily qfq bars from Tencent; mirror first since ifzq fqkline broke 2026-10-23."""
+    import urllib.request
+    errors = []
+    for template in DAILY_BAR_SOURCES:
+        url = template.format(code=code)
+        try:
+            request = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(request, timeout=15) as response:
+                data = json.load(response)
+            if data.get('code') != 0:
+                raise ValueError('腾讯日线失败')
+            rows = data['data'][code].get('qfqday', data['data'][code].get('day', []))
+            if not rows:
+                raise ValueError('腾讯日线为空')
+            return [dict(date=row[0], close=row[2]) for row in rows]
+        except (OSError, ValueError, KeyError, IndexError) as error:
+            errors.append(f'{url}: {error}')
+    raise ValueError('行情源全部失败：' + '; '.join(errors))
 
 
 def monitor(ticket, quotes, state, day):
@@ -269,13 +294,7 @@ def eod_main(render=False):
     quotes = fetch_quotes()
     bars = {}
     for code in H.held_codes():
-        request = urllib.request.Request(f'https://ifzq.gtimg.cn/appstock/app/fqkline/get?param={code},day,,,80,qfq',headers={'User-Agent':'Mozilla/5.0'})
-        with urllib.request.urlopen(request, timeout=15) as response:
-            data = json.load(response)
-        if data.get('code') != 0:
-            raise ValueError('腾讯日线失败')
-        item = data['data'][code]
-        bars[code] = [dict(date=row[0],close=row[2]) for row in item.get('qfqday',item.get('day',[]))]
+        bars[code] = fetch_daily_bars(code)
     root = root_from_home()
     report = eod_report(root,now,quotes,bars)
     path = root / 'eod' / f'{now.date().isoformat()}.json'
