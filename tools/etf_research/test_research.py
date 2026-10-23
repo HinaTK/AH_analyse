@@ -166,15 +166,52 @@ def test_weekly_cli_weekend_guard():
     assert '休市' in text
 
 def test_weekly_model_exclusions_allow_streak_only_on_same_coverage(tmp_path):
-    weekly=importlib.import_module('tools.etf_research.weekly');r=module()
+    weekly=importlib.import_module('tools.etf_research.weekly')
+    r=module()
     result={'summary':{'version':r.VERSION,'asof':'2026-10-09','full_pool':True,'offline':False,'production_scope':True,'window_start':'2026-07-07','window_end':'2026-10-09','successful_runs':1185,'failed_runs':95,'data_failed_runs':0,'model_excluded_runs':95,'fetch_errors':0,'attempted_assets':321},'leader':{'code':'sh589120','full_cycles':38},'holdings':{c:{} for c in r.HOLDINGS},'ranking':[{'code':'sh589120','has_all_four_windows':True}],'errors':[]}
     def runner(**kwargs):return result
     path=tmp_path/'state.json'
     assert weekly.run_weekly(state_path=path,research_runner=runner)['state']['consecutive_weeks']==1
     result['summary']['asof']='2026-10-16'
-    assert weekly.run_weekly(state_path=path,research_runner=runner)['state']['review_due']
+    assert weekly.run_weekly(state_path=path,research_runner=runner)['state']['review_due'] is True
     result['summary']['asof']='2026-10-23';result['ranking'].append({'code':'sh510050','has_all_four_windows':True})
     assert weekly.run_weekly(state_path=path,research_runner=runner)['state']['consecutive_weeks']==1
+
+
+def test_weekly_summary_compact_and_actionable():
+    weekly=importlib.import_module('tools.etf_research.weekly');r=module()
+    ranking=[dict(code=c,name=c,has_all_four_windows=True,holding=True) for c in r.HOLDINGS]
+    ranking+= [dict(code='sh510050',name='50ETF',has_all_four_windows=True,holding=False,
+                    full_cycles=5.0,full_cycle_net=123.4)]
+    result={'summary':{'version':r.VERSION,'asof':'2026-10-09','window_start':'2026-07-07','window_end':'2026-10-09',
+                       'attempted_assets':321,'successful_runs':1139,'failed_runs':145,'fetch_errors':0,
+                       'data_failed_runs':52,'model_excluded_runs':93,'rankable_rows':253,
+                       'output_path':'D:/tmp/grid-research/20261023-152537'},
+            'leader':dict(code='sh588010',full_cycles=37.0),
+            'holdings':{c:dict(code=c,name=c,full_cycles=29.0,full_cycle_net=4028.4) for c in r.HOLDINGS},
+            'ranking':ranking,'errors':[1,2,3]}
+    text=weekly.summarize(result)
+    lines=text.splitlines()
+    assert '每周ETF轮换研究' in text and '精简' in text
+    assert 'sh589720' in text and '29' in text and '4,028.40' in text
+    assert 'sh588010' in text and '37' in text
+    assert '降级' in text and '不触发复核' in text
+    assert '完整报告' in text and 'weekly-report.txt' in text
+    assert '【逐持仓双轨周检】' not in text and 'legacy reference' not in text
+    assert len(lines)<=16, f'summary too long: {len(lines)} lines'
+
+
+def test_weekly_cli_prints_summary_only(monkeypatch,capfd):
+    weekly=importlib.import_module('tools.etf_research.weekly')
+    fake=dict(state={},pair_review={},holdings={},research={},
+              report='逐持仓双轨周检'*50,summary='【每周ETF轮换研究·精简】一行摘要')
+    monkeypatch.setattr(weekly,'run_weekly',lambda **kwargs:fake)
+    text=weekly.main(['--offline'])
+    out=capfd.readouterr().out
+    assert text==fake['summary']
+    assert '一行摘要' in out
+    assert '双轨周检' not in out
+
 
 def module():
     try:

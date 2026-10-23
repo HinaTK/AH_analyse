@@ -7,6 +7,34 @@ from .engine import dump
 STATE_VERSION=research.VERSION+'-rotation-streak-v1'
 DEFAULT_STATE=Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account/rotation')/f'{STATE_VERSION}.json'
 
+def summarize(result,pairs=None):
+    """Compact push digest; the full weekly report stays in weekly-report.txt."""
+    s=result['summary']
+    degraded=bool(s.get('data_failed_runs',s.get('failed_runs',0)) or s.get('fetch_errors',0))
+    def number(v):return '不可用' if v is None else str(int(v))
+    def money(v):return '不可用' if v is None else f'{v:,.2f}'
+    lines=['【每周ETF轮换研究·精简】',
+           f"{s.get('asof','未知')}：资格池{s.get('attempted_assets','未知')}只，共同窗口{s.get('window_start','未知')}→{s.get('window_end','未知')}；成功{number(s.get('successful_runs'))}/失败{number(s.get('failed_runs'))}。",
+           '数据覆盖降级：连续周状态不推进，不触发复核门槛。' if degraded else '数据覆盖完整：连续周状态正常推进。']
+    state=((pairs or {}).get('state') or {}).get('pairs') or {}
+    due=[(k,v) for k,v in state.items() if v.get('review_due')]
+    leaders=[(k,v) for k,v in state.items() if v.get('candidate')]
+    lines.extend(f"🔔 人工复核触发：{k.replace('/',' ')} → {v['candidate']}（连续{v['consecutive_weeks']}周）。" for k,v in due)
+    if not due:lines.append('轮换复核：未触发' + ('（pair状态不可用）。' if not state else '（无连续2周priority领先）。'))
+    if leaders:lines.append('priority领先：'+'；'.join(f"{v['candidate']} 领先 {k.split('/')[0]}（{k.split('/')[1]}，连续{v['consecutive_weeks']}周）" for k,v in leaders))
+    lines.append('【三持仓·只展示】')
+    for c in research.HOLDINGS:
+        x=result['holdings'].get(c) or {}
+        lines.append(f"{c}：往返{number(x.get('full_cycles'))}次；净差价{money(x.get('full_cycle_net'))}元")
+    items=[];seen=set()
+    for x in [result.get('leader'),*(result.get('rotation_top10') or [])]:
+        if x and x.get('code') not in seen:seen.add(x.get('code'));items.append(x)
+    if items:lines.append('【往返前列】'+'；'.join(f"{x['code']} {number(x.get('full_cycles'))}次/{money(x.get('full_cycle_net'))}元" for x in items[:3]))
+    out=s.get('output_path')
+    if out:lines.append(f"完整报告：{out}/weekly-report.txt（双轨周检明细、往返前10、综合排名、免责声明）。")
+    return '\n'.join(lines)
+
+
 def run_weekly(state_path=DEFAULT_STATE,research_runner=None,pair_state_path=None,taxonomy=None,
                taxonomy_path=None,name_exclusions=pair_review.DEFAULT_NAME_EXCLUSIONS,**kwargs):
     if taxonomy_path:
@@ -63,7 +91,7 @@ def run_weekly(state_path=DEFAULT_STATE,research_runner=None,pair_state_path=Non
     report='\n'.join(lines)
     output=s.get('output_path')
     if output:(Path(output)/'weekly-report.txt').write_text(report,encoding='utf-8')
-    return dict(state=state,pair_review=pairs,holdings=result['holdings'],report=report,research=result)
+    return dict(state=state,pair_review=pairs,holdings=result['holdings'],report=report,summary=summarize(result,pairs),research=result)
 
 def main(argv=None,now=None):
     import argparse
@@ -80,5 +108,7 @@ def main(argv=None,now=None):
         now=now or datetime.now(ZoneInfo('Asia/Shanghai'))
         if not is_session(now.date()) or now.hour*60+now.minute<15*60+15:
             text='周度研究：休市或收盘未确认，不生成报告、不更新状态。';print(text);return text
-    result=run_weekly(**args);print(result['report']);return result['report']
+    result=run_weekly(**args)
+    text=result.get('summary') or summarize(result['research'],result['pair_review'])
+    print(text);return text
 if __name__=='__main__':main()

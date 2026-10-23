@@ -265,7 +265,7 @@ def test_default_taxonomy_and_same_index_precedence(tmp_path,monkeypatch):
 def test_cli_pair_options_do_not_leak_to_research(tmp_path,monkeypatch):
     from tools.etf_research import weekly
     captured=[]
-    monkeypatch.setattr(weekly,'run_weekly',lambda **kw:captured.append(kw) or {'report':'test'})
+    monkeypatch.setattr(weekly,'run_weekly',lambda **kw:captured.append(kw) or {'report':'test','summary':'test'})
     weekly.main(['--asof','2026-10-09','--taxonomy-path','official.json','--pair-state-path',str(tmp_path/'pair.json'),'--include-hong-kong'])
     assert captured[0]['taxonomy_path']=='official.json'
     assert captured[0]['pair_state_path']==str(tmp_path/'pair.json')
