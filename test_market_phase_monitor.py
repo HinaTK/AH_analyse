@@ -142,38 +142,54 @@ def test_should_push_first_time_and_dedup_same_day():
     assert mpc.should_push(state, "1.000001", "2026-10-26") is True   # 新交易日恢复
 
 
-# ---------- action_label ----------
+# ---------- action_label：成数阶梯 ----------
 
-def test_action_buy_when_three_signals_confirm():
-    label, _ = mpc.action_label({"trigger": True, "adx": 20.0, "trend": "down",
-                                 "dd250": -35.0})
-    assert label == "买入"
+def test_action_buy_seven_tenths_when_three_signals_confirm():
+    label, frac, _ = mpc.action_label({"trigger": True, "adx": 20.0, "trend": "down",
+                                       "dd250": -35.0, "dilVolume": True, "kdj_golden": True})
+    assert "买入" in label and "7成" in frac
 
 
-def test_action_flat_when_one_sided_down():
-    label, reason = mpc.action_label({"trigger": False, "adx": 44.0, "trend": "down",
-                                      "dd250": -15.0})
-    assert label == "空仓观望"
+def test_action_zero_when_one_sided_down_no_partial_signal():
+    label, frac, reason = mpc.action_label({"trigger": False, "adx": 44.0, "trend": "down",
+                                            "dd250": -15.0, "dilVolume": False, "kdj_golden": False})
+    assert "空仓观望" in label and "0成" in frac
     assert "44" in reason
 
 
-def test_action_hold_when_one_sided_up():
-    label, _ = mpc.action_label({"trigger": False, "adx": 30.0, "trend": "up",
-                                 "dd250": 5.0})
-    assert label == "持有"
+def test_action_probe_one_tenth_when_dilvolume_in_one_sided_down():
+    # 单边下跌但地量已现：卖压在衰竭，1成轻仓试错
+    label, frac, reason = mpc.action_label({"trigger": False, "adx": 44.0, "trend": "down",
+                                            "dd250": -15.0, "dilVolume": True, "kdj_golden": False})
+    assert "1成" in frac
+    assert "地量" in reason
 
 
-def test_action_half_accumulate_in_deep_drawdown_range():
-    # 震荡 + 深回撤(<=-30%)：埋伏/网格接回窗口
-    label, _ = mpc.action_label({"trigger": False, "adx": 17.0, "trend": "down",
-                                 "dd250": -35.0})
-    assert label == "半仓分批"
+def test_action_probe_one_tenth_when_weekly_golden_but_adx_still_high():
+    # 周线金叉先行、日线动能未衰竭：同样只给1成
+    label, frac, reason = mpc.action_label({"trigger": False, "adx": 30.0, "trend": "down",
+                                            "dd250": -15.0, "dilVolume": False, "kdj_golden": True})
+    assert "1成" in frac
+    assert "周线金叉" in reason
 
 
-def test_action_half_band_in_shallow_range():
-    label, _ = mpc.action_label({"trigger": False, "adx": 17.0, "trend": "down",
-                                 "dd250": -10.0})
-    assert label == "半仓波段"
+def test_action_hold_eight_tenths_when_one_sided_up():
+    label, frac, _ = mpc.action_label({"trigger": False, "adx": 30.0, "trend": "up",
+                                       "dd250": 5.0, "dilVolume": False, "kdj_golden": False})
+    assert "持有" in label and "8成" in frac
+
+
+def test_action_three_tenths_accumulate_in_deep_drawdown_range():
+    # 震荡 + 深回撤(<=-30%)：3成分批埋伏
+    label, frac, _ = mpc.action_label({"trigger": False, "adx": 17.0, "trend": "down",
+                                       "dd250": -35.0, "dilVolume": False, "kdj_golden": False})
+    assert "3成" in frac
+
+
+def test_action_five_tenths_grid_in_shallow_range():
+    label, frac, _ = mpc.action_label({"trigger": False, "adx": 17.0, "trend": "down",
+                                       "dd250": -10.0, "dilVolume": False, "kdj_golden": False})
+    assert "5成" in frac
 
 
 # ---------- monitor_main ----------

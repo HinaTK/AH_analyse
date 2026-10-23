@@ -180,24 +180,28 @@ def evaluate_phase_signals(metrics):
 
 
 def action_label(m):
-    """由三信号+市况指标输出直接操作信号。
+    """输出 (动作, 成数, 理由)。成数=目标方向仓位（非总账户）。
 
-    决策树（书口径 + 网格场景适配）：
-      三信号齐              → 买入（右侧确认进场）
-      单边下跌(ADX>=25,空)   → 空仓观望（别接刀）
-      单边上涨(ADX>=25,多)   → 持有（别乱动）
-      震荡 + 深回撤(<=-30%)  → 半仓分批（埋伏/网格接回窗口）
-      震荡 + 浅回撤          → 半仓波段（网格主场）
+    决策树（书口径 + 信号点亮数渐进）：
+      三信号齐              → 买入 7成（右侧确认进场）
+      单边下跌              → 0成观望；地量或周线金叉先行 → 1成试错
+      单边上涨              → 持有 8成（+DI主导，别乱动）
+      震荡 + 深回撤(<=-30%)  → 3成分批埋伏
+      震荡 + 浅回撤          → 5成网格波段
     """
     if m["trigger"]:
-        return "买入", "右侧三信号齐：地量+ADX降破25+周线金叉"
+        return "买入", "7成", "右侧三信号齐：地量+ADX降破25+周线金叉"
     if m["adx"] >= 25:
         if m["trend"] == "up":
-            return "持有", f"单边上涨 ADX={m['adx']:.0f}，持筹不折腾"
-        return "空仓观望", f"单边下跌 ADX={m['adx']:.0f}，右侧未确认别接刀"
+            return "持有", "8成", f"单边上涨 ADX={m['adx']:.0f}，持筹不折腾"
+        if m["dilVolume"]:
+            return "试仓买入", "1成", f"单边下跌 ADX={m['adx']:.0f} 但地量已现，卖压衰竭试探"
+        if m["kdj_golden"]:
+            return "试仓买入", "1成", f"周线金叉先行，日线动能 ADX={m['adx']:.0f} 未衰竭，轻仓试探"
+        return "空仓观望", "0成", f"单边下跌 ADX={m['adx']:.0f}，右侧未确认别接刀"
     if m["dd250"] <= -30:
-        return "半仓分批", f"震荡+深回撤{m['dd250']:.0f}%，埋伏/网格接回窗口"
-    return "半仓波段", f"震荡市 ADX={m['adx']:.0f}，网格主场"
+        return "分批埋伏", "3成", f"震荡+深回撤{m['dd250']:.0f}%，网格接回窗口"
+    return "网格波段", "5成", f"震荡市 ADX={m['adx']:.0f}，网格主场"
 
 
 def build_alert(results):
@@ -322,13 +326,14 @@ def monitor_main():
                 "vol_ratio": vol_ratio, "adx": adx_cur, "adx_prev": adx_prev,
                 "kdj_golden": golden, "kdj_k": kdj_k if kdj_k is not None else 100.0,
             })
-            label, reason = action_label({
+            label, fraction, reason = action_label({
                 "trigger": signals["trigger"], "adx": adx_cur,
                 "trend": "up" if pdi > mdi else "down", "dd250": dd250,
+                "dilVolume": signals["dilVolume"], "kdj_golden": signals["kdj_golden"],
             })
             results.append({"name": name, "secid": secid,
                             "date": daily[-1]["date"], "close": closes[-1],
-                            "label": label, "reason": reason,
+                            "label": label, "fraction": fraction, "reason": reason,
                             "signals": signals})
         except Exception as e:
             print(f"[{name}] 获取失败: {e}", file=sys.stderr)
@@ -345,7 +350,7 @@ def monitor_main():
                 new_triggers.append(r)
             else:
                 bell = "（已推）"
-        lines.append(f"{r['name']} | 收{r['close']} | {r['label']}{bell} | {r['reason']}")
+        lines.append(f"{r['name']} | 收{r['close']} | {r['label']}·{r['fraction']}{bell} | {r['reason']}")
     print("\n".join(lines))
     if new_triggers:
         print("🔔 右侧三信号齐：地量+ADX降破25+周线金叉 → 买入信号，今日新触发")
