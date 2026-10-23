@@ -30,9 +30,7 @@ def rank_entries(output_dir):
     excluded = {'holding': 0, 'incomplete': 0, 'timing': 0, 'no_bars': 0, 'error': 0}
     for row in result['ranking']:
         code = row['code']
-        if code in HOLDINGS or row.get('holding'):
-            excluded['holding'] += 1
-            continue
+        is_holding = code in HOLDINGS or row.get('holding')
         if not row.get('has_all_four_windows'):
             excluded['incomplete'] += 1
             continue
@@ -45,14 +43,15 @@ def rank_entries(output_dir):
         except Exception:
             excluded['error'] += 1
             continue
-        if judged['verdict'] not in ADMITTED:
+        if judged['verdict'] not in ADMITTED and not is_holding:
             excluded['timing'] += 1
             continue
         admitted.append({
             'code': code,
             'name': row.get('name') or '',
+            'holding': is_holding,
             'verdict': judged['verdict'],
-            'label': judged['label'],
+            'label': '持仓' if is_holding else judged['label'],
             'full_cycles': row.get('full_cycles'),
             'full_cycle_net': row.get('full_cycle_net'),
             'full_cycle_net_per_avg_cost_pct': row.get('full_cycle_net_per_avg_cost_pct'),
@@ -68,9 +67,10 @@ def rank_entries(output_dir):
         -(item['full_cycle_net_per_avg_cost_pct'] or 0),
         item['code'],
     ))
+    for index, item in enumerate(admitted, 1):
+        item['rank'] = index
     table = pd.DataFrame(admitted)
     if not table.empty:
-        table.insert(0, 'rank', range(1, len(table) + 1))
         table.to_csv(output_dir / 'entry-ranking.csv', index=False)
     return {'asof': result['summary']['asof'], 'rows': admitted, 'excluded': excluded, 'output': str(output_dir)}
 
