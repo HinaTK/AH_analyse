@@ -75,12 +75,45 @@ def rank_entries(output_dir):
     return {'asof': result['summary']['asof'], 'rows': admitted, 'excluded': excluded, 'output': str(output_dir)}
 
 
+def render_markdown(report, top_n=10):
+    """把 rank_entries 的 report 渲染成 markdown 表格。
+
+    铁律：每个单元格的值只能取自 report['rows'] 里对应行的字段，
+    禁止引入 rows 之外的任何数字。聊天层交付排名时必须粘贴本函数
+    的输出，不允许手写表格（2026-10-23 手写 recent20 列编造数字的
+    回归教训）。
+    """
+    rows = report['rows'][:top_n]
+    lines = [
+        f"asof {report['asof']} 入选 {len(report['rows'])} 只 排除 {report['excluded']}",
+        '',
+        '| 名次 | 代码 | 名称 | 资格 | 63日往返 | 净差价 | 近20日往返 | 资金效率% |',
+        '|---:|---|---|---|---:|---:|---:|---:|',
+    ]
+    for row in rows:
+        lines.append('| {} | {} | {} | {} | {:g} | {:,.2f} | {:g} | {:.2f} |'.format(
+            row['rank'],
+            row['code'],
+            row['name'],
+            row['label'],
+            row['full_cycles'] or 0,
+            row['full_cycle_net'] or 0.0,
+            row['recent20_cycles'] or 0,
+            row['full_cycle_net_per_avg_cost_pct'] or 0.0,
+        ))
+    return '\n'.join(lines)
+
+
 def main(argv=None):
     import argparse
     parser = argparse.ArgumentParser(description='按往返次数排列可建仓或试错建仓的ETF')
     parser.add_argument('output_dir')
+    parser.add_argument('--render', action='store_true', help='输出可粘贴的 markdown 表格（数字逐格来自数据，禁止手写）')
     args = parser.parse_args(argv)
     report = rank_entries(args.output_dir)
+    if args.render:
+        print(render_markdown(report))
+        return report
     print(f"asof {report['asof']} 入选 {len(report['rows'])} 只 排除 {report['excluded']}")
     for row in report['rows'][:20]:
         print(f"{row['code']} {row['name']} {row['label']} 往返{row['full_cycles']} 净差价{row['full_cycle_net']}")
