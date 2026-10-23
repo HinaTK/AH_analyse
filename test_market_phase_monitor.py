@@ -142,17 +142,50 @@ def test_should_push_first_time_and_dedup_same_day():
     assert mpc.should_push(state, "1.000001", "2026-10-26") is True   # 新交易日恢复
 
 
+# ---------- action_label ----------
+
+def test_action_buy_when_three_signals_confirm():
+    label, _ = mpc.action_label({"trigger": True, "adx": 20.0, "trend": "down",
+                                 "dd250": -35.0})
+    assert label == "买入"
+
+
+def test_action_flat_when_one_sided_down():
+    label, reason = mpc.action_label({"trigger": False, "adx": 44.0, "trend": "down",
+                                      "dd250": -15.0})
+    assert label == "空仓观望"
+    assert "44" in reason
+
+
+def test_action_hold_when_one_sided_up():
+    label, _ = mpc.action_label({"trigger": False, "adx": 30.0, "trend": "up",
+                                 "dd250": 5.0})
+    assert label == "持有"
+
+
+def test_action_half_accumulate_in_deep_drawdown_range():
+    # 震荡 + 深回撤(<=-30%)：埋伏/网格接回窗口
+    label, _ = mpc.action_label({"trigger": False, "adx": 17.0, "trend": "down",
+                                 "dd250": -35.0})
+    assert label == "半仓分批"
+
+
+def test_action_half_band_in_shallow_range():
+    label, _ = mpc.action_label({"trigger": False, "adx": 17.0, "trend": "down",
+                                 "dd250": -10.0})
+    assert label == "半仓波段"
+
+
 # ---------- monitor_main ----------
 
-def test_monitor_main_triggers_only_when_signals_align_and_dedups(monkeypatch, tmp_path, capsys):
-    # 日K：140天单边下跌（ADX抬升）+ 39天横盘钝化（ADX恰好降破25），amount=1亿(量能为常数)
+def test_monitor_main_outputs_action_table_daily(monkeypatch, tmp_path, capsys):
+    # 信号齐的标的 → 行情表里有"买入"；同日重跑不再重复标🔔（去重仍生效）
     daily_closes = [100 - 0.5 * i for i in range(140)]
     base = daily_closes[-1]
     daily_closes += [base + (0.3 if i % 2 else -0.3) for i in range(39)]
     daily = _bars(daily_closes)
     for i, b in enumerate(daily):
-        b["amount"] = 5e9 if i < 140 else 1e9  # 横盘段量能缩到峰值1/5 → 地量
-    # 周K：9周急跌后反弹 → 底部金叉
+        b["amount"] = 5e9 if i < 140 else 1e9
     weekly = _bars([100, 96, 92, 88, 84, 80, 76, 72, 68] + [80])
 
     def fake_fetch(secid, lmt=300, klt="101"):
@@ -164,18 +197,19 @@ def test_monitor_main_triggers_only_when_signals_align_and_dedups(monkeypatch, t
     monkeypatch.setattr(mpc, "_state_path", lambda: str(state_file))
 
     mpc.monitor_main()
-
     out1 = capsys.readouterr().out
-    assert "测试指数" in out1            # 信号齐 → 打印警报
-    assert "地量" in out1
+    assert "测试指数" in out1
+    assert "买入" in out1            # 信号齐 → 买入（带🔔）
+    assert "🔔" in out1
 
-    mpc.monitor_main()                  # 同日第二次 → 去重，不重复打印
+    mpc.monitor_main()               # 同日重跑：表格照出，但买入不再标🔔
     out2 = capsys.readouterr().out
-    assert out2 == ""
+    assert "测试指数" in out2        # 每日表格不受去重影响
+    assert "🔔" not in out2          # 已推送过的买入不再重复标铃
 
 
-def test_monitor_main_silent_when_no_signal(monkeypatch, tmp_path, capsys):
-    # 日K持续单边下跌：ADX高、无降破；周K无金叉 → 全程静默
+def test_monitor_main_labels_flat_when_one_sided_down(monkeypatch, tmp_path, capsys):
+    # 日K持续单边下跌：表格输出"空仓观望"，无🔔，不写状态文件
     daily = _bars([100 - 0.4 * i for i in range(160)])
     for b in daily:
         b["amount"] = 1e8
@@ -186,8 +220,10 @@ def test_monitor_main_silent_when_no_signal(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(mpc, "_state_path", lambda: str(state_file))
 
     mpc.monitor_main()
-    assert capsys.readouterr().out == ""
-    assert not state_file.exists()      # 无触发不写状态文件
+    out = capsys.readouterr().out
+    assert "空仓观望" in out         # 直接给操作信号，不再静默
+    assert "🔔" not in out
+    assert not state_file.exists()   # 无买入触发不写状态
 
 
 def test_build_alert_empty_when_no_trigger():

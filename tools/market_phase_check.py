@@ -179,6 +179,27 @@ def evaluate_phase_signals(metrics):
             "trigger": trigger}
 
 
+def action_label(m):
+    """由三信号+市况指标输出直接操作信号。
+
+    决策树（书口径 + 网格场景适配）：
+      三信号齐              → 买入（右侧确认进场）
+      单边下跌(ADX>=25,空)   → 空仓观望（别接刀）
+      单边上涨(ADX>=25,多)   → 持有（别乱动）
+      震荡 + 深回撤(<=-30%)  → 半仓分批（埋伏/网格接回窗口）
+      震荡 + 浅回撤          → 半仓波段（网格主场）
+    """
+    if m["trigger"]:
+        return "买入", "右侧三信号齐：地量+ADX降破25+周线金叉"
+    if m["adx"] >= 25:
+        if m["trend"] == "up":
+            return "持有", f"单边上涨 ADX={m['adx']:.0f}，持筹不折腾"
+        return "空仓观望", f"单边下跌 ADX={m['adx']:.0f}，右侧未确认别接刀"
+    if m["dd250"] <= -30:
+        return "半仓分批", f"震荡+深回撤{m['dd250']:.0f}%，埋伏/网格接回窗口"
+    return "半仓波段", f"震荡市 ADX={m['adx']:.0f}，网格主场"
+
+
 def build_alert(results):
     """拼接触发警报的标的清单；无触发返回空串（空 stdout = cron 不推送）。"""
     lines = []
@@ -262,9 +283,11 @@ def analyze(secid, name):
 
 
 def monitor_main():
-    """盘后监控主流程：日K算量能/ADX，周K算KDJ金叉，三信号齐→按日去重输出警报。
+    """盘后监控主流程：每日输出操作信号表；三信号齐的新触发才标🔔。
 
-    空输出=无信号（cron 静默）；有输出=推送文本。状态文件记录每标的最后触发日。
+    输出格式（stdout 推飞书）：
+      测试指数 | 2026-10-23 | 收3600 | 空仓观望 | 单边下跌 ADX=44，右侧未确认别接刀
+    去重：状态文件记录每标的最后触发日，同日重跑不重复标🔔。
     """
     state = {}
     if os.path.exists(_state_path()):
@@ -287,25 +310,46 @@ def monitor_main():
             amounts = [r["amount"] for r in daily]
             win = min(120, len(amounts))
             vol_ratio = (sum(amounts[-5:]) / 5) / max(amounts[-win:])
-            adx_cur, adx_prev = adx_with_prev(daily)
-            golden, kdj_k = kdj_golden_cross(weekly_kdj(weekly))
-            if adx_cur is None:
+            adx_raw = wilder_adx(daily)
+            adx_prev_raw = wilder_adx(daily[:-1])
+            if adx_raw is None or adx_prev_raw is None:
                 continue
+            adx_cur, pdi, mdi = adx_raw
+            adx_prev = adx_prev_raw[0]
+            golden, kdj_k = kdj_golden_cross(weekly_kdj(weekly))
+            dd250 = (closes[-1] / max(closes[-250:]) - 1) * 100
             signals = evaluate_phase_signals({
                 "vol_ratio": vol_ratio, "adx": adx_cur, "adx_prev": adx_prev,
                 "kdj_golden": golden, "kdj_k": kdj_k if kdj_k is not None else 100.0,
             })
+            label, reason = action_label({
+                "trigger": signals["trigger"], "adx": adx_cur,
+                "trend": "up" if pdi > mdi else "down", "dd250": dd250,
+            })
             results.append({"name": name, "secid": secid,
                             "date": daily[-1]["date"], "close": closes[-1],
+                            "label": label, "reason": reason,
                             "signals": signals})
         except Exception as e:
             print(f"[{name}] 获取失败: {e}", file=sys.stderr)
 
-    triggered = [r for r in results
-                 if r["signals"]["trigger"] and should_push(state, r["secid"], r["date"])]
-    if triggered:
-        print(build_alert(results))
-        for r in triggered:
+    if not results:
+        return
+    lines = ["📈 市况操作信号（%s）" % results[0]["date"]]
+    new_triggers = []
+    for r in results:
+        bell = ""
+        if r["signals"]["trigger"]:
+            if should_push(state, r["secid"], r["date"]):
+                bell = " 🔔新触发"
+                new_triggers.append(r)
+            else:
+                bell = "（已推）"
+        lines.append(f"{r['name']} | 收{r['close']} | {r['label']}{bell} | {r['reason']}")
+    print("\n".join(lines))
+    if new_triggers:
+        print("🔔 右侧三信号齐：地量+ADX降破25+周线金叉 → 买入信号，今日新触发")
+        for r in new_triggers:
             record_push(state, r["secid"], r["date"])
         with open(_state_path(), "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=1)
