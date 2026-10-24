@@ -11,7 +11,7 @@ DEFAULT_STATE=Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-accou
 # 2026-10-24 教训：测试手写子串与实现表头不一致，误判功能缺失。
 ENTRY_BLOCK_TITLE='【可建仓候选·双规则过滤（五线全破禁入+近20日往返<2出榜，持仓豁免）】'
 
-def entry_rank_block(result, output, top_n=10, digest_n=3):
+def entry_rank_block(result, output, top_n=20, digest_n=3):
     """生成双规则榜单的两个渲染面：(完整周报行, 飞书精简摘要行)。
 
     规则（2026-10-23 起）：五线全破禁入 + 候选近20日往返<2 出榜，

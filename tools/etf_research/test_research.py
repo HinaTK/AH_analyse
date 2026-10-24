@@ -144,6 +144,40 @@ def test_weekly_report_includes_entry_rank_gated_listing(tmp_path):
     assert '2,279.30' not in entry_block
 
 
+def test_weekly_report_renders_top20_in_gated_listing(tmp_path):
+    """周报榜单必须渲染前 20 行（2026-10-24 用户：以后给出前20）。
+
+    原 top_n 默认 10；本测试用 25 只合成候选（全部近20日≥2 且非
+    持仓）验证周报表格恰好渲染 20 行数据行，不多不少。
+    """
+    try: weekly=importlib.import_module('tools.etf_research.weekly')
+    except ModuleNotFoundError: pytest.fail('weekly thin entry missing')
+    r=module()
+    ranking=[dict(code=f'sz1599{i:02d}',name=f'候选{i}',has_all_four_windows=True,
+                  full_cycles=float(50-i),full_cycle_net=1000.0-i,full_cycle_net_per_avg_cost_pct=5.0,
+                  recent20_cycles=float(5+i),recent20_cycle_net_per_avg_cost_pct=0.5) for i in range(25)]
+    result={'summary':{'version':r.VERSION,'asof':'2026-10-23','full_pool':True,'offline':False,'production_scope':False,'window_start':'2026-07-21','window_end':'2026-10-23','successful_runs':1139,'failed_runs':145,'attempted_assets':321},'leader':None,'holdings':{c:{'full_cycles':10,'full_cycle_net':1000.0} for c in r.HOLDINGS},'ranking':ranking,'errors':[]}
+    bars_dir=tmp_path/'bars';bars_dir.mkdir()
+    n=120
+    dates=pd.bdate_range(end='2026-10-23',periods=n).strftime('%Y-%m-%d')
+    for row in ranking:
+        closes=[10*1.003**i for i in range(n)]
+        lows=[c*0.99 for c in closes];lows[-1]=sum(closes[-20:])/20
+        pd.DataFrame({'time':[f'{d} 10:00' for d in dates],'open':closes,'high':[c*1.01 for c in closes],'low':lows,'close':closes}).to_csv(bars_dir/f"{row['code']}-m5.csv",index=False)
+    (tmp_path/'result.json').write_text(json.dumps(result),encoding='utf-8')
+    def runner(**kwargs):
+        return dict(result, summary=dict(result['summary'], output_path=str(tmp_path)))
+    out=weekly.run_weekly(state_path=tmp_path/'state.json',research_runner=runner)
+    report=out['report']
+    assert weekly.ENTRY_BLOCK_TITLE in report
+    block=report.split(weekly.ENTRY_BLOCK_TITLE)[1].split('【')[0]
+    data_rows=[ln for ln in block.splitlines() if ln.startswith('| ') and '名次' not in ln and '---' not in ln]
+    assert len(data_rows)==20, f'周报榜单必须渲染前20行，实际 {len(data_rows)} 行'
+    # 第 20 名在榜（sz159919, full=31），第 21 名不在（sz159920, full=30 不渲染）
+    assert 'sz159919' in block
+    assert 'sz159920' not in block
+
+
 def test_weekly_report_flags_entry_rank_failure_instead_of_silent_gap(tmp_path):
     """榜单生成失败必须在周报里可见，禁止静默吞异常。
 
