@@ -76,6 +76,36 @@ def test_holding_without_entry_verdict_still_shows(tmp_path):
     assert 'sh589720' in codes
 
 
+def test_candidates_below_two_recent20_cycles_are_excluded(tmp_path):
+    """近20日往返 <2 的候选不得入榜（2026-10-23 用户新增限制）。
+
+    历史次数高但近20日零成交的票（如科创100系列）进不了排行。
+    持仓不受此限——持仓要留在榜里可见（由 is_holding 豁免）。
+    """
+    rows = [
+        {'code': 'sh588010', 'name': '零活跃候选', 'has_all_four_windows': True, 'full_cycles': 37.0, 'full_cycle_net': 5628.8, 'full_cycle_net_per_avg_cost_pct': 18.5, 'recent20_cycles': 0.0, 'recent20_cycle_net_per_avg_cost_pct': 0.0},
+        {'code': 'sz159615', 'name': '一活跃候选', 'has_all_four_windows': True, 'full_cycles': 9.0, 'full_cycle_net': 1020.8, 'full_cycle_net_per_avg_cost_pct': 6.26, 'recent20_cycles': 1.0, 'recent20_cycle_net_per_avg_cost_pct': 0.5},
+        {'code': 'sz159363', 'name': '持仓零活跃', 'has_all_four_windows': True, 'full_cycles': 21.0, 'full_cycle_net': 3408.7, 'full_cycle_net_per_avg_cost_pct': 8.0, 'recent20_cycles': 0.0, 'recent20_cycle_net_per_avg_cost_pct': 0.0},
+    ]
+    output = make_output(tmp_path, rows, holdings={'sz159363'})
+    report = entry_rank.rank_entries(output)
+    codes = {row['code'] for row in report['rows']}
+    assert 'sh588010' not in codes, '近20日0次的候选必须出榜'
+    assert 'sz159615' not in codes, '近20日1次的候选必须出榜（少于2不含2）'
+    assert 'sz159363' in codes, '持仓豁免近20日门槛，必须留在榜里'
+    assert report['excluded'].get('recent20') == 2, '出榜数计入 recent20 排除项'
+
+
+def test_candidate_with_exactly_two_recent20_cycles_stays(tmp_path):
+    """边界：近20日恰好2次（含2）——门槛是"少于2次不进入"，2次要入。"""
+    rows = [
+        {'code': 'sh588760', 'name': '两次候选', 'has_all_four_windows': True, 'full_cycles': 26.0, 'full_cycle_net': 3423.6, 'full_cycle_net_per_avg_cost_pct': 8.39, 'recent20_cycles': 2.0, 'recent20_cycle_net_per_avg_cost_pct': 0.53},
+    ]
+    output = make_output(tmp_path, rows, holdings=set())
+    report = entry_rank.rank_entries(output)
+    assert 'sh588760' in {row['code'] for row in report['rows']}, '恰好2次必须入榜'
+
+
 def test_rank_entries_writes_csv_with_holding_column(tmp_path):
     rows = [
         {'code': 'sh589720', 'name': '持仓A', 'has_all_four_windows': True, 'full_cycles': 29.0, 'full_cycle_net': 4028.4, 'full_cycle_net_per_avg_cost_pct': 10.0, 'recent20_cycles': 5.0, 'recent20_cycle_net_per_avg_cost_pct': 2.0},
@@ -101,24 +131,37 @@ def test_render_markdown_contains_only_row_values(tmp_path):
     output = make_output(tmp_path, rows, holdings={'sh589720'})
     report = entry_rank.rank_entries(output)
     text = entry_rank.render_markdown(report, top_n=10)
-
-    # 每个数字单元格必须原样出现在输出中（格式化后的字符串）
-    assert '| sh588010 |' in text
+    # sh588010 是近20日0次的候选，按 2026-10-23 门槛出榜；
+    # 渲染只对 sh589720（持仓豁免）一行，数字仍须逐格来自 rows
+    assert '| sh588010 |' not in text, '近20日<2 的候选已出榜'
     assert '| sh589720 |' in text
-    assert '37' in text and '5,628.80' in text, 'full_cycles 与 full_cycle_net 来自 rows'
     assert '29' in text and '4,028.40' in text
     assert '12' in text, 'recent20_cycles=12 必须如实渲染（不是手写0或其他值）'
-    assert '0' in text, 'recent20_cycles=0 也要如实渲染'
-    # 标签
     assert '持仓' in text
-    assert '试错' in text or '整仓' in text
+
+
+def test_render_markdown_renders_every_row_cell_from_rows(tmp_path):
+    """候选行也全量入榜时（近20日≥2），每格数字来自 rows。"""
+    rows = [
+        {'code': 'sh588010', 'name': '候选X', 'has_all_four_windows': True, 'full_cycles': 37.0, 'full_cycle_net': 5628.8, 'full_cycle_net_per_avg_cost_pct': 18.5, 'recent20_cycles': 8.0, 'recent20_cycle_net_per_avg_cost_pct': 3.0},
+        {'code': 'sh589720', 'name': '持仓A', 'has_all_four_windows': True, 'full_cycles': 29.0, 'full_cycle_net': 4028.4, 'full_cycle_net_per_avg_cost_pct': 10.6, 'recent20_cycles': 12.0, 'recent20_cycle_net_per_avg_cost_pct': 3.9},
+    ]
+    output = make_output(tmp_path, rows, holdings={'sh589720'})
+    report = entry_rank.rank_entries(output)
+    text = entry_rank.render_markdown(report, top_n=10)
+    assert '| sh588010 |' in text
+    assert '| sh589720 |' in text
+    assert '37' in text and '5,628.80' in text
+    assert '29' in text and '4,028.40' in text
+    assert '8' in text, 'recent20_cycles=8 如实渲染'
+    assert '12' in text
 
 
 def test_render_markdown_respects_top_n(tmp_path):
     rows = [
         {'code': f'sz1599{i:02d}', 'name': f'票{i}', 'has_all_four_windows': True,
          'full_cycles': float(30 - i), 'full_cycle_net': 1000.0 - i, 'full_cycle_net_per_avg_cost_pct': 5.0,
-         'recent20_cycles': 1.0, 'recent20_cycle_net_per_avg_cost_pct': 0.5}
+         'recent20_cycles': float(5 + i), 'recent20_cycle_net_per_avg_cost_pct': 0.5}
         for i in range(15)
     ]
     output = make_output(tmp_path, rows, holdings=set())

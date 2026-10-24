@@ -12,6 +12,7 @@ from .entry_timing import judge_entry
 from .research import HOLDINGS
 
 ADMITTED = {'full': '可以整仓', 'probe_only': '仅试错仓'}
+MIN_RECENT20_CYCLES = 2
 
 
 def daily_bars(path):
@@ -27,7 +28,7 @@ def rank_entries(output_dir):
     output_dir = Path(output_dir)
     result = json.loads((output_dir / 'result.json').read_text(encoding='utf-8'))
     admitted = []
-    excluded = {'holding': 0, 'incomplete': 0, 'timing': 0, 'no_bars': 0, 'error': 0}
+    excluded = {'holding': 0, 'incomplete': 0, 'timing': 0, 'recent20': 0, 'no_bars': 0, 'error': 0}
     for row in result['ranking']:
         code = row['code']
         is_holding = code in HOLDINGS or row.get('holding')
@@ -45,6 +46,9 @@ def rank_entries(output_dir):
             continue
         if judged['verdict'] not in ADMITTED and not is_holding:
             excluded['timing'] += 1
+            continue
+        if (row.get('recent20_cycles') or 0) < MIN_RECENT20_CYCLES and not is_holding:
+            excluded['recent20'] += 1
             continue
         admitted.append({
             'code': code,
