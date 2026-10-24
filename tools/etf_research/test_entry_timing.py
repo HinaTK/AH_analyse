@@ -46,8 +46,24 @@ def test_pullback_to_the_20_day_in_an_uptrend_is_not_rejected():
     assert result['verdict'] == 'full'
 
 
-def test_close_under_the_60_day_is_a_probe_even_while_still_falling():
+def test_sustained_decline_below_all_averages_is_no_entry():
+    """单边阴跌：收盘低于全部五条均线 → 禁入（2026-10-23 规则变更后）。
+
+    旧行为是 probe_only；按破线计数≥5 禁入的新规则，单边阴跌的
+    最深形态（五线全压）不给试错仓。改用含小反弹的下跌序列验证
+    probe 通道仍存在于"破1-4条"的形态（见下方 rebound 测试）。
+    """
     frame = bars([2 - i * 0.01 for i in range(80)])
+    result = judge_entry(frame)
+    assert result['verdict'] == 'no_entry'
+    assert any('5日线' in reason for reason in result['reasons'])
+    assert result['exit_price'] is None
+
+
+def test_decline_with_recent_bounce_under_60_day_is_a_probe():
+    """破60日线但近端有反弹（站回部分短期线）→ 仍是试错仓，保留退出线。"""
+    closes = [12 - 0.03 * i for i in range(80)] + [9.5, 9.7]
+    frame = bars(closes)
     result = judge_entry(frame)
     assert result['verdict'] == 'probe_only'
     assert result['exit_price'] == frame['low'].iloc[-20:].min()
@@ -69,6 +85,28 @@ def test_stabilized_dip_under_a_rising_60_day_is_also_a_probe():
     result = judge_entry(bars(closes))
     assert result['verdict'] == 'probe_only'
     assert any('未下行' in reason for reason in result['reasons'])
+
+
+def test_close_below_all_five_averages_is_no_entry():
+    """五线全破（收盘低于 ma5/10/20/30/60 全部）→ 禁入，不能试错。
+
+    回归背景 2026-10-23：sz159615 五线全破仍判 probe_only，用户质疑
+    "只判断一条日线就行了吗"。新规则：破线计数≥5 禁入；1-4 条试错。
+    构造：长期横盘后急跌，使收盘低于全部五条均线。
+    """
+    closes = [10.0] * 75 + [8.5, 8.3, 8.1, 7.9, 7.7, 7.5]
+    result = judge_entry(bars(closes))
+    assert result['verdict'] == 'no_entry', '五线全破必须禁入，不给试错仓'
+    assert any('5日线' in reason for reason in result['reasons']), '禁入原因要指明等站回5日线'
+    assert result.get('exit_price') is None, '禁入时不再给退出线（无仓位即无退出价）'
+
+
+def test_partially_broken_averages_still_probe():
+    """破 60 日线但站上 5 日线（破 1-4 条）→ 仍是试错仓。"""
+    closes = [10 + 0.02 * i for i in range(90)] + [11.0, 10.8, 10.6, 10.5, 10.9]
+    result = judge_entry(bars(closes))
+    assert result['verdict'] == 'probe_only', '部分破位维持试错判定'
+    assert result['exit_price'] is not None
 
 
 def test_full_position_requires_a_held_60_day_reclaim_and_a_20_day_pullback():
