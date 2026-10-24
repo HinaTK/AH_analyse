@@ -3,11 +3,53 @@ from pathlib import Path
 from datetime import date, timedelta
 import json
 from . import research, pair_review
+from .entry_rank import rank_entries, render_markdown
 from .engine import dump
 STATE_VERSION=research.VERSION+'-rotation-streak-v1'
 DEFAULT_STATE=Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account/rotation')/f'{STATE_VERSION}.json'
+# 榜单区块唯一标题：周报/摘要/测试三方共用，禁止任何一方手写。
+# 2026-10-24 教训：测试手写子串与实现表头不一致，误判功能缺失。
+ENTRY_BLOCK_TITLE='【可建仓候选·双规则过滤（五线全破禁入+近20日往返<2出榜，持仓豁免）】'
 
-def summarize(result,pairs=None):
+def entry_rank_block(result, output, top_n=10, digest_n=3):
+    """生成双规则榜单的两个渲染面：(完整周报行, 飞书精简摘要行)。
+
+    规则（2026-10-23 起）：五线全破禁入 + 候选近20日往返<2 出榜，
+    持仓豁免保留。所有数字来自 rank_entries 的 rows——周报表格由
+    entry_rank.render_markdown 原样渲染，摘要行也由本函数从 rows
+    逐格生成，聊天层/推送层禁止改写任何数字（表格交付铁律）。
+    失败不再静默（2026-10-24 整改）：返回带 ⚠️ 的可见行。
+    """
+    if not output:
+        warn = '⚠️ 本次研究无 output_path，榜单未生成——请检查研究目录配置。'
+        return [ENTRY_BLOCK_TITLE, warn], [ENTRY_BLOCK_TITLE, warn]
+    try:
+        report = rank_entries(Path(output))
+    except Exception as exc:
+        warn = f'⚠️ 榜单生成失败：{exc}——完整榜单缺失，请检查研究目录 bars/result.json。'
+        return [ENTRY_BLOCK_TITLE, warn], [ENTRY_BLOCK_TITLE, warn]
+    rows = report['rows']
+    excluded = report['excluded']
+    head = (f"asof {report['asof']} 入选 {len(rows)} 只；排除：时点禁入{excluded.get('timing', 0)}、"
+            f"近20日不足{excluded.get('recent20', 0)}、四窗口不全{excluded.get('incomplete', 0)}")
+    if not rows:
+        tail = '；无入选标的（候选全部被双规则过滤或无完整四窗口数据）。'
+        return [ENTRY_BLOCK_TITLE, head + tail], [ENTRY_BLOCK_TITLE, head + tail]
+    # 完整周报：表格数字逐格来自 render_markdown，禁止任何第二渲染器
+    table = render_markdown(report, top_n=top_n)
+    report_lines = [ENTRY_BLOCK_TITLE, head, '', table]
+    # 飞书精简摘要：每行数字同样逐格取自 rows
+    digest = [ENTRY_BLOCK_TITLE, head]
+    for row in rows[:digest_n]:
+        digest.append(
+            f"{row['rank']}. {row['code']} {row['name']}｜{row['label']}｜"
+            f"63日往返{row['full_cycles']:.0f}次｜净差价{row['full_cycle_net']:,.2f}元｜"
+            f"近20日{row['recent20_cycles']:.0f}次")
+    if len(rows) > digest_n:
+        digest.append(f"……共{len(rows)}只入选，完整表见 weekly-report.txt 与 entry-ranking.csv")
+    return report_lines, digest
+
+def summarize(result, pairs=None, entry_digest=None):
     """Compact push digest; the full weekly report stays in weekly-report.txt."""
     s=result['summary']
     degraded=bool(s.get('data_failed_runs',s.get('failed_runs',0)) or s.get('fetch_errors',0))
@@ -26,6 +68,7 @@ def summarize(result,pairs=None):
     for c in research.HOLDINGS:
         x=result['holdings'].get(c) or {}
         lines.append(f"{c}：往返{number(x.get('full_cycles'))}次；净差价{money(x.get('full_cycle_net'))}元")
+    if entry_digest is not None:lines.extend(entry_digest)
     items=[];seen=set()
     for x in [result.get('leader'),*(result.get('rotation_top10') or [])]:
         if x and x.get('code') not in seen:seen.add(x.get('code'));items.append(x)
@@ -78,6 +121,11 @@ def run_weekly(state_path=DEFAULT_STATE,research_runner=None,pair_state_path=Non
     lines.append('【当前三持仓·全部展示，不参与领先者】')
     for c in research.HOLDINGS:
         x=result['holdings'][c];lines.append(f"{c}：往返{number(x.get('full_cycles'))}次；净差价{money(x.get('full_cycle_net'))}元")
+    output=s.get('output_path')
+    # 2026-10-23 起：周报必须带上过两道建仓规则（五线全破禁入 + 近20日<2 出榜）的榜单。
+    # 2026-10-24 起：榜单同时进飞书精简摘要（定时任务推送的是 summarize，不带即整改未落地）。
+    entry_report_lines, entry_digest = entry_rank_block(result, output)
+    lines.extend(entry_report_lines)
     lines.append('【轮换往返前10·同一套5分钟模拟】')
     top10=result.get('rotation_top10') or result.get('rotation_ranking',[])[:10]
     for x in top10:lines.append(f"{x['code']} {x.get('name','')}：{number(x.get('full_cycles'))}次；净差价{money(x.get('full_cycle_net'))}元")
@@ -91,7 +139,7 @@ def run_weekly(state_path=DEFAULT_STATE,research_runner=None,pair_state_path=Non
     report='\n'.join(lines)
     output=s.get('output_path')
     if output:(Path(output)/'weekly-report.txt').write_text(report,encoding='utf-8')
-    return dict(state=state,pair_review=pairs,holdings=result['holdings'],report=report,summary=summarize(result,pairs),research=result)
+    return dict(state=state,pair_review=pairs,holdings=result['holdings'],report=report,summary=summarize(result,pairs,entry_digest),research=result)
 
 def main(argv=None,now=None):
     import argparse

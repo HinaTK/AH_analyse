@@ -1,4 +1,5 @@
 import importlib
+import json
 import pandas as pd
 import pytest
 from datetime import datetime
@@ -98,6 +99,102 @@ def test_offline_research_runs_four_windows_and_accounts_for_errors(tmp_path,mon
     monkeypatch.setattr(engine,'latest_session',lambda:'2026-10-09')
     historical=online('historical')
     assert not historical['production_scope'] and not historical['latest_claim']
+
+
+def test_weekly_report_includes_entry_rank_gated_listing(tmp_path):
+    """周报必须带上 entry_rank 新规则（五线全破禁入+近20日<2出榜）的榜单。
+
+    用户 2026-10-23 要求定时任务用整改后的脚本：周报不能只给裸
+    63 日往返榜，要给出过两道新规则的 entry-ranking 表。
+    断言一律引用 weekly.ENTRY_BLOCK_TITLE 常量——2026-10-24 曾因
+    手写断言子串与实现表头不一致误判功能缺失（榜单实际已生成）。
+    """
+    try: weekly=importlib.import_module('tools.etf_research.weekly')
+    except ModuleNotFoundError: pytest.fail('weekly thin entry missing')
+    r=module()
+    ranking=[
+        dict(code='sh588010',name='零活跃候选',has_all_four_windows=True,full_cycles=37.0,full_cycle_net=5628.8,full_cycle_net_per_avg_cost_pct=18.5,recent20_cycles=0.0,recent20_cycle_net_per_avg_cost_pct=0.0),
+        dict(code='sh589720',name='持仓活跃',has_all_four_windows=True,full_cycles=29.0,full_cycle_net=4028.4,full_cycle_net_per_avg_cost_pct=10.6,recent20_cycles=12.0,recent20_cycle_net_per_avg_cost_pct=3.9),
+        dict(code='sz159363',name='持仓零活跃',has_all_four_windows=True,full_cycles=21.0,full_cycle_net=3408.7,full_cycle_net_per_avg_cost_pct=8.0,recent20_cycles=0.0,recent20_cycle_net_per_avg_cost_pct=0.0),
+    ]
+    result={'summary':{'version':r.VERSION,'asof':'2026-10-23','full_pool':True,'offline':False,'production_scope':False,'window_start':'2026-07-21','window_end':'2026-10-23','successful_runs':1139,'failed_runs':145,'attempted_assets':321},'leader':None,'holdings':{c:{'full_cycles':10,'full_cycle_net':1000.0} for c in r.HOLDINGS},'ranking':ranking,'errors':[]}
+    # bars 目录供 entry_rank 判定用
+    bars_dir=tmp_path/'bars';bars_dir.mkdir()
+    n=120
+    dates=pd.bdate_range(end='2026-10-23',periods=n).strftime('%Y-%m-%d')
+    for row in ranking:
+        closes=[10*1.003**i for i in range(n)]
+        lows=[c*0.99 for c in closes];lows[-1]=sum(closes[-20:])/20
+        pd.DataFrame({'time':[f'{d} 10:00' for d in dates],'open':closes,'high':[c*1.01 for c in closes],'low':lows,'close':closes}).to_csv(bars_dir/f"{row['code']}-m5.csv",index=False)
+    (tmp_path/'result.json').write_text(json.dumps(result),encoding='utf-8')
+    def runner(**kwargs):
+        return dict(result, summary=dict(result['summary'], output_path=str(tmp_path)))
+    path=tmp_path/'state.json'
+    out=weekly.run_weekly(state_path=path,research_runner=runner)
+    report=out['report']
+    # 周报里必须出现 entry_rank 产出的榜单区块（标题取共享常量，不手写）
+    assert weekly.ENTRY_BLOCK_TITLE in report, '周报缺少 entry_rank 榜单区块'
+    # 零活跃候选不得出现在榜单（新规则出榜），持仓必须出现
+    entry_block=report.split(weekly.ENTRY_BLOCK_TITLE)[1].split('【')[0]
+    assert 'sh588010' not in entry_block, '近20日0次的候选不得入周报榜单'
+    assert 'sh589720' in entry_block, '持仓要出现在周报榜单里'
+    assert 'sz159363' in entry_block, '持仓近20日0次也豁免保留'
+    # 表格必须由 entry_rank.render_markdown 原样渲染（表格交付铁律）
+    assert '| 名次 | 代码 | 名称 | 资格 | 63日往返 | 净差价 | 近20日往返 | 资金效率% |' in report
+    assert '2,279.30' not in entry_block
+
+
+def test_weekly_report_flags_entry_rank_failure_instead_of_silent_gap(tmp_path):
+    """榜单生成失败必须在周报里可见，禁止静默吞异常。
+
+    2026-10-24 根因调查发现 entry_rank_lines 裸 except 把任何失败
+    静默成"无区块"，调用方无从察觉。整改后失败必须显示 ⚠️。
+    """
+    try: weekly=importlib.import_module('tools.etf_research.weekly')
+    except ModuleNotFoundError: pytest.fail('weekly thin entry missing')
+    r=module()
+    result={'summary':{'version':r.VERSION,'asof':'2026-10-23','full_pool':True,'offline':False,'production_scope':False,'window_start':'2026-07-21','window_end':'2026-10-23','successful_runs':1139,'failed_runs':145,'attempted_assets':321},'leader':None,'holdings':{c:{'full_cycles':10,'full_cycle_net':1000.0} for c in r.HOLDINGS},'ranking':[],'errors':[]}
+    # output 指向存在 result.json 但内容损坏的目录 -> rank_entries 必然抛错
+    (tmp_path/'result.json').write_text('{corrupted',encoding='utf-8')
+    def runner(**kwargs):
+        return dict(result, summary=dict(result['summary'], output_path=str(tmp_path)))
+    out=weekly.run_weekly(state_path=tmp_path/'state.json',research_runner=runner)
+    assert weekly.ENTRY_BLOCK_TITLE in out['report'], '失败也要出现榜单区块标题'
+    assert '⚠️' in out['report'], '失败必须在周报可见'
+    assert '4,028.40' not in out['report'].split(weekly.ENTRY_BLOCK_TITLE)[1]
+
+
+def test_weekly_summary_pushes_entry_rank_digest(tmp_path):
+    """飞书推送（summarize 精简摘要）必须带双规则榜单摘要。
+
+    定时任务 5d8180a8d025 推飞书的是 summarize() 而非全量周报；
+    摘要不带榜单的话，用户周五收到的仍是旧口径，整改未落地。
+    """
+    try: weekly=importlib.import_module('tools.etf_research.weekly')
+    except ModuleNotFoundError: pytest.fail('weekly thin entry missing')
+    r=module()
+    ranking=[
+        dict(code='sh588010',name='零活跃候选',has_all_four_windows=True,full_cycles=37.0,full_cycle_net=5628.8,full_cycle_net_per_avg_cost_pct=18.5,recent20_cycles=0.0,recent20_cycle_net_per_avg_cost_pct=0.0),
+        dict(code='sh589720',name='持仓活跃',has_all_four_windows=True,full_cycles=29.0,full_cycle_net=4028.4,full_cycle_net_per_avg_cost_pct=10.6,recent20_cycles=12.0,recent20_cycle_net_per_avg_cost_pct=3.9),
+        dict(code='sz159363',name='持仓零活跃',has_all_four_windows=True,full_cycles=21.0,full_cycle_net=3408.7,full_cycle_net_per_avg_cost_pct=8.0,recent20_cycles=0.0,recent20_cycle_net_per_avg_cost_pct=0.0),
+    ]
+    result={'summary':{'version':r.VERSION,'asof':'2026-10-23','full_pool':True,'offline':False,'production_scope':False,'window_start':'2026-07-21','window_end':'2026-10-23','successful_runs':1139,'failed_runs':145,'attempted_assets':321},'leader':None,'holdings':{c:{'full_cycles':10,'full_cycle_net':1000.0} for c in r.HOLDINGS},'ranking':ranking,'errors':[]}
+    bars_dir=tmp_path/'bars';bars_dir.mkdir()
+    n=120
+    dates=pd.bdate_range(end='2026-10-23',periods=n).strftime('%Y-%m-%d')
+    for row in ranking:
+        closes=[10*1.003**i for i in range(n)]
+        lows=[c*0.99 for c in closes];lows[-1]=sum(closes[-20:])/20
+        pd.DataFrame({'time':[f'{d} 10:00' for d in dates],'open':closes,'high':[c*1.01 for c in closes],'low':lows,'close':closes}).to_csv(bars_dir/f"{row['code']}-m5.csv",index=False)
+    (tmp_path/'result.json').write_text(json.dumps(result),encoding='utf-8')
+    def runner(**kwargs):
+        return dict(result, summary=dict(result['summary'], output_path=str(tmp_path)))
+    out=weekly.run_weekly(state_path=tmp_path/'state.json',research_runner=runner)
+    text=out['summary']
+    assert weekly.ENTRY_BLOCK_TITLE in text, '精简摘要缺少双规则榜单块'
+    assert 'sh589720' in text and 'sz159363' in text, '摘要榜单必须含持仓'
+    assert 'sh588010' not in text, '近20日0次的候选不得出现在摘要'
+    assert len(text.splitlines())<=16, '摘要超出精简行数上限'
 
 
 def test_weekly_single_call_versioned_streak_and_no_same_week_double_count(tmp_path):
