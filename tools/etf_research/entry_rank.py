@@ -79,19 +79,38 @@ def rank_entries(output_dir):
     return {'asof': result['summary']['asof'], 'rows': admitted, 'excluded': excluded, 'output': str(output_dir)}
 
 
-MIN_FULL_CYCLES = 10   # 与 rank_entries 建仓门槛一致
-MIN_RECENT20_CYCLES = 2  # 与 rank_entries 近20日门槛一致
+MIN_FULL_CYCLES = 10   # 63日高/低线：与 rank_entries 建仓门槛一致
+MIN_RECENT20_CYCLES = 2  # 入选过滤线（用户定的及格线）：低于它不入池；空池兜底也用它
 
 
-def window_matrix_label(row):
-    """双窗口判断矩阵标注（2026-10-26 用户定，四档）。
+def median_r20_threshold(rows):
+    """近20日高/低线：当期入选池 recent20_cycles 的中位数（2026-10-26 用户确认）。
 
-    阈值与建仓门槛完全一致，禁止另立标准。
+    固定 ≥2 是入选过滤线，不能冒充效率分界线；固定绝对数会随市场节奏
+    过期。动态中位线保证“✅双高”始终代表当期相对活跃的前一半。
+    空池兜底：返回入选过滤线 2，禁止抛异常。
+    """
+    if not rows:
+        return MIN_RECENT20_CYCLES
+    values = sorted((r.get('recent20_cycles') or 0) for r in rows)
+    n = len(values)
+    mid = n // 2
+    if n % 2 == 1:
+        return values[mid]
+    return (values[mid - 1] + values[mid]) / 2
+
+
+def window_matrix_label(row, r20_threshold):
+    """双窗口判断矩阵标注（四档）。
+
+    63日高/低线=MIN_FULL_CYCLES(10)不变；近20日高/低线=r20_threshold
+    （由 median_r20_threshold(池) 给出，render_markdown 内部计算）。
+    边界含：恰好等于线值算“高”。
     """
     full = row.get('full_cycles') or 0
     r20 = row.get('recent20_cycles') or 0
     full_high = full >= MIN_FULL_CYCLES
-    r20_high = r20 >= MIN_RECENT20_CYCLES
+    r20_high = r20 >= r20_threshold
     if full_high and r20_high:
         return '✅双高'
     if full_high and not r20_high:
@@ -110,8 +129,10 @@ def render_markdown(report, top_n=10):
     回归教训）。
     """
     rows = report['rows'][:top_n]
+    threshold = median_r20_threshold(report['rows'])  # 线基于完整入选池，不是只看前N
     lines = [
         f"asof {report['asof']} 入选 {len(report['rows'])} 只 排除 {report['excluded']}",
+        f"近20日高/低线={threshold:g}（当期入选池中位）",
         '',
         '| 名次 | 代码 | 名称 | 资格 | 判断 | 63日往返 | 净差价 | 近20日往返 | 资金效率% |',
         '|---:|---|---|---|---|---:|---:|---:|---:|',
@@ -122,7 +143,7 @@ def render_markdown(report, top_n=10):
             row['code'],
             row['name'],
             row['label'],
-            window_matrix_label(row),
+            window_matrix_label(row, threshold),
             row['full_cycles'] or 0,
             row['full_cycle_net'] or 0.0,
             row['recent20_cycles'] or 0,
