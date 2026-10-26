@@ -8,6 +8,58 @@ import holdings as H
 CODES = ('sh589720', 'sz159363')          # legacy compatibility only
 BUDGETS = {'sh589720': D('8000'), 'sz159363': D('6000')}
 GAP = D('0.015')
+
+
+class RegimeGate:
+    """网格×市况联动门控（2026-10-26 用户定，复盘159363单边下跌后落地）。
+
+    单边下跌（ADX>=25 且 -DI>+DI，截至昨日收盘）→ 暂停该ETF的新格买入建议；
+    卖出建议保留。震荡/单边上涨不受影响。行情缺失 fail-open 不暂停。
+    """
+
+    def __init__(self, regimes):
+        self._regimes = regimes or {}
+
+    def blocks_buy(self, code):
+        r = self._regimes.get(code)
+        if not r or r.get('adx') is None:
+            return False  # fail-open：无数据不暂停
+        return r['adx'] >= 25 and r.get('mdi', 0) > r.get('pdi', 0)
+
+    def reason(self, code):
+        r = self._regimes.get(code)
+        if not r or r.get('adx') is None:
+            return f'{code} 市况未知（行情缺失，不暂停买入）'
+        if self.blocks_buy(code):
+            return f"{code} 单边下跌（ADX={r['adx']:.1f}，-DI {r['mdi']:.0f} > +DI {r['pdi']:.0f}），暂停新格买入，卖出保留"
+        return f"{code} 市况未触发暂停"
+
+
+def _fetch_regime_klines(code):
+    """拉取市况用的日K（截至昨日收盘：drop 今日未收K，ADX无未来函数）。"""
+    import market_phase_check as mp
+    rows = mp.fetch_kline(('1.' if code.startswith('sh') else '0.') + code[-6:], lmt=300, klt='101')
+    # 盘中丢掉今日未收K（drop_unclosed_bar 在 entry_timing，不在 market_phase_check）
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone(timedelta(hours=8)))
+    if now.hour < 15:
+        today = now.strftime('%Y-%m-%d')
+        rows = [r for r in rows if r['date'] != today]
+    return rows
+
+
+def fetch_daily_regime(code):
+    """算某ETF的市况（ADX/±DI）。失败返回 adx=None（fail-open）。"""
+    try:
+        from market_phase_check import wilder_adx
+        rows = _fetch_regime_klines(code)
+        result = wilder_adx(rows)
+        if not result:
+            return dict(adx=None)
+        adx, pdi, mdi = result
+        return dict(adx=adx, pdi=pdi, mdi=mdi)
+    except Exception:
+        return dict(adx=None)
 WARNING = ('条件建议，非可直接执行委托：sz159992 处于迁移退出模式（停买、停接回、只卖不买），'
            '00:01 已同步可卖份额；账户现金、银河冻结及在途委托未对账，不自动下单，触价不等于成交。')
 DAILY_BAR_SOURCES = (
@@ -32,12 +84,13 @@ def price(value):
     return str(value.quantize(D('0.001'), rounding=ROUND_HALF_UP))
 
 
-def plan(root):
+def plan(root, regime_gate=None):
     states = load_states(root)
     holdings = H.load_holdings()
     budgets = H.lot_budgets(holdings)
     names = H.names(holdings)
     actions = []
+    regime_blocks = []
     for code, state in states.items():
         active = H.is_active(code, holdings)
         top = state['open_grid_positions'][-1] if state['open_grid_positions'] else None
@@ -51,11 +104,17 @@ def plan(root):
         if active and top and type(available) is int and available >= top['qty'] and state['qty'] - top['qty'] >= (4600 if code == 'sz159363' else 0):
             actions.append(dict(code=code, side='sell', price=price(D(top['price']) * (1 + GAP)), qty=top['qty'], lot=state['max_grid'], buy_id=top['id']))
         if active and depth < 26 and state['trades'] and budgets.get(code) is not None:
-            px = price(D(top['price'] if top else state['trades'][-1]['price']) / (1 + GAP))
-            qty = int(budgets[code] / (D(px) * 100)) * 100
-            if qty:
-                actions.append(dict(code=code, side='buy', price=px, qty=qty, lot=chr(65 + depth)))
-    return dict(actions=actions, executable=False, cash=None, warning=WARNING, states=states, names=names)
+            if regime_gate is not None and regime_gate.blocks_buy(code):
+                regime_blocks.append(regime_gate.reason(code))
+            else:
+                px = price(D(top['price'] if top else state['trades'][-1]['price']) / (1 + GAP))
+                qty = int(budgets[code] / (D(px) * 100)) * 100
+                if qty:
+                    actions.append(dict(code=code, side='buy', price=px, qty=qty, lot=chr(65 + depth)))
+    ticket = dict(actions=actions, executable=False, cash=None, warning=WARNING, states=states, names=names)
+    if regime_gate is not None:
+        ticket['regime_blocks'] = regime_blocks
+    return ticket
 
 
 def phase(now):
@@ -209,6 +268,8 @@ def ops_main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--phase', choices=('auto','preview','execute','grid'), default='auto')
     parser.add_argument('--result', choices=('成功','失败'))
+    parser.add_argument('--no-regime-gate', action='store_true',
+                        help='关闭单边下跌买入暂停（紧急用；默认开启联动）')
     args = parser.parse_args(argv)
     if args.result:
         parser.error('禁止整票记账；请用grid_weixin_confirm.py显式提供ETF/方向/实际数量/价格/日期/成交ID')
@@ -217,9 +278,16 @@ def ops_main(argv=None):
     if current == 'closed':
         print('休市或非连续交易时段：不生成执行建议')
         return
-    ticket = plan(root_from_home())
+    gate = None
+    if not args.no_regime_gate:
+        try:
+            regimes = {code: fetch_daily_regime(code) for code in H.held_codes()}
+            gate = RegimeGate(regimes)
+        except Exception:
+            gate = None  # 行情整体失败：fail-open，不阻断盘前建议
+    ticket = plan(root_from_home(), regime_gate=gate)
     if args.phase == 'grid':
-        print('【09:24 盘前网格条件建议：按已确认账本计算，不依赖实时行情】')
+        print('【09:20 盘前网格条件建议：按已确认账本计算，不依赖实时行情】')
         print(render(ticket))
         return
     quotes = fetch_quotes()
@@ -421,6 +489,8 @@ def render(ticket):
     for code, state in ticket['states'].items():
         tag = '（迁移退出：只读，不生成买卖建议）' if not H.is_active(code) else ''
         lines.append(f"{code} {names.get(code,'')} {tag} 持有={state['qty']} 保存可卖={state['sellable_qty']} 最大格={state['max_grid']} 净投入={state['net_invested']} 已完成T净收益={state['t_net']}")
+    for block in ticket.get('regime_blocks') or []:
+        lines.append(f"⛔ {block}")
     for action in ticket['actions']:
         direction = '买' if action['side'] == 'buy' else '卖'
         name = names.get(action['code'], '')
