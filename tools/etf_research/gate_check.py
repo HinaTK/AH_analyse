@@ -5,7 +5,7 @@
 两套判定重复且打架（实测 589720 五线全破但 ADX 17.3 放行）。合并规则：
 
     暂停买入  收盘 < ma5/10/20/30/60 全部（五线全破）      → 拦
-    暂停买   ADX>=25 且收盘 < ma60（强动能 + 仍在跌势）     → 拦
+    暂停买   ADX>=25 且 -DI>+DI 且收盘 < ma60（强动能跌势）  → 拦
     试错仓   破 1-4 条线（配 20 日最低退出价）              → 不拦，标注
     正常     收盘 >= ma60（防追高等细分由 entry_timing 负责） → 不拦
 
@@ -20,6 +20,53 @@ from .entry_timing import judge_entry, LABELS
 PAUSE_ADX = 25.0
 
 LEVEL_ORDER = ('no_entry', 'pause_buy', 'probe_only', 'normal')
+
+
+def blocked_buy_days(m5_frame, min_rows=65):
+    """回测引擎用的逐日买入门控（2026-10-27 用户要求：回测过程也要符合规则）。
+
+    对每个交易日 D：用截至 D-1 收盘的日线（date/open/high/low/close）跑
+    生产统一判定 gate()——与 confirmed_runtime.RegimeGate 同一事实源。
+    D 日判定所需历史不足 min_rows 根 → fail-open 不拦（生产语义）。
+
+    Args:
+        m5_frame: 5 分钟 K 线 DataFrame（time/open/high/low/close/volume）。
+        min_rows: 单日判定所需最少日线根数（entry_timing MIN_ROWS=65）。
+
+    Returns:
+        dict {date_str: bool}，True=该日新格买入被拦截。
+        只覆盖能聚合出日线的日期；缺失历史的前 min_rows-1 日不拦。
+    """
+    df = m5_frame.copy()
+    if 'date' not in df.columns:
+        df['date'] = df['time'].astype(str).str.slice(0, 10)
+    daily = df.groupby('date', as_index=False).agg(
+        open=('open', 'first'), high=('high', 'max'),
+        low=('low', 'min'), close=('close', 'last'))
+
+    from .entry_timing import prepare
+    daily = prepare(daily).reset_index(drop=True)
+
+    try:
+        from market_phase_check import wilder_adx
+    except ImportError:  # 引擎环境无该模块 → 仅均线判定（fail-open 语义）
+        wilder_adx = None
+
+    blocked = {}
+    for i in range(1, len(daily)):
+        day = daily['date'].iloc[i]
+        history = daily.iloc[:i]  # 截至 D-1：无前视
+        if len(history) < min_rows:
+            blocked[day] = False
+            continue
+        regime = None
+        if wilder_adx is not None:
+            rows = history[['high', 'low', 'close']].to_dict('records')
+            result = wilder_adx(rows)
+            regime = dict(zip(('adx', 'pdi', 'mdi'), result)) if result else None
+        verdict = gate(history, regime=regime)
+        blocked[day] = bool(verdict['blocks_buy'])
+    return blocked
 
 
 def gate(frame, regime=None):
@@ -58,11 +105,17 @@ def gate(frame, regime=None):
         level = 'probe_only'
         exit_price = judged.get('exit_price')
         reason = f"破线未全破（试错仓），退出价 {exit_price}；5日线 {ma5}"
-        # ADX 强动能升级为暂停买（从严者胜）
-        if adx is not None and adx >= PAUSE_ADX and ma60 is not None and close < ma60:
+        # ADX 强动能且方向向下（-DI>+DI，用户 10-26 原始规则）才升级为暂停买；
+        # 强动能但 +DI 主导 = 上涨/反弹动能，不属于"单边下跌"，不拦
+        mdi = regime.get('mdi')
+        pdi = regime.get('pdi')
+        if (adx is not None and adx >= PAUSE_ADX
+                and ma60 is not None and close < ma60
+                and mdi is not None and pdi is not None and mdi > pdi):
             level = 'pause_buy'
             blocks_buy = True
-            reason = (f"ADX={adx:.1f}>=25 且收盘 {close:.3f} 在 60日线 {ma60:.3f} 下方，"
+            reason = (f"ADX={adx:.1f}>=25 且 -DI {mdi:.0f} > +DI {pdi:.0f}，"
+                      f"收盘 {close:.3f} 在 60日线 {ma60:.3f} 下方，"
                       f"强动能跌势，暂停新格买入，卖出保留")
     else:
         # 均线上方的 reject/no_entry(追高)/wait/full：不属于下跌拦截，

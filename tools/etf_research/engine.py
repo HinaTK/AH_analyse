@@ -66,7 +66,7 @@ def metrics(pool,runs,traces,returns):
     rank['score']=np.nan;rank.loc[valid,'score']=0.
     for col,w in WEIGHTS.items():rank.loc[valid,'score']+=abs(w)*rank.loc[valid,col].rank(pct=True,ascending=w>0)
     return rank.sort_values(['qualification','score','code'],ascending=[False,False,True],na_position='last').reset_index(drop=True)
-def run_research(input_path=DEFAULT_INPUT,output_path=None,asof=None,sessions=63,offline=False,limit=None,workers=8,bars_dir=None,lot_budget=5000,gap=0.02):
+def run_research(input_path=DEFAULT_INPUT,output_path=None,asof=None,sessions=63,offline=False,limit=None,workers=8,bars_dir=None,lot_budget=5000,gap=0.02,regime_gate=False):
     if sessions<20:raise ValueError('sessions must be >=20')
     asof=asof or latest_session();inp=Path(input_path);pool=load_universe(inp/'eligibility.csv');universe=len(pool)
     import hashlib
@@ -118,12 +118,19 @@ def run_research(input_path=DEFAULT_INPUT,output_path=None,asof=None,sessions=63
             if ((opens/closes.shift(1)-1).abs()>.11).any():raise ValueError('possible ex-rights/abnormal overnight jump >11%')
             returns[c]=closes.pct_change();split=dates[len(dates)//2]
             windows={'full':frame,'early':frame[frame.time.str[:10]<split],'late':frame[frame.time.str[:10]>=split],'recent20':frame[frame.time.str[:10]>=dates[-20]]}
+            # 门控判定用未裁剪全历史 (entry_timing 需 >=65 根日线, 63 日窗口
+            # 会 fail-open 形同虚设——2026-10-27 修复), 只保留窗口内日期
+            gate_days_full=None
+            if regime_gate:
+                from .gate_check import blocked_buy_days
+                gate_days_full=blocked_buy_days(data[c])
+                gate_days_full={d:v for d,v in gate_days_full.items() if d in set(dates)}
         except Exception as exc:
             for w in WINDOWS:errors.append(dict(code=c,window=w,stage='simulate',error=str(exc)));progress(errors[-1])
             save_errors();continue
         for w,f in windows.items():
             try:
-                result=model.simulate(f,gap=gap,t0=False,slip=.0005,trace=w=='full',lot_budget=lot_budget)
+                result=model.simulate(f,gap=gap,t0=False,slip=.0005,trace=w=='full',lot_budget=lot_budget,gate_days=gate_days_full)
                 if w=='full':traces[c]=result.pop('events');result.pop('equity_curve')
                 if abs(result['identity_error'])>1e-6:raise ValueError('identity error')
                 result['cycle_net_per_avg_cost_pct']=result['cycle_net']/result['avg_cost']*100;runs[(c,w)]=result;progress(dict(stage='simulate',code=c,window=w,result=result))

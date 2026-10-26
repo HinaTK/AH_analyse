@@ -21,9 +21,10 @@ def purchase(budget,p):
     return qty,qty*p+fee(qty*p) if qty else 0
 
 
-def simulate(frame,gap=.02,t0=False,slip=.0005,trace=False,lot_budget=5000):
+def simulate(frame,gap=.02,t0=False,slip=.0005,trace=False,lot_budget=5000,gate_days=None):
     rows=frame[['time','open','close','volume']].to_numpy()
     if len(rows)<2:raise ValueError('too few bars')
+    gate_days=gate_days or {}
     times=[str(x) for x in rows[:,0]]
     opens=rows[:,1].astype(float);closes=rows[:,2].astype(float);vol=rows[:,3].astype(float)
     dates=[x[:10] for x in times]
@@ -98,14 +99,20 @@ def simulate(frame,gap=.02,t0=False,slip=.0005,trace=False,lot_budget=5000):
                         s.update(qty=0,cost=0.0,target=p/(1+gap),initial=False)
                     else:cancelled+=1
                 else:
-                    qty,cost=purchase(lot_budget,p)
-                    if qty and p<=s['target']+1e-10 and qty<=vol[i]*.01 and cash-cost>=50000-1e-7 and cost_held+cost<=50000+1e-7:
-                        cash-=cost;qty_total+=qty;cost_held+=cost
-                        if t0:available+=qty
-                        commission=fee(qty*p);fees+=commission;trades+=1
-                        s.update(qty=qty,cost=cost,target=p*(1+gap),initial=False,bought_day=day_ids[dates[i]],bought_index=i)
-                        record('buy',i,qty,p,commission,k,i-1)
-                    else:cancelled+=1
+                    if gate_days.get(dates[i]):
+                        # 门控只拦"新格买入"这一动作; equity 记录与不变式
+                        # 检查在循环体末尾, 不能用 continue 跳过(否则净值曲线
+                        # 缺被拦日的点, final/identity 全错——2026-10-27 修复)
+                        cancelled+=1
+                    else:
+                        qty,cost=purchase(lot_budget,p)
+                        if qty and p<=s['target']+1e-10 and qty<=vol[i]*.01 and cash-cost>=50000-1e-7 and cost_held+cost<=50000+1e-7:
+                            cash-=cost;qty_total+=qty;cost_held+=cost
+                            if t0:available+=qty
+                            commission=fee(qty*p);fees+=commission;trades+=1
+                            s.update(qty=qty,cost=cost,target=p*(1+gap),initial=False,bought_day=day_ids[dates[i]],bought_index=i)
+                            record('buy',i,qty,p,commission,k,i-1)
+                        else:cancelled+=1
         equity=cash+qty_total*closes[i]
         equities.append(equity);costs.append(cost_held);cash_series.append(cash)
         max_cost=max(max_cost,cost_held);min_cash=min(min_cash,cash)
