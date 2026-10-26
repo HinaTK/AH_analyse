@@ -132,9 +132,25 @@ def fetch_daily_bars(code):
 
 
 def monitor(ticket, quotes, state, day):
+    """有效触碰 = 建议生成后的触碰。
+
+    每条建议首次被看到时记录当时的日内极值为基准（生成前的旧极值不算触碰）。
+    之后仅两种情况有效：现价触价（发生在当下），或极值越过基准的新触碰。
+    建议消失（成交入账后重算）即清窗；同价建议重生时窗口重开、可再次提醒。
+    """
     if state.get('day') != day:
         state.clear()
-        state.update(day=day, alerts={})
+        state.update(day=day, alerts={}, baselines={})
+    state.setdefault('baselines', {})
+    alive = {(action['code'], action['side'], str(action['price'])) for action in ticket['actions']}
+    # 清掉已消失建议的窗口与已报记录，重生时可重报
+    def _advice_of_alert(k):
+        parts = k.split(':')  # day:code:side:price
+        return (parts[1], parts[2], parts[3])
+    for stale in [k for k in list(state['alerts']) if _advice_of_alert(k) not in alive]:
+        del state['alerts'][stale]
+    for stale_key in [k for k in list(state['baselines']) if tuple(k.split(':', 2)) not in alive]:
+        del state['baselines'][stale_key]
     messages = []
     for action in ticket['actions']:
         quote = quotes[action['code']]
@@ -147,14 +163,36 @@ def monitor(ticket, quotes, state, day):
                     extremes[label] = value
             except ArithmeticError:
                 pass
-        low = extremes.get('low',last)
-        high = extremes.get('high',last)
-        hit = (low <= D(action['price']) or last <= D(action['price'])) if action['side'] == 'buy' else (high >= D(action['price']) or last >= D(action['price']))
+        low = extremes.get('low', last)
+        high = extremes.get('high', last)
         key = f"{day}:{action['code']}:{action['side']}:{action['price']}"
-        if hit and key not in state['alerts']:
+        base_key = f"{action['code']}:{action['side']}:{action['price']}"
+        price = D(action['price'])
+        # 现价触价：触碰发生在当下，必然晚于建议生成 → 有效
+        hit_by_last = (last <= price) if action['side'] == 'buy' else (last >= price)
+        if base_key not in state['baselines']:
+            # 首见：记录极值基准；生成前极值不触发
+            state['baselines'][base_key] = dict(low=str(low), high=str(high))
+            hit = hit_by_last
+            if hit:
+                state['alerts'][key] = True
+                direction = '买' if action['side'] == 'buy' else '卖'
+                messages.append(f"{action['code']} {action['lot']}格 条件{direction} {action['qty']:,}份 @ {action['price']}；现价={last}，腾讯时间={quote.get('time','未知')}；触价发生在建议生成后（首见现价触价），无法确定触价时刻，触价不等于成交，请核对银河。")
+            continue
+        if key in state['alerts']:
+            continue
+        base = state['baselines'][base_key]
+        if action['side'] == 'buy':
+            # 有效：现价触价，或生成后新低（低于基准）且触及触发价
+            new_low = 'low' in extremes and low < D(base['low'])
+            hit = hit_by_last or (new_low and low <= price)
+        else:
+            new_high = 'high' in extremes and high > D(base['high'])
+            hit = hit_by_last or (new_high and high >= price)
+        if hit:
             state['alerts'][key] = True
             key_extreme = 'low' if action['side'] == 'buy' else 'high'
-            evidence = (f"日内{'最低' if key_extreme == 'low' else '最高'}={extremes[key_extreme]}" if key_extreme in extremes else f'现价={last}')
+            evidence = (f"建议生成后日内{'最低' if key_extreme == 'low' else '最高'}={extremes[key_extreme]}（基准{base[key_extreme]}）" if key_extreme in extremes else f'现价={last}')
             direction = '买' if action['side'] == 'buy' else '卖'
             messages.append(f"{action['code']} {action['lot']}格 条件{direction} {action['qty']:,}份 @ {action['price']}；{evidence}，现价={last}，腾讯时间={quote.get('time','未知')}；无法确定触价时刻，可能早于建议，触价不等于成交，请核对银河。")
     return '\n'.join(messages)

@@ -50,9 +50,19 @@ class RuntimeTests(unittest.TestCase):
         quotes['sz159363']['time'] = '20261014100000'
         ticket = dict(actions=[dict(code='sh589720',side='sell',price='0.850',qty=9600,lot='C')])
         state = {}
-        self.assertIn('触价不等于成交', runtime.monitor(ticket, quotes, state, '2026-10-14'))
+        # 新规则(2026-10-26)：建议首见时旧日内极值(高0.9>0.85)不再触发；
+        # 首见现价0.8未触价 → 不报
         self.assertEqual(runtime.monitor(ticket, quotes, state, '2026-10-14'), '')
-        self.assertTrue(runtime.monitor(ticket, quotes, state, '2026-10-15'))
+        # 生成后现价触价(0.855≥0.850) → 有效报一次
+        quotes2 = {code: dict(last='0.855', high='0.9', low='0.7', time='20261014100100') for code in codes}
+        self.assertIn('触价不等于成交', runtime.monitor(ticket, quotes2, state, '2026-10-14'))
+        # 同一触碰去重
+        self.assertEqual(runtime.monitor(ticket, quotes2, state, '2026-10-14'), '')
+        # 次日窗口重开：旧极值仍不算（首见现价0.8未触价）
+        self.assertEqual(runtime.monitor(ticket, quotes, state, '2026-10-15'), '')
+        # 次日生成后现价触价 → 报
+        quotes3 = {code: dict(last='0.9', high='0.9', low='0.7', time='20261015100100') for code in codes}
+        self.assertTrue(runtime.monitor(ticket, quotes3, state, '2026-10-15'))
         self.assertNotIn('trades', state)
         self.assertEqual(runtime.phase(datetime(2026,10,1,10,tzinfo=now.tzinfo)), 'closed')
         self.assertEqual(runtime.phase(datetime(2026,10,14,12,tzinfo=now.tzinfo)), 'closed')
