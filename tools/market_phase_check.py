@@ -223,6 +223,46 @@ def build_alert(results):
     return "\n".join(lines)
 
 
+def render_header(date):
+    """富渲染表头：带口径说明，让人不查文档也看得懂。"""
+    return (
+        f"📈 市况操作信号（{date}）\n"
+        "右侧三信号 = 地量(近5日均额<峰值1/3) + ADX从≥25降破25(单边动能死) + 周线KDJ金叉K<50(底部金叉)；\n"
+        "三信号齐→🔔买入信号。成数指方向仓/新开仓目标，不是清仓网格；网格挂单照常由09:20任务管。"
+    )
+
+
+def render_instrument(m):
+    """单标的富渲染：关键读数全量输出（2026-10-26 用户要求：简报看不出是什么）。"""
+    sig = m.get("signals") or {}
+    on = lambda key, label: (f"✅{label}" if sig.get(key) else f"○{label}未亮")
+    ma = m.get("ma_pos") or {}
+    ma20 = ma.get(20)
+    ma60 = ma.get(60)
+    ma20_txt = f"{ma20:+.1f}%" if ma20 is not None else "—"
+    ma60_txt = f"{ma60:+.1f}%" if ma60 is not None else "—"
+    lines = [
+        f"【{m['name']}】收 {m['close']:.2f}（{m.get('pct', 0):+.2f}%）",
+        f"  均线：MA20 {ma20_txt}｜MA60 {ma60_txt}｜距250日高点 {m['dd250']:+.1f}%",
+        f"  量能：近5日均额/近120日峰值 = {m['vol_ratio']:.2f}（<0.33为地量）",
+        f"  动能：ADX {m['adx']:.1f}（前日 {m['adx_prev']:.1f}）｜+DI {m['pdi']:.1f} / -DI {m['mdi']:.1f}"
+        f" → {'单边' if m['adx'] >= 25 else '震荡'}市，{'多头' if m['trend'] == 'up' else '空头'}方向",
+        f"  右侧信号：{on('dilVolume', '地量')} {on('adx_break', 'ADX降破25')} {on('kdj_golden', '周线金叉')}"
+        + (f"（K={m['kdj_k']:.1f}）" if m.get('kdj_k') is not None else ""),
+        f"  ▶ 结论：{m['label']}·{m['fraction']} —— {m['reason']}",
+    ]
+    return "\n".join(lines)
+
+
+def render_report(results):
+    """整份富渲染报告：表头 + 每标的块 + 新触发提示。"""
+    out = [render_header(results[0]["date"]), ""]
+    for r in results:
+        out.append(render_instrument(r))
+        out.append("")
+    return "\n".join(out).rstrip()
+
+
 def analyze(secid, name):
     rows = fetch_kline(secid)
     if len(rows) < 70:
@@ -322,6 +362,10 @@ def monitor_main():
             adx_prev = adx_prev_raw[0]
             golden, kdj_k = kdj_golden_cross(weekly_kdj(weekly))
             dd250 = (closes[-1] / max(closes[-250:]) - 1) * 100
+            ma_pos = {}
+            for n in (20, 30, 60):
+                m_val = ma(closes, n)
+                ma_pos[n] = ((closes[-1] - m_val) / m_val * 100) if m_val else None
             signals = evaluate_phase_signals({
                 "vol_ratio": vol_ratio, "adx": adx_cur, "adx_prev": adx_prev,
                 "kdj_golden": golden, "kdj_k": kdj_k if kdj_k is not None else 100.0,
@@ -333,14 +377,20 @@ def monitor_main():
             })
             results.append({"name": name, "secid": secid,
                             "date": daily[-1]["date"], "close": closes[-1],
+                            "pct": daily[-1].get("pct", 0.0),
                             "label": label, "fraction": fraction, "reason": reason,
-                            "signals": signals})
+                            "signals": signals,
+                            "ma_pos": ma_pos, "vol_ratio": vol_ratio,
+                            "adx": adx_cur, "adx_prev": adx_prev,
+                            "pdi": pdi, "mdi": mdi,
+                            "dd250": dd250, "trend": "up" if pdi > mdi else "down",
+                            "kdj_k": kdj_k})
         except Exception as e:
             print(f"[{name}] 获取失败: {e}", file=sys.stderr)
 
     if not results:
         return
-    lines = ["📈 市况操作信号（%s）" % results[0]["date"]]
+    lines = [render_header(results[0]["date"]), ""]
     new_triggers = []
     for r in results:
         bell = ""
@@ -350,9 +400,14 @@ def monitor_main():
                 new_triggers.append(r)
             else:
                 bell = "（已推）"
-        lines.append(f"{r['name']} | 收{r['close']} | {r['label']}·{r['fraction']}{bell} | {r['reason']}")
-    print("\n".join(lines))
+        r = dict(r)
+        if bell:
+            r["reason"] = r["reason"] + bell
+        lines.append(render_instrument(r))
+        lines.append("")
+    print("\n".join(lines).rstrip())
     if new_triggers:
+        print()
         print("🔔 右侧三信号齐：地量+ADX降破25+周线金叉 → 买入信号，今日新触发")
         for r in new_triggers:
             record_push(state, r["secid"], r["date"])
