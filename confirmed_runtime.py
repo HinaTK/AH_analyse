@@ -11,32 +11,62 @@ GAP = D('0.015')
 
 
 class RegimeGate:
-    """网格×市况联动门控（2026-10-26 用户定，复盘159363单边下跌后落地）。
+    """统一四级门控（2026-10-26 合并 entry_timing 位置判定与 ADX 动能判定）。
 
-    单边下跌（ADX>=25 且 -DI>+DI，截至昨日收盘）→ 暂停该ETF的新格买入建议；
-    卖出建议保留。震荡/单边上涨不受影响。行情缺失 fail-open 不暂停。
+    级别：禁入（五线全破）> 暂停买（ADX>=25 且收盘<60日线）> 试错仓（破
+    1-4 条线）> 正常。从严者胜，任一级拦截即不生成买入建议；卖出保留。
+    均线判定复用 tools.etf_research.gate_check（与榜单同源，不重复实现）。
+    regime 无 bars 时退回纯 ADX 判定（向后兼容）；行情缺失 fail-open。
     """
 
     def __init__(self, regimes):
         self._regimes = regimes or {}
 
+    @staticmethod
+    def _adonly_blocks(regime):
+        return regime['adx'] >= 25 and regime.get('mdi', 0) > regime.get('pdi', 0)
+
+    def _unified(self, code):
+        """走 gate_check 的统一判定；返回 (blocks_buy, reason) 或 None。"""
+        r = self._regimes.get(code) or {}
+        bars = r.get('bars')
+        if bars is None:
+            return None
+        try:
+            from tools.etf_research.gate_check import gate
+            verdict = gate(bars, regime=r)
+        except Exception:
+            return None  # 判定失败：退回纯 ADX，不放大拦截范围
+        blocks = verdict['blocks_buy']
+        level_names = {'no_entry': '禁入（五线全破）', 'pause_buy': '暂停买（强动能跌势）'}
+        reason = f"{code} {level_names.get(verdict['level'], verdict['level'])}：{verdict['reason']}"
+        return blocks, reason
+
     def blocks_buy(self, code):
+        unified = self._unified(code)
+        if unified is not None:
+            return unified[0]
         r = self._regimes.get(code)
         if not r or r.get('adx') is None:
             return False  # fail-open：无数据不暂停
-        return r['adx'] >= 25 and r.get('mdi', 0) > r.get('pdi', 0)
+        return self._adonly_blocks(r)
 
     def reason(self, code):
+        unified = self._unified(code)
+        if unified is not None:
+            if unified[0]:
+                return unified[1]
+            return f"{code} 门控未触发暂停（{unified[1]}）"
         r = self._regimes.get(code)
         if not r or r.get('adx') is None:
             return f'{code} 市况未知（行情缺失，不暂停买入）'
-        if self.blocks_buy(code):
+        if self._adonly_blocks(r):
             return f"{code} 单边下跌（ADX={r['adx']:.1f}，-DI {r['mdi']:.0f} > +DI {r['pdi']:.0f}），暂停新格买入，卖出保留"
         return f"{code} 市况未触发暂停"
 
 
 def _fetch_regime_klines(code):
-    """拉取市况用的日K（截至昨日收盘：drop 今日未收K，ADX无未来函数）。"""
+    """拉取门控用的日K（截至昨日收盘：drop 今日未收K，ADX/均线均无未来函数）。"""
     import market_phase_check as mp
     rows = mp.fetch_kline(('1.' if code.startswith('sh') else '0.') + code[-6:], lmt=300, klt='101')
     # 盘中丢掉今日未收K（drop_unclosed_bar 在 entry_timing，不在 market_phase_check）
@@ -49,15 +79,21 @@ def _fetch_regime_klines(code):
 
 
 def fetch_daily_regime(code):
-    """算某ETF的市况（ADX/±DI）。失败返回 adx=None（fail-open）。"""
+    """算某ETF的市况（ADX/±DI + 同一批日K bars，供统一门控均线判定）。
+
+    2026-10-26 合并后：一次拉数，ADX 和均线共用同一事实源。
+    失败返回 adx=None（fail-open），bars 缺失时 RegimeGate 退回纯 ADX。
+    """
     try:
         from market_phase_check import wilder_adx
+        import pandas as pd
         rows = _fetch_regime_klines(code)
         result = wilder_adx(rows)
         if not result:
             return dict(adx=None)
         adx, pdi, mdi = result
-        return dict(adx=adx, pdi=pdi, mdi=mdi)
+        frame = pd.DataFrame(rows)
+        return dict(adx=adx, pdi=pdi, mdi=mdi, bars=frame)
     except Exception:
         return dict(adx=None)
 WARNING = ('条件建议，非可直接执行委托：sz159992 处于迁移退出模式（停买、停接回、只卖不买），'

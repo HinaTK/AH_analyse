@@ -180,6 +180,7 @@ def judge_entry(frame, asof=None):
         return result
     if close < ma[60]:
         below_count = sum(1 for period in (5, 10, 20, 30, 60) if close < ma[period])
+        result['below_count'] = below_count
         if below_count >= 5:
             result.update(verdict='no_entry', label=LABELS['no_entry'], exit_price=None)
             result['reasons'] = [

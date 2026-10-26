@@ -59,6 +59,46 @@ class RegimeGateTests(unittest.TestCase):
         self.assertFalse(gate.blocks_buy('sh589720'))
         self.assertIn('未知', gate.reason('sh589720'))
 
+
+class UnifiedGateTests(unittest.TestCase):
+    """2026-10-26 统一四级门控：RegimeGate 内部改走 gate_check。
+
+    位置（均线）与动能（ADX）合并判定，从严者胜——修复实测打架：
+    589720 五线全破但 ADX 17.3 曾被放行。
+    """
+
+    def _regime_with_lines(self, adx, closes):
+        """带日K的 regime：gate 需要在同一批 bars 上判均线。"""
+        dates = __import__('pandas').bdate_range('2026-06-01', periods=len(closes)).strftime('%Y-%m-%d')
+        frame = __import__('pandas').DataFrame({
+            'date': dates, 'open': closes, 'high': [c * 1.01 for c in closes],
+            'low': [c * 0.99 for c in closes], 'close': closes})
+        return dict(adx=adx, pdi=10, mdi=35, bars=frame)
+
+    def test_all_mas_broken_blocks_buy_even_with_weak_adx(self):
+        """五线全破（ADX 弱）：也必须拦——历史打架场景的修复。"""
+        closes = [10.0] * 75 + [8.5, 8.3, 8.1, 7.9, 7.7, 7.5]
+        gate = runtime.RegimeGate({'sh589720': self._regime_with_lines(17.3, closes)})
+        self.assertTrue(gate.blocks_buy('sh589720'))
+        self.assertIn('5日线', gate.reason('sh589720'))
+
+    def test_probe_with_strong_adx_blocks_buy(self):
+        """破部分线 + ADX>=25：暂停买。"""
+        closes = [10 + 0.02 * i for i in range(90)] + [11.0, 10.8, 10.6, 10.5, 10.9]
+        gate = runtime.RegimeGate({'sh589720': self._regime_with_lines(36.1, closes)})
+        self.assertTrue(gate.blocks_buy('sh589720'))
+
+    def test_probe_with_weak_adx_keeps_buy(self):
+        """破部分线 + ADX<25：不拦（试错仓不阻止网格接新格）。"""
+        closes = [10 + 0.02 * i for i in range(90)] + [11.0, 10.8, 10.6, 10.5, 10.9]
+        gate = runtime.RegimeGate({'sh589720': self._regime_with_lines(12.1, closes)})
+        self.assertFalse(gate.blocks_buy('sh589720'))
+
+    def test_regime_without_bars_falls_back_to_adx_only(self):
+        """无 bars 的旧格式 regime（向后兼容）：退回纯 ADX 判定。"""
+        gate = runtime.RegimeGate({'sh589720': _daily_regime(36.1, 10.9, 39.4)})
+        self.assertTrue(gate.blocks_buy('sh589720'))
+
     def test_plan_with_gate_drops_buy_keeps_sell(self):
         """plan() 集成：单边下跌ETF的买单被移除、卖单保留，且附暂停说明。"""
         with tempfile.TemporaryDirectory() as directory:
