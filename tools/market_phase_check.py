@@ -16,21 +16,95 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-# (secid, 名称) —— 东财 secid: 1=沪, 0=深
-INSTRUMENTS = [
+# (secid, 名称) —— 东财 secid: 1=沪, 0=深。指数为固定底座；持仓从账本动态读取。
+INDEX_INSTRUMENTS = [
     ("1.000001", "上证指数"),
     ("1.000300", "沪深300"),
     ("0.399006", "创业板指"),
     ("1.000688", "科创50"),
-    ("1.589720", "589720科创创新药ETF"),
-    ("0.159363", "159363创业板人工智能ETF"),
 ]
 
+HOLDINGS_PATH = Path(
+    "D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account/holdings.json"
+)
 
-def fetch_kline(secid: str, lmt: int = 300, klt: str = "101"):
+
+def build_instruments():
+    """4个指数 + 账本全部持仓（含迁移退出；159992等真实持仓的市况信号对清仓时机同样有意义）。"""
+    instruments = list(INDEX_INSTRUMENTS)
+    try:
+        holdings = json.loads(HOLDINGS_PATH.read_text(encoding="utf-8"))
+        for code, info in (holdings.get("holdings") or {}).items():
+            digits = code[-6:]
+            secid = ("1." if code.startswith("sh") else "0.") + digits
+            name = f"{digits}{info.get('name') or code}"
+            instruments.append((secid, name))
+    except (OSError, ValueError):
+        pass  # 账本读不到时保留指数底座
+    return instruments
+
+
+# 兼容旧引用：INSTRUMENTS 保持为函数结果（模块导入时求值一次）
+INSTRUMENTS = build_instruments()
+
+
+def tencent_symbol(secid):
+    """东财 secid → 腾讯代码：1.000001→sh000001，0.159363→sz159363。"""
+    market, digits = secid.split(".")
+    return ("sh" if market == "1" else "sz") + digits
+
+
+def fetch_tencent_kline(secid, lmt=300, klt="101"):
+    """腾讯日K/周K备用源（与网格系统同源，实测稳定）。
+
+    klt: 101=日线, 102=周线。param=code,period,start,end,count,fq（count 在第5位）。
+    返回与东财行结构一致的列表。
+    """
+    code = tencent_symbol(secid)
+    period = "week" if klt == "102" else "day"
+    count = min(lmt, 120) if klt == "102" else min(lmt, 300)
+    url = (f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?"
+           f"param={code},{period},,2030-12-31,{count},qfq")
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        data = json.loads(r.read().decode("utf-8"))
+    d = data.get("data")
+    if not isinstance(d, dict):
+        raise ValueError(f"腾讯K线返回结构异常: {type(d).__name__}")
+    node = d.get(code, {})
+    # 腾讯返回键：qfqday/day（日K）、qfqweek/week（周K），取第一个存在的
+    candidates = []
+    if klt == "102":
+        candidates = ["qfqweek", "week"]
+    else:
+        candidates = ["qfqday", "day"]
+    rows_raw = []
+    for key in candidates:
+        value = node.get(key)
+        if isinstance(value, list) and value:
+            rows_raw = value
+            break
+    rows = []
+    for p in rows_raw:
+        if not isinstance(p, (list, tuple)) or len(p) < 5:
+            continue
+        rows.append({
+            "date": p[0],
+            "open": float(p[1]), "close": float(p[2]),
+            "high": float(p[3]), "low": float(p[4]),
+            "volume": float(p[5]) if len(p) > 5 and p[5] else 0.0,
+            "amount": float(p[5]) * 100.0 if len(p) > 5 and p[5] else 0.0,  # 手→股近似，amount仅地量比值用（同源一致即可）
+            "pct": 0.0,
+        })
+    return rows
+
+
+def fetch_eastmoney(secid, lmt=300, klt="101"):
+    """东财主源（原 fetch_kline 逻辑）。"""
     params = {
         "secid": secid,
         "fields1": "f1,f2,f3,f4,f5,f6",
@@ -68,6 +142,14 @@ def fetch_kline(secid: str, lmt: int = 300, klt: str = "101"):
             "pct": float(p[8]),      # 涨跌幅 %
         })
     return rows
+
+
+def fetch_kline(secid: str, lmt: int = 300, klt: str = "101"):
+    """东财优先，失败自动切腾讯备用源（2026-10-26 用户要求加备用源）。"""
+    try:
+        return fetch_eastmoney(secid, lmt=lmt, klt=klt)
+    except Exception:
+        return fetch_tencent_kline(secid, lmt=lmt, klt=klt)
 
 
 def ma(closes, n, offset=0):
