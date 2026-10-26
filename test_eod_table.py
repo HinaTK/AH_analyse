@@ -121,5 +121,16 @@ class EodTableTests(unittest.TestCase):
             self.assertIn('**合计**', text.split('## 当日做T')[1].split('## 剩余')[0])
 
 
+
+    def test_render_eod_has_no_advice_section_after_close(self):
+        """2026-10-26 用户要求：收盘推送不再带"剩余操作建议"（收盘后建议无意义，归09:20盘前任务）。"""
+        import tempfile
+        import confirmed_runtime as runtime
+        with tempfile.TemporaryDirectory() as directory:
+            report = _build_report(Path(directory), TODAY_TRADES)
+            text = runtime.render_eod(report)
+            self.assertNotIn('剩余操作建议', text)
+            self.assertNotIn('条件卖', text)
+
 if __name__ == '__main__':
     unittest.main()

@@ -378,12 +378,7 @@ def render_eod(report):
                 f"| **{today_stats['buy_amount']}** | **{today_stats['sell_amount']}** |"
             )
 
-    # ④ 次日条件建议
-    lines.append('')
-    lines.append('## 剩余操作建议')
-    for action in report.get('actions', []):
-        direction = '买' if action['side'] == 'buy' else '卖'
-        lines.append(f"- {action['code']} {names.get(action['code'], '')} 条件{direction} {action['lot']}格 **{action['qty']:,}份** @ **{action['price']}**")
+    # 收盘推送不再带"剩余操作建议"（2026-10-26 用户要求：收盘后建议无意义，归09:20盘前任务）
     lines.append('')
     lines.append('来源：' + report.get('source', '腾讯日线和收盘快照交叉核验；仅已确认ETF状态'))
     return '\n'.join(lines)
