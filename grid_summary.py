@@ -142,6 +142,56 @@ def _summarize_one(acc: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _daily_stats(accs: list) -> dict[str, Any]:
+    """Per-day completed T rounds + trade counts, from trades and t_records.
+
+    A round lands on the SELL trade's date (round completes when the sell
+    fills). A rebuy without a same-day matching sell is a half-cycle and
+    never counts. Null dates are ignored entirely.
+    """
+    daily: dict[str, dict[str, Any]] = {}
+
+    def _bucket(day: str) -> dict[str, Any]:
+        if day not in daily:
+            daily[day] = {"rounds": 0, "t_net": Decimal("0"),
+                          "n_buys": 0, "n_sells": 0,
+                          "buy_amount": Decimal("0"), "sell_amount": Decimal("0")}
+        return daily[day]
+
+    for acc in accs:
+        trades = acc.get("trades", [])
+        for t in trades:
+            day = t.get("date")
+            if not day:
+                continue
+            bucket = _bucket(day)
+            if t["side"] == "buy":
+                bucket["n_buys"] += 1
+                bucket["buy_amount"] += Decimal(str(t["amount"]))
+            else:
+                bucket["n_sells"] += 1
+                bucket["sell_amount"] += Decimal(str(t["amount"]))
+        trade_by_id = {t["id"]: t for t in trades}
+        for rec in acc.get("t_records", []):
+            sell = trade_by_id.get(rec.get("sell_id"))
+            if not sell or not sell.get("date"):
+                continue
+            bucket = _bucket(sell["date"])
+            bucket["rounds"] += 1
+            bucket["t_net"] += Decimal(str(rec["net"]))
+    out: dict[str, dict[str, Any]] = {}
+    for day, bucket in sorted(daily.items()):
+        out[day] = {
+            "rounds": bucket["rounds"],
+            "t_net": _fmt(bucket["t_net"]),
+            "n_buys": bucket["n_buys"],
+            "n_sells": bucket["n_sells"],
+            "buy_amount": _fmt(bucket["buy_amount"]),
+            "sell_amount": _fmt(bucket["sell_amount"]),
+        }
+    return out
+
+
 def summarize_account(home: Path) -> dict[str, Any]:
     """Summarize every confirmed-*.json sub-ledger under `home`."""
     home = Path(home)
@@ -149,6 +199,7 @@ def summarize_account(home: Path) -> dict[str, Any]:
     if not files:
         raise FileNotFoundError(f"no confirmed-*.json sub-ledgers under {home}")
     etfs: dict[str, Any] = {}
+    accs: list = []
     totals = {
         "n_trades": 0, "n_buy": 0, "n_sell": 0,
         "qty": 0, "sellable_qty": 0, "t_rounds": 0,
@@ -161,6 +212,7 @@ def summarize_account(home: Path) -> dict[str, Any]:
         acc = load_account(f)
         if not _is_subledger(acc):
             continue
+        accs.append(acc)
         one = _summarize_one(acc)
         etfs[one["code"]] = one
         totals["n_trades"] += one["n_trades"]
@@ -185,7 +237,7 @@ def summarize_account(home: Path) -> dict[str, Any]:
                   "trading_days": count_trading_days(start, end)}
     totals["window"] = window
     totals["trading_days"] = window["trading_days"] if window else 0
-    return {"etfs": etfs, "totals": totals}
+    return {"etfs": etfs, "totals": totals, "daily": _daily_stats(accs)}
 
 
 def account_total_pnl(summary: dict, last_prices: dict) -> dict:
