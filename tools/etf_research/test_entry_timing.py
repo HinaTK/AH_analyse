@@ -47,7 +47,7 @@ def test_pullback_to_the_20_day_in_an_uptrend_is_not_rejected():
 
 
 def test_sustained_decline_below_all_averages_is_no_entry():
-    """单边阴跌：收盘低于全部五条均线 → 禁入（2026-10-23 规则变更后）。
+    """单边阴跌：收盘低于全部五条均线 → 暂停买入（2026-10-23 规则，2026-10-26 语义校准）。
 
     旧行为是 probe_only；按破线计数≥5 禁入的新规则，单边阴跌的
     最深形态（五线全压）不给试错仓。改用含小反弹的下跌序列验证
@@ -88,7 +88,7 @@ def test_stabilized_dip_under_a_rising_60_day_is_also_a_probe():
 
 
 def test_close_below_all_five_averages_is_no_entry():
-    """五线全破（收盘低于 ma5/10/20/30/60 全部）→ 禁入，不能试错。
+    """五线全破（收盘低于 ma5/10/20/30/60 全部）→ 暂停买入，不能试错。
 
     回归背景 2026-10-23：sz159615 五线全破仍判 probe_only，用户质疑
     "只判断一条日线就行了吗"。新规则：破线计数≥5 禁入；1-4 条试错。
@@ -96,8 +96,8 @@ def test_close_below_all_five_averages_is_no_entry():
     """
     closes = [10.0] * 75 + [8.5, 8.3, 8.1, 7.9, 7.7, 7.5]
     result = judge_entry(bars(closes))
-    assert result['verdict'] == 'no_entry', '五线全破必须禁入，不给试错仓'
-    assert any('5日线' in reason for reason in result['reasons']), '禁入原因要指明等站回5日线'
+    assert result['verdict'] == 'no_entry', '五线全破必须暂停买入，不给试错仓'
+    assert any('5日线' in reason for reason in result['reasons']), '暂停买入原因要指明等站回5日线'
     assert result.get('exit_price') is None, '禁入时不再给退出线（无仓位即无退出价）'
 
 
@@ -146,3 +146,17 @@ def test_prefix_code_routes_exchanges():
     assert prefix_code('510300') == 'sh510300'
     assert prefix_code('159363') == 'sz159363'
     assert prefix_code('830799') == 'bj830799'
+
+
+def test_no_entry_label_says_pause_buy_not_ban():
+    """2026-10-26 语义校准：五线全破的 label 必须是"暂停买入"而非"不能建仓"。
+
+    全池 573 次首次全破事件回测：39% 随后 20 日是赚钱的，"不能建仓/禁入"
+    言过其实；真实语义是"这个位置先不接，等站回 5 日线自动恢复"。
+    行为不变，只改人读文案。
+    """
+    closes = [10.0] * 75 + [8.5, 8.3, 8.1, 7.9, 7.7, 7.5]
+    result = judge_entry(bars(closes))
+    assert result['verdict'] == 'no_entry'
+    assert result['label'] == '暂停买入(五线全破)', (
+        'label 须表达"暂停"语义: got %r' % result['label'])

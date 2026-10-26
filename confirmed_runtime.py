@@ -13,7 +13,7 @@ GAP = D('0.015')
 class RegimeGate:
     """统一四级门控（2026-10-26 合并 entry_timing 位置判定与 ADX 动能判定）。
 
-    级别：禁入（五线全破）> 暂停买（ADX>=25 且收盘<60日线）> 试错仓（破
+    级别：暂停买入(五线全破) > 暂停买入(强动能跌势, ADX>=25且收盘<60日线) > 试错仓（破
     1-4 条线）> 正常。从严者胜，任一级拦截即不生成买入建议；卖出保留。
     均线判定复用 tools.etf_research.gate_check（与榜单同源，不重复实现）。
     regime 无 bars 时退回纯 ADX 判定（向后兼容）；行情缺失 fail-open。
@@ -38,7 +38,7 @@ class RegimeGate:
         except Exception:
             return None  # 判定失败：退回纯 ADX，不放大拦截范围
         blocks = verdict['blocks_buy']
-        level_names = {'no_entry': '禁入（五线全破）', 'pause_buy': '暂停买（强动能跌势）'}
+        level_names = {'no_entry': '暂停买入(五线全破)', 'pause_buy': '暂停买入(强动能跌势)'}
         reason = f"{code} {level_names.get(verdict['level'], verdict['level'])}：{verdict['reason']}"
         return blocks, reason
 

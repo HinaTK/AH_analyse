@@ -9,12 +9,12 @@ STATE_VERSION=research.VERSION+'-rotation-streak-v1'
 DEFAULT_STATE=Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account/rotation')/f'{STATE_VERSION}.json'
 # 榜单区块唯一标题：周报/摘要/测试三方共用，禁止任何一方手写。
 # 2026-10-24 教训：测试手写子串与实现表头不一致，误判功能缺失。
-ENTRY_BLOCK_TITLE='【可建仓候选·双规则过滤（五线全破禁入+近20日往返<2出榜，持仓豁免）】'
+ENTRY_BLOCK_TITLE='【可建仓候选·双规则过滤（五线全破暂停买入+近20日往返<2出榜，持仓豁免）】'
 
 def entry_rank_block(result, output, top_n=20, digest_n=3):
     """生成双规则榜单的两个渲染面：(完整周报行, 飞书精简摘要行)。
 
-    规则（2026-10-23 起）：五线全破禁入 + 候选近20日往返<2 出榜，
+    规则（2026-10-23 起，2026-10-26 语义校准）：五线全破暂停买入 + 候选近20日往返<2 出榜，
     持仓豁免保留。所有数字来自 rank_entries 的 rows——周报表格由
     entry_rank.render_markdown 原样渲染，摘要行也由本函数从 rows
     逐格生成，聊天层/推送层禁止改写任何数字（表格交付铁律）。
@@ -30,7 +30,7 @@ def entry_rank_block(result, output, top_n=20, digest_n=3):
         return [ENTRY_BLOCK_TITLE, warn], [ENTRY_BLOCK_TITLE, warn]
     rows = report['rows']
     excluded = report['excluded']
-    head = (f"asof {report['asof']} 入选 {len(rows)} 只；排除：时点禁入{excluded.get('timing', 0)}、"
+    head = (f"asof {report['asof']} 入选 {len(rows)} 只；排除：时点暂停买入{excluded.get('timing', 0)}、"
             f"近20日不足{excluded.get('recent20', 0)}、四窗口不全{excluded.get('incomplete', 0)}")
     if not rows:
         tail = '；无入选标的（候选全部被双规则过滤或无完整四窗口数据）。'

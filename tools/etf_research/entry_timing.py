@@ -37,7 +37,7 @@ DAILY_URL = (
 )
 LABELS = {
     'reject': '否决建仓',
-    'no_entry': '不能建仓',
+    'no_entry': '暂停买入(五线全破)',
     'probe_only': '仅试错仓',
     'full': '可以整仓',
     'wait': '等待触发',
@@ -185,7 +185,7 @@ def judge_entry(frame, asof=None):
             result.update(verdict='no_entry', label=LABELS['no_entry'], exit_price=None)
             result['reasons'] = [
                 f"收盘{close:.3f}低于全部五条均线（5/10/20/30/60日线：{'/'.join(f'{ma[period]:.3f}' for period in (5, 10, 20, 30, 60))}），破线计数{below_count}≥5",
-                f'禁入：等收盘先站回5日线{ma[5]:.3f}上方再重新评估',
+                f'暂停买入：五线全破。等收盘先站回5日线{ma[5]:.3f}上方，自动恢复可建仓',
             ]
             return result
         slope = f"60日线{ma[60]:.3f}，{SLOPE_DAYS}个交易日前为{ma60_prev:.3f}，{'仍在下行' if ma60_falling else '未下行'}"
