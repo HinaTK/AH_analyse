@@ -357,18 +357,25 @@ def render_eod(report):
             f"｜净投入合计 {totals.get('net_invested', '—')}"
         )
 
-        # ③ 当日做T表
+        # ③ 当日做T表（按ETF分桶，含合计行）
         today_stats = daily.get(asof)
         lines.append('')
         lines.append(f'## 当日做T（{asof}）')
         if not today_stats or (today_stats.get('rounds', 0) == 0 and today_stats.get('n_buys', 0) == 0 and today_stats.get('n_sells', 0) == 0):
             lines.append('当日无成交')
         else:
-            lines.append('| 轮数 | T净利 | 买入笔数 | 卖出笔数 | 买入金额 | 卖出金额 |')
-            lines.append('|---|---|---|---|---|---|')
+            lines.append('| ETF | 轮数 | T净利 | 买入笔数 | 卖出笔数 | 买入金额 | 卖出金额 |')
+            lines.append('|---|---|---|---|---|---|---|')
+            for code, eb in (today_stats.get('by_etf') or {}).items():
+                etf_name = etfs.get(code, {}).get('name', '')
+                lines.append(
+                    f"| {code} {etf_name} | {eb['rounds']} | {eb['t_net']} | {eb['n_buys']} "
+                    f"| {eb['n_sells']} | {eb['buy_amount']} | {eb['sell_amount']} |"
+                )
             lines.append(
-                f"| {today_stats['rounds']} | {today_stats['t_net']} | {today_stats['n_buys']} "
-                f"| {today_stats['n_sells']} | {today_stats['buy_amount']} | {today_stats['sell_amount']} |"
+                f"| **合计** | **{today_stats['rounds']}** | **{today_stats['t_net']}** "
+                f"| **{today_stats['n_buys']}** | **{today_stats['n_sells']}** "
+                f"| **{today_stats['buy_amount']}** | **{today_stats['sell_amount']}** |"
             )
 
     # ④ 次日条件建议

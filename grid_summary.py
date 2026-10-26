@@ -148,6 +148,9 @@ def _daily_stats(accs: list) -> dict[str, Any]:
     A round lands on the SELL trade's date (round completes when the sell
     fills). A rebuy without a same-day matching sell is a half-cycle and
     never counts. Null dates are ignored entirely.
+
+    Each day also carries a by_etf bucket: per-ETF rounds/t_net/buy/sell
+    counts and amounts for that day (user rule 2026-10-26).
     """
     daily: dict[str, dict[str, Any]] = {}
 
@@ -155,22 +158,36 @@ def _daily_stats(accs: list) -> dict[str, Any]:
         if day not in daily:
             daily[day] = {"rounds": 0, "t_net": Decimal("0"),
                           "n_buys": 0, "n_sells": 0,
-                          "buy_amount": Decimal("0"), "sell_amount": Decimal("0")}
+                          "buy_amount": Decimal("0"), "sell_amount": Decimal("0"),
+                          "by_etf": {}}
         return daily[day]
 
+    def _etf_bucket(day_bucket: dict, code: str) -> dict[str, Any]:
+        if code not in day_bucket["by_etf"]:
+            day_bucket["by_etf"][code] = {"rounds": 0, "t_net": Decimal("0"),
+                                          "n_buys": 0, "n_sells": 0,
+                                          "buy_amount": Decimal("0"), "sell_amount": Decimal("0")}
+        return day_bucket["by_etf"][code]
+
     for acc in accs:
+        code = acc.get("code", "")
         trades = acc.get("trades", [])
         for t in trades:
             day = t.get("date")
             if not day:
                 continue
             bucket = _bucket(day)
+            etf_bucket = _etf_bucket(bucket, code)
             if t["side"] == "buy":
                 bucket["n_buys"] += 1
                 bucket["buy_amount"] += Decimal(str(t["amount"]))
+                etf_bucket["n_buys"] += 1
+                etf_bucket["buy_amount"] += Decimal(str(t["amount"]))
             else:
                 bucket["n_sells"] += 1
                 bucket["sell_amount"] += Decimal(str(t["amount"]))
+                etf_bucket["n_sells"] += 1
+                etf_bucket["sell_amount"] += Decimal(str(t["amount"]))
         trade_by_id = {t["id"]: t for t in trades}
         for rec in acc.get("t_records", []):
             sell = trade_by_id.get(rec.get("sell_id"))
@@ -179,8 +196,22 @@ def _daily_stats(accs: list) -> dict[str, Any]:
             bucket = _bucket(sell["date"])
             bucket["rounds"] += 1
             bucket["t_net"] += Decimal(str(rec["net"]))
+            etf_bucket = _etf_bucket(bucket, code)
+            etf_bucket["rounds"] += 1
+            etf_bucket["t_net"] += Decimal(str(rec["net"]))
     out: dict[str, dict[str, Any]] = {}
     for day, bucket in sorted(daily.items()):
+        by_etf = {
+            code: {
+                "rounds": eb["rounds"],
+                "t_net": _fmt(eb["t_net"]),
+                "n_buys": eb["n_buys"],
+                "n_sells": eb["n_sells"],
+                "buy_amount": _fmt(eb["buy_amount"]),
+                "sell_amount": _fmt(eb["sell_amount"]),
+            }
+            for code, eb in sorted(bucket["by_etf"].items())
+        }
         out[day] = {
             "rounds": bucket["rounds"],
             "t_net": _fmt(bucket["t_net"]),
@@ -188,6 +219,7 @@ def _daily_stats(accs: list) -> dict[str, Any]:
             "n_sells": bucket["n_sells"],
             "buy_amount": _fmt(bucket["buy_amount"]),
             "sell_amount": _fmt(bucket["sell_amount"]),
+            "by_etf": by_etf,
         }
     return out
 

@@ -90,6 +90,36 @@ class EodTableTests(unittest.TestCase):
             text = runtime.render_eod(report)
             self.assertIn('当日无成交', text)
 
+    def test_daily_by_etf_bucket_present(self):
+        """daily[day]['by_etf'] 按ETF分桶，与总计一致（用户 2026-10-26 要求）。"""
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            report = _build_report(Path(directory), TODAY_TRADES)
+            daily = report['summary']['daily']['2026-10-26']
+            self.assertIn('by_etf', daily)
+            self.assertIn('sh589720', daily['by_etf'])
+            eb = daily['by_etf']['sh589720']
+            self.assertEqual(eb['rounds'], 1)
+            self.assertEqual(eb['t_net'], '118.00')
+            self.assertEqual(eb['n_buys'], 1)
+            self.assertEqual(eb['n_sells'], 1)
+            self.assertEqual(eb['buy_amount'], '7970.00')
+            self.assertEqual(eb['sell_amount'], '8090.00')
+            # 分桶合计 = 总计
+            self.assertEqual(eb['rounds'], daily['rounds'])
+            self.assertEqual(eb['t_net'], daily['t_net'])
+
+    def test_render_eod_daily_table_shows_etf_rows_and_totals(self):
+        import tempfile
+        import confirmed_runtime as runtime
+        with tempfile.TemporaryDirectory() as directory:
+            report = _build_report(Path(directory), TODAY_TRADES)
+            text = runtime.render_eod(report)
+            # 当日表有 ETF 行和合计行
+            self.assertIn('| ETF | 轮数 | T净利 |', text)
+            self.assertIn('sh589720', text.split('## 当日做T')[1].split('## 剩余')[0])
+            self.assertIn('**合计**', text.split('## 当日做T')[1].split('## 剩余')[0])
+
 
 if __name__ == '__main__':
     unittest.main()
