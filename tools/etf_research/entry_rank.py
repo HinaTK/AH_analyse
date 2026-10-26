@@ -79,6 +79,28 @@ def rank_entries(output_dir):
     return {'asof': result['summary']['asof'], 'rows': admitted, 'excluded': excluded, 'output': str(output_dir)}
 
 
+MIN_FULL_CYCLES = 10   # 与 rank_entries 建仓门槛一致
+MIN_RECENT20_CYCLES = 2  # 与 rank_entries 近20日门槛一致
+
+
+def window_matrix_label(row):
+    """双窗口判断矩阵标注（2026-10-26 用户定，四档）。
+
+    阈值与建仓门槛完全一致，禁止另立标准。
+    """
+    full = row.get('full_cycles') or 0
+    r20 = row.get('recent20_cycles') or 0
+    full_high = full >= MIN_FULL_CYCLES
+    r20_high = r20 >= MIN_RECENT20_CYCLES
+    if full_high and r20_high:
+        return '✅双高'
+    if full_high and not r20_high:
+        return '⏳等信号'
+    if not full_high and r20_high:
+        return '⚠️脉冲'
+    return '❌死水'
+
+
 def render_markdown(report, top_n=10):
     """把 rank_entries 的 report 渲染成 markdown 表格。
 
@@ -91,15 +113,16 @@ def render_markdown(report, top_n=10):
     lines = [
         f"asof {report['asof']} 入选 {len(report['rows'])} 只 排除 {report['excluded']}",
         '',
-        '| 名次 | 代码 | 名称 | 资格 | 63日往返 | 净差价 | 近20日往返 | 资金效率% |',
-        '|---:|---|---|---|---:|---:|---:|---:|',
+        '| 名次 | 代码 | 名称 | 资格 | 判断 | 63日往返 | 净差价 | 近20日往返 | 资金效率% |',
+        '|---:|---|---|---|---|---:|---:|---:|---:|',
     ]
     for row in rows:
-        lines.append('| {} | {} | {} | {} | {:g} | {:,.2f} | {:g} | {:.2f} |'.format(
+        lines.append('| {} | {} | {} | {} | {} | {:g} | {:,.2f} | {:g} | {:.2f} |'.format(
             row['rank'],
             row['code'],
             row['name'],
             row['label'],
+            window_matrix_label(row),
             row['full_cycles'] or 0,
             row['full_cycle_net'] or 0.0,
             row['recent20_cycles'] or 0,
