@@ -296,27 +296,88 @@ def eod_report(root, now, quotes, bars):
         if rows[-1]['date'] != now.date().isoformat() or not close.is_finite() or close <= 0 or abs(close - D(quotes[code]['last'])) > max(D('0.002'), close * D('0.005')):
             raise ValueError('日线与当日收盘快照不一致')
         decisions[code] = dict(close=str(close), qty=state['qty'], sellable_qty=state['sellable_qty'], max_grid=state['max_grid'], net_invested=state['net_invested'], net_unit_cost=state['net_unit_cost'], t_net=state['t_net'], completed_cycles=len(state['t_records']), reason='上移基准评估未验证，保持不改参数；历史日期不补造，未知日期周期不推导20日效率，禁止自动上移/换仓')
-    return dict(asof=now.date().isoformat(), policy_version='confirmed-grid-1.5-v1', executable=False, cash=None, warning=WARNING, decisions=decisions, actions=ticket['actions'], state_hashes={code:hashlib.sha256(json.dumps(state,sort_keys=True,ensure_ascii=False).encode()).hexdigest() for code,state in ticket['states'].items()}, names=ticket.get('names'), source='腾讯日线和收盘快照交叉核验；仅已确认ETF状态')
+    summary = None
+    try:
+        from grid_summary import summarize_account
+        summary = summarize_account(root)
+    except (OSError, ValueError):
+        summary = None  # 汇总失败不阻断收盘报告，渲染层会标注
+    return dict(asof=now.date().isoformat(), policy_version='confirmed-grid-1.5-v1', executable=False, cash=None, warning=WARNING, decisions=decisions, actions=ticket['actions'], summary=summary, state_hashes={code:hashlib.sha256(json.dumps(state,sort_keys=True,ensure_ascii=False).encode()).hexdigest() for code,state in ticket['states'].items()}, names=ticket.get('names'), source='腾讯日线和收盘快照交叉核验；仅已确认ETF状态')
 
 
 def render_eod(report):
-    """Human-readable EOD summary for Feishu delivery; never a broker order."""
+    """Human-readable EOD summary for Feishu delivery; never a broker order.
+
+    表格化输出（2026-10-26 用户要求）：持仓概览表 + 累计做T表 + 当日做T表，
+    全部数据来自 report['summary']（grid_summary 模块产出），不手拼数字。
+    """
     lines = ['【收盘效率与轮换检查 ' + report.get('asof', '') + '】']
     warning = report.get('warning', '')
     if warning:
         lines.append('⚠️ ' + warning)
     names = report.get('names') or {}
+    asof = report.get('asof', '')
+
+    # ① 持仓概览表
+    lines.append('')
+    lines.append('## 持仓概览')
+    lines.append('| ETF | 收盘 | 持有 | 可卖 | 最大格 | 净投入 | T净利 | 完成T轮 |')
+    lines.append('|---|---|---|---|---|---|---|---|')
     for code, d in report.get('decisions', {}).items():
-        name = names.get(code, '')
         lines.append(
-            f"{code} {name} 收盘={d['close']} 持有={d['qty']:,} 可卖={d['sellable_qty']:,} "
-            f"最大格={d['max_grid']} 净投入={d['net_invested']} 单位成本={d['net_unit_cost']} "
-            f"T净收益={d['t_net']} 完成T={d['completed_cycles']}"
+            f"| {code} {names.get(code, '')} | {d['close']} | {d['qty']:,} | {d['sellable_qty']:,} "
+            f"| {d['max_grid']} | {d['net_invested']} | {d['t_net']} | {d['completed_cycles']} |"
         )
+
+    summary = report.get('summary')
+    if summary is None:
+        lines.append('')
+        lines.append('⚠️ 汇总数据不可用（账本读取失败），做T表省略')
+    else:
+        etfs = summary.get('etfs', {})
+        daily = summary.get('daily', {})
+        totals = summary.get('totals', {})
+
+        # ② 累计做T表
+        lines.append('')
+        lines.append('## 累计做T')
+        lines.append('| ETF | T轮数 | 毛利 | 双边佣金 | T净利 |')
+        lines.append('|---|---|---|---|---|')
+        for code, e in etfs.items():
+            lines.append(
+                f"| {code} {e['name']} | {e['t_rounds']} | {e['t_gross']} | {e['t_fees']} | {e['t_net']} |"
+            )
+        window = totals.get('window') or {}
+        lines.append(
+            f"| **合计** | **{totals.get('t_rounds', 0)}** | **{totals.get('t_gross', '0.00')}** "
+            f"| **{totals.get('t_fees', '0.00')}** | **{totals.get('t_net', '0.00')}** |"
+        )
+        lines.append(
+            f"区间 {window.get('start', '—')} → {window.get('end', '—')}｜交易日 {totals.get('trading_days', 0)} 天"
+            f"｜净投入合计 {totals.get('net_invested', '—')}"
+        )
+
+        # ③ 当日做T表
+        today_stats = daily.get(asof)
+        lines.append('')
+        lines.append(f'## 当日做T（{asof}）')
+        if not today_stats or (today_stats.get('rounds', 0) == 0 and today_stats.get('n_buys', 0) == 0 and today_stats.get('n_sells', 0) == 0):
+            lines.append('当日无成交')
+        else:
+            lines.append('| 轮数 | T净利 | 买入笔数 | 卖出笔数 | 买入金额 | 卖出金额 |')
+            lines.append('|---|---|---|---|---|---|')
+            lines.append(
+                f"| {today_stats['rounds']} | {today_stats['t_net']} | {today_stats['n_buys']} "
+                f"| {today_stats['n_sells']} | {today_stats['buy_amount']} | {today_stats['sell_amount']} |"
+            )
+
+    # ④ 次日条件建议
+    lines.append('')
+    lines.append('## 剩余操作建议')
     for action in report.get('actions', []):
         direction = '买' if action['side'] == 'buy' else '卖'
-        name = names.get(action['code'], '')
-        lines.append(f"- {action['code']} {name} 条件{direction} {action['lot']}格 **{action['qty']:,}份** @ **{action['price']}**")
+        lines.append(f"- {action['code']} {names.get(action['code'], '')} 条件{direction} {action['lot']}格 **{action['qty']:,}份** @ **{action['price']}**")
+    lines.append('')
     lines.append('来源：' + report.get('source', '腾讯日线和收盘快照交叉核验；仅已确认ETF状态'))
     return '\n'.join(lines)
 
