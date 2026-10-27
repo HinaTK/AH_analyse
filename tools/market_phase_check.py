@@ -89,17 +89,26 @@ def fetch_tencent_kline(secid, lmt=300, klt="101"):
             rows_raw = value
             break
     rows = []
+    prev_close = None
     for p in rows_raw:
         if not isinstance(p, (list, tuple)) or len(p) < 5:
             continue
+        close = float(p[2])
+        # 腾讯行不带涨跌幅：用前收盘推算（2026-10-27 修复——旧版硬编码 pct=0
+        # 会把备用源数据渲染成误导性的 +0.00%）
+        if prev_close is not None and prev_close != 0:
+            pct = (close / prev_close - 1) * 100
+        else:
+            pct = None
         rows.append({
             "date": p[0],
-            "open": float(p[1]), "close": float(p[2]),
+            "open": float(p[1]), "close": close,
             "high": float(p[3]), "low": float(p[4]),
             "volume": float(p[5]) if len(p) > 5 and p[5] else 0.0,
             "amount": float(p[5]) * 100.0 if len(p) > 5 and p[5] else 0.0,  # 手→股近似，amount仅地量比值用（同源一致即可）
-            "pct": 0.0,
+            "pct": pct,
         })
+        prev_close = close
     return rows
 
 
@@ -306,39 +315,75 @@ def build_alert(results):
 
 
 def render_header(date):
-    """富渲染表头：带口径说明，让人不查文档也看得懂。"""
+    """富渲染表头：带口径说明，让人不查文档也看得懂（2026-10-27 起两段式：先汇总表）。"""
     return (
         f"📈 市况操作信号（{date}）\n"
-        "右侧三信号 = 地量(近5日均额<峰值1/3) + ADX从≥25降破25(单边动能死) + 周线KDJ金叉K<50(底部金叉)；\n"
+        "右侧三信号 = ●地量(近5日均额<峰值1/3) + ●ADX从≥25降破25(单边动能死) + ●周线KDJ金叉K<50(底部金叉)；\n"
         "三信号齐→🔔买入信号。成数指方向仓/新开仓目标，不是清仓网格；网格挂单照常由09:20任务管。"
     )
 
 
+def _signal_dots(sig):
+    """三信号亮灭压缩成 ●/○ 记号串：地量·ADX降破25·周线金叉。
+
+    注意：链式三元 + 字符串拼接有优先级坑，必须逐个显式拼接。
+    """
+    d1 = "●" if sig.get("dilVolume") else "○"
+    d2 = "●" if sig.get("adx_break") else "○"
+    d3 = "●" if sig.get("kdj_golden") else "○"
+    return d1 + d2 + d3
+
+
+def render_summary_table(results):
+    """全标的汇总表（2026-10-27 用户要求：分段+表格整理）。
+
+    铁律：每个单元格的值只能取自 results 里对应条目的字段，禁止手拼数字。
+    """
+    lines = [
+        "| 标的 | 收盘 | 涨跌 | 动作·成数 | 三信号 | 一句理由 |",
+        "|---|---:|---:|---|:---:|---|",
+    ]
+    for m in results:
+        sig = m.get("signals") or {}
+        dots = _signal_dots(sig)
+        lines.append("| {} | {:.2f} | {:+.2f}% | {}·{} | {} | {} |".format(
+            m["name"], m["close"], m.get("pct", 0.0),
+            m["label"], m["fraction"], dots, m["reason"],
+        ))
+    return "\n".join(lines)
+
+
 def render_instrument(m):
-    """单标的富渲染：关键读数全量输出（2026-10-26 用户要求：简报看不出是什么）。"""
+    """单标的读数块（2026-10-27 收紧为3行：信息不降级，行数减半）。
+
+    数字全部来自 m 的字段；None 显示 —。
+    """
     sig = m.get("signals") or {}
-    on = lambda key, label: (f"✅{label}" if sig.get(key) else f"○{label}未亮")
+    on = lambda key, label: (f"●{label}" if sig.get(key) else f"○{label}未亮")
     ma = m.get("ma_pos") or {}
     ma20 = ma.get(20)
     ma60 = ma.get(60)
     ma20_txt = f"{ma20:+.1f}%" if ma20 is not None else "—"
     ma60_txt = f"{ma60:+.1f}%" if ma60 is not None else "—"
+    kdj_txt = f"（K={m['kdj_k']:.1f}）" if m.get("kdj_k") is not None else ""
     lines = [
         f"【{m['name']}】收 {m['close']:.2f}（{m.get('pct', 0):+.2f}%）",
-        f"  均线：MA20 {ma20_txt}｜MA60 {ma60_txt}｜距250日高点 {m['dd250']:+.1f}%",
-        f"  量能：近5日均额/近120日峰值 = {m['vol_ratio']:.2f}（<0.33为地量）",
+        f"  均线/回撤：MA20 {ma20_txt}｜MA60 {ma60_txt}｜距250日高点 {m['dd250']:+.1f}%｜"
+        f"量能比 {m['vol_ratio']:.2f}（<0.33地量）",
         f"  动能：ADX {m['adx']:.1f}（前日 {m['adx_prev']:.1f}）｜+DI {m['pdi']:.1f} / -DI {m['mdi']:.1f}"
         f" → {'单边' if m['adx'] >= 25 else '震荡'}市，{'多头' if m['trend'] == 'up' else '空头'}方向",
-        f"  右侧信号：{on('dilVolume', '地量')} {on('adx_break', 'ADX降破25')} {on('kdj_golden', '周线金叉')}"
-        + (f"（K={m['kdj_k']:.1f}）" if m.get('kdj_k') is not None else ""),
+        f"  右侧信号：{on('dilVolume', '地量')} {on('adx_break', 'ADX降破25')} {on('kdj_golden', '周线金叉')}{kdj_txt}",
         f"  ▶ 结论：{m['label']}·{m['fraction']} —— {m['reason']}",
     ]
     return "\n".join(lines)
 
 
 def render_report(results):
-    """整份富渲染报告：表头 + 每标的块 + 新触发提示。"""
-    out = [render_header(results[0]["date"]), ""]
+    """整份报告两段式：表头口径 → 全标的汇总表 → 关键读数分节（每标的一块）→ 新触发提示。"""
+    out = [render_header(results[0]["date"]), "",
+           render_summary_table(results), "",
+           "【关键读数】",
+           ""]
     for r in results:
         out.append(render_instrument(r))
         out.append("")
@@ -459,7 +504,7 @@ def monitor_main():
             })
             results.append({"name": name, "secid": secid,
                             "date": daily[-1]["date"], "close": closes[-1],
-                            "pct": daily[-1].get("pct", 0.0),
+            "pct": daily[-1].get("pct") if daily[-1].get("pct") is not None else 0.0,
                             "label": label, "fraction": fraction, "reason": reason,
                             "signals": signals,
                             "ma_pos": ma_pos, "vol_ratio": vol_ratio,
@@ -472,7 +517,9 @@ def monitor_main():
 
     if not results:
         return
-    lines = [render_header(results[0]["date"]), ""]
+    # render_report 已含全部标的块；这里只负责给触发标的加铃铛再重组装，
+    # 严禁再逐标的 append（2026-10-27 修复：旧循环把块输出两遍）
+    enriched = []
     new_triggers = []
     for r in results:
         bell = ""
@@ -485,9 +532,8 @@ def monitor_main():
         r = dict(r)
         if bell:
             r["reason"] = r["reason"] + bell
-        lines.append(render_instrument(r))
-        lines.append("")
-    print("\n".join(lines).rstrip())
+        enriched.append(r)
+    print(render_report(enriched))
     if new_triggers:
         print()
         print("🔔 右侧三信号齐：地量+ADX降破25+周线金叉 → 买入信号，今日新触发")

@@ -54,9 +54,9 @@ class MonitorRenderTests(unittest.TestCase):
         """三个信号必须显式亮/未亮，不是只在触发时才提。"""
         text = mp.render_instrument(_metrics())
         self.assertIn('未亮', text)
-        # 地量阈值内则亮
+        # 地量阈值内则亮（2026-10-27 记号由 ✅ 改为 ●，与汇总表 ●/○ 一致）
         text2 = mp.render_instrument(_metrics(vol_ratio=0.30))
-        self.assertIn('✅地量', text2)
+        self.assertIn('●地量', text2)
 
     def test_render_header_explains_semantics(self):
         """表头带一句口径说明：右侧三信号是什么、成数指什么。"""
