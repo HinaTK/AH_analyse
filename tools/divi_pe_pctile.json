@@ -1,0 +1,386 @@
+[
+ {
+  "code": "sh601398",
+  "name": "工商银行",
+  "sector": "银行",
+  "pe_now": 8.21,
+  "pe_pct5y": 100.0,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601939",
+  "name": "建设银行",
+  "sector": "银行",
+  "pe_now": 8.9,
+  "pe_pct5y": 100.0,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601288",
+  "name": "农业银行",
+  "sector": "银行",
+  "pe_now": 8.69,
+  "pe_pct5y": 82.8,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601988",
+  "name": "中国银行",
+  "sector": "银行",
+  "pe_now": 9.08,
+  "pe_pct5y": 98.6,
+  "n_days": 2500
+ },
+ {
+  "code": "sh600036",
+  "name": "招商银行",
+  "sector": "银行",
+  "pe_now": 7.15,
+  "pe_pct5y": 69.0,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601166",
+  "name": "兴业银行",
+  "sector": "银行",
+  "pe_now": 5.36,
+  "pe_pct5y": 49.8,
+  "n_days": 2500
+ },
+ {
+  "code": "sh600015",
+  "name": "华夏银行",
+  "sector": "银行",
+  "pe_now": 4.05,
+  "pe_pct5y": 34.0,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601818",
+  "name": "光大银行",
+  "sector": "银行",
+  "pe_now": 5.53,
+  "pe_pct5y": 83.6,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601838",
+  "name": "成都银行",
+  "sector": "银行",
+  "pe_now": 5.97,
+  "pe_pct5y": 78.8,
+  "n_days": 2500
+ },
+ {
+  "code": "sz000001",
+  "name": "平安银行",
+  "sector": "银行",
+  "pe_now": 5.12,
+  "pe_pct5y": 64.0,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601229",
+  "name": "上海银行",
+  "sector": "银行",
+  "pe_now": 5.58,
+  "pe_pct5y": 34.8,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601916",
+  "name": "浙商银行",
+  "sector": "银行",
+  "pe_now": 6.21,
+  "pe_pct5y": 79.0,
+  "n_days": 2000
+ },
+ {
+  "code": "sh600016",
+  "name": "民生银行",
+  "sector": "银行",
+  "pe_now": 5.4,
+  "pe_pct5y": 36.2,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601088",
+  "name": "中国神华",
+  "sector": "煤炭",
+  "pe_now": 19.66,
+  "pe_pct5y": 93.6,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601225",
+  "name": "陕西煤业",
+  "sector": "煤炭",
+  "pe_now": 12.78,
+  "pe_pct5y": 69.8,
+  "n_days": 2500
+ },
+ {
+  "code": "sh600188",
+  "name": "兖矿能源",
+  "sector": "煤炭",
+  "pe_now": 17.51,
+  "pe_pct5y": 67.6,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601857",
+  "name": "中国石油",
+  "sector": "石油",
+  "pe_now": 13.72,
+  "pe_pct5y": 92.4,
+  "n_days": 2500
+ },
+ {
+  "code": "sh600028",
+  "name": "中国石化",
+  "sector": "石油",
+  "pe_now": 18.5,
+  "pe_pct5y": 70.2,
+  "n_days": 2500
+ },
+ {
+  "code": "sh600938",
+  "name": "中国海油",
+  "sector": "石油",
+  "pe_now": 12.11,
+  "pe_pct5y": 77.0,
+  "n_days": 1500
+ },
+ {
+  "code": "sh600011",
+  "name": "华能国际",
+  "sector": "电力",
+  "pe_now": 9.58,
+  "pe_pct5y": 47.0,
+  "n_days": 2500
+ },
+ {
+  "code": "sh600900",
+  "name": "长江电力",
+  "sector": "电力",
+  "pe_now": 20.16,
+  "pe_pct5y": 51.0,
+  "n_days": 2500
+ },
+ {
+  "code": "sh600886",
+  "name": "国投电力",
+  "sector": "电力",
+  "pe_now": 17.85,
+  "pe_pct5y": 86.2,
+  "n_days": 2500
+ },
+ {
+  "code": "sh600023",
+  "name": "浙能电力",
+  "sector": "电力",
+  "pe_now": 12.54,
+  "pe_pct5y": 96.8,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601985",
+  "name": "中国核电",
+  "sector": "电力",
+  "pe_now": 26.84,
+  "pe_pct5y": 99.6,
+  "n_days": 2500
+ },
+ {
+  "code": "sh600941",
+  "name": "中国移动",
+  "sector": "电信",
+  "pe_now": 17.08,
+  "pe_pct5y": 76.6,
+  "n_days": 1500
+ },
+ {
+  "code": "sh601728",
+  "name": "中国电信",
+  "sector": "电信",
+  "pe_now": 22.22,
+  "pe_pct5y": 96.2,
+  "n_days": 1500
+ },
+ {
+  "code": "sh600050",
+  "name": "中国联通",
+  "sector": "电信",
+  "pe_now": 19.84,
+  "pe_pct5y": 93.8,
+  "n_days": 2500
+ },
+ {
+  "code": "sh600519",
+  "name": "贵州茅台",
+  "sector": "白酒",
+  "pe_now": 20.81,
+  "pe_pct5y": 61.4,
+  "n_days": 2500
+ },
+ {
+  "code": "sz000858",
+  "name": "五粮液",
+  "sector": "白酒",
+  "pe_now": 22.36,
+  "pe_pct5y": 50.0,
+  "n_days": 2500
+ },
+ {
+  "code": "sh600809",
+  "name": "山西汾酒",
+  "sector": "白酒",
+  "pe_now": 13.58,
+  "pe_pct5y": 13.0,
+  "n_days": 2500
+ },
+ {
+  "code": "sz000651",
+  "name": "格力电器",
+  "sector": "家电",
+  "pe_now": 8.26,
+  "pe_pct5y": 93.8,
+  "n_days": 2500
+ },
+ {
+  "code": "sz000333",
+  "name": "美的集团",
+  "sector": "家电",
+  "pe_now": 14.62,
+  "pe_pct5y": 75.0,
+  "n_days": 2500
+ },
+ {
+  "code": "sh600690",
+  "name": "海尔智家",
+  "sector": "家电",
+  "pe_now": 10.09,
+  "pe_pct5y": 4.4,
+  "n_days": 2500
+ },
+ {
+  "code": "sz000895",
+  "name": "双汇发展",
+  "sector": "食品",
+  "pe_now": 16.3,
+  "pe_pct5y": 13.4,
+  "n_days": 2500
+ },
+ {
+  "code": "sh600887",
+  "name": "伊利股份",
+  "sector": "食品",
+  "pe_now": 18.05,
+  "pe_pct5y": 51.6,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601668",
+  "name": "中国建筑",
+  "sector": "建筑",
+  "pe_now": 5.98,
+  "pe_pct5y": 100.0,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601390",
+  "name": "中国中铁",
+  "sector": "建筑",
+  "pe_now": 5.3,
+  "pe_pct5y": 41.0,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601800",
+  "name": "中国交建",
+  "sector": "建筑",
+  "pe_now": 8.02,
+  "pe_pct5y": 94.0,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601006",
+  "name": "大秦铁路",
+  "sector": "交通",
+  "pe_now": 16.21,
+  "pe_pct5y": 69.6,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601816",
+  "name": "京沪高铁",
+  "sector": "交通",
+  "pe_now": 18.56,
+  "pe_pct5y": 27.6,
+  "n_days": 2000
+ },
+ {
+  "code": "sh600018",
+  "name": "上港集团",
+  "sector": "交通",
+  "pe_now": 9.08,
+  "pe_pct5y": 76.4,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601919",
+  "name": "中远海控",
+  "sector": "航运",
+  "pe_now": 9.44,
+  "pe_pct5y": 90.6,
+  "n_days": 2500
+ },
+ {
+  "code": "sz000538",
+  "name": "云南白药",
+  "sector": "医药",
+  "pe_now": 18.26,
+  "pe_pct5y": 23.4,
+  "n_days": 2500
+ },
+ {
+  "code": "sz000157",
+  "name": "中联重科",
+  "sector": "机械",
+  "pe_now": 12.35,
+  "pe_pct5y": 2.2,
+  "n_days": 2500
+ },
+ {
+  "code": "sh600803",
+  "name": "新奥股份",
+  "sector": "燃气",
+  "pe_now": 14.34,
+  "pe_pct5y": 86.4,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601318",
+  "name": "中国平安",
+  "sector": "保险",
+  "pe_now": 5.98,
+  "pe_pct5y": 2.4,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601601",
+  "name": "中国太保",
+  "sector": "保险",
+  "pe_now": 5.04,
+  "pe_pct5y": 1.6,
+  "n_days": 2500
+ },
+ {
+  "code": "sh601628",
+  "name": "中国人寿",
+  "sector": "保险",
+  "pe_now": 4.01,
+  "pe_pct5y": 2.0,
+  "n_days": 2500
+ }
+]
