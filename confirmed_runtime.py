@@ -65,9 +65,32 @@ class RegimeGate:
         return f"{code} 市况未触发暂停"
 
 
+def _load_market_phase_check():
+    """加载 market_phase_check（模块在 tools/ 下）。
+
+    2026-10-27 cron 事故：函数内 `import market_phase_check`（顶层名）在
+    cron 环境（sys.path 只有仓库根目录）抛 ImportError，被外层 except
+    吞掉 → dict(adx=None) 不带 bars → 门控静默失效（09:20 推了买入）。
+    正确定位顺序：tools 子包 → tools 目录加 path → 顶层名兜底。
+    """
+    try:
+        from tools import market_phase_check as mp  # 仓库根目录在 path 时
+        return mp
+    except ImportError:
+        pass
+    import importlib
+    for candidate in (Path(__file__).resolve().parent / 'tools',):
+        if (candidate / 'market_phase_check.py').is_file():
+            if str(candidate) not in sys.path:
+                sys.path.insert(0, str(candidate))
+            return importlib.import_module('market_phase_check')
+    import market_phase_check as mp  # 开发环境兜底
+    return mp
+
+
 def _fetch_regime_klines(code):
     """拉取门控用的日K（截至昨日收盘：drop 今日未收K，ADX/均线均无未来函数）。"""
-    import market_phase_check as mp
+    mp = _load_market_phase_check()
     rows = mp.fetch_kline(('1.' if code.startswith('sh') else '0.') + code[-6:], lmt=300, klt='101')
     # 盘中丢掉今日未收K（drop_unclosed_bar 在 entry_timing，不在 market_phase_check）
     from datetime import datetime, timezone, timedelta
@@ -82,20 +105,24 @@ def fetch_daily_regime(code):
     """算某ETF的市况（ADX/±DI + 同一批日K bars，供统一门控均线判定）。
 
     2026-10-26 合并后：一次拉数，ADX 和均线共用同一事实源。
-    失败返回 adx=None（fail-open），bars 缺失时 RegimeGate 退回纯 ADX。
+    2026-10-27 修复：ADX 算不出时仍返回 bars（五线判定只吃日线），
+    只有日线本身拿不到才 dict(adx=None)——不让 ADX 的失败拖死均线判定。
     """
+    import pandas as pd
     try:
-        from market_phase_check import wilder_adx
-        import pandas as pd
         rows = _fetch_regime_klines(code)
-        result = wilder_adx(rows)
-        if not result:
-            return dict(adx=None)
-        adx, pdi, mdi = result
-        frame = pd.DataFrame(rows)
-        return dict(adx=adx, pdi=pdi, mdi=mdi, bars=frame)
     except Exception:
         return dict(adx=None)
+    frame = pd.DataFrame(rows)
+    adx = pdi = mdi = None
+    try:
+        mp = _load_market_phase_check()
+        result = mp.wilder_adx(rows)
+        if result:
+            adx, pdi, mdi = result
+    except Exception:
+        pass  # ADX 失败：bars 照带，五线判定不受影响
+    return dict(adx=adx, pdi=pdi, mdi=mdi, bars=frame)
 WARNING = ('条件建议，非可直接执行委托：sz159992 处于迁移退出模式（停买、停接回、只卖不买），'
            '00:01 已同步可卖份额；账户现金、银河冻结及在途委托未对账，不自动下单，触价不等于成交。')
 DAILY_BAR_SOURCES = (
