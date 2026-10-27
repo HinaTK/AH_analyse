@@ -9,6 +9,7 @@
 import subprocess
 import sys
 import re
+import time
 import urllib.request
 from datetime import datetime, timedelta
 
@@ -133,22 +134,29 @@ def main():
 
     prices = realtime_prices([c for c, _, _ in pool])
     results = []
+    failed = []
     for code, name, sector in pool:
-        try:
-            dps, n = ttm_dps(code)
-            for _ in range(2):  # westock 偶发限流返回空表，重试
+        dps = n = None
+        for attempt in range(4):  # westock 偶发限流返回空表，退避重试
+            try:
+                dps, n = ttm_dps(code)
                 if n > 0:
                     break
-                dps, n = ttm_dps(code)
-            px = prices.get(code)
-            if dps > 0 and px:
-                results.append({
-                    "code": code, "name": name, "sector": sector,
-                    "price": px, "dps": dps, "n": n,
-                    "yield": dps / px * 100,
-                })
-        except Exception as e:
-            print(f"<!-- {code} {name}: 取数失败 {e} -->", file=sys.stderr)
+                time.sleep(1.5 * attempt)
+            except Exception as e:
+                time.sleep(1.5 * attempt)
+                last_err = e
+        else:
+            failed.append(f"{code} {name}: {locals().get('last_err', '空结果')}")
+        px = prices.get(code)
+        if dps and n and dps > 0 and px:
+            results.append({
+                "code": code, "name": name, "sector": sector,
+                "price": px, "dps": dps, "n": n,
+                "yield": dps / px * 100,
+            })
+    if failed:
+        print(f"<!-- 取数失败: {'; '.join(failed)} -->", file=sys.stderr)
     results.sort(key=lambda r: -r["yield"])
 
     if top:
