@@ -5,19 +5,26 @@
 两套判定重复且打架（实测 589720 五线全破但 ADX 17.3 放行）。合并规则：
 
     暂停买入  收盘 < ma5/10/20/30/60 全部（五线全破）      → 拦
-    暂停买   ADX>=25 且 -DI>+DI 且收盘 < ma60（强动能跌势）  → 拦
+    暂停买   ADX>=20 且 -DI>+DI 且收盘 < ma60（强动能跌势）  → 拦
     试错仓   破 1-4 条线（配 20 日最低退出价）              → 不拦，标注
     正常     收盘 >= ma60（防追高等细分由 entry_timing 负责） → 不拦
 
 从严者胜：五线全破 > 强动能跌势 > 试错仓 > 正常。行情缺失 fail-open：无 ADX
 不触发暂停买（沿用 RegimeGate 语义），均线缺失不判禁入。
 
+2026-10-27 阈值修订（用户确认）：二级 ADX 阈值 25→20。依据全池数据研究
+（tools/probe_gate_full_study.py，321只x500日，破3-4线+-DI主导场景 n=3684）：
+ADX 20-25 爬坡区是最差区间（10日 -1.17%/胜率38%，t=-9.10 p<0.0001），
+其中 20-22.5 档全场最差（-1.66%/胜率35%/p<0.001）；放行 ADX<20 组
+（-0.50%）优于原放行组（-0.75%）。>=25 维持拦截：下尾风险仍在
+（14.2% 样本 10 日跌超 5%），待网格路径研究后再议放开。
+
 设计铁律：均线判定不在此重新实现——直接调用 entry_timing.judge_entry，
 保证榜单口径与 EOD 口径同源，单一事实。
 """
 from .entry_timing import judge_entry, LABELS
 
-PAUSE_ADX = 25.0
+PAUSE_ADX = 20.0
 
 LEVEL_ORDER = ('no_entry', 'pause_buy', 'probe_only', 'normal')
 
@@ -114,7 +121,7 @@ def gate(frame, regime=None):
                 and mdi is not None and pdi is not None and mdi > pdi):
             level = 'pause_buy'
             blocks_buy = True
-            reason = (f"ADX={adx:.1f}>=25 且 -DI {mdi:.0f} > +DI {pdi:.0f}，"
+            reason = (f"ADX={adx:.1f}>=20 且 -DI {mdi:.0f} > +DI {pdi:.0f}，"
                       f"收盘 {close:.3f} 在 60日线 {ma60:.3f} 下方，"
                       f"强动能跌势，暂停新格买入，卖出保留")
     else:
