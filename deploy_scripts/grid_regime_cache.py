@@ -4,13 +4,17 @@
 本脚本收盘后跑：拉当日完整日K → 算四级判定 → 落 regime-cache.json（asof=今日）。
 次日 09:20 盘前直接用这份缓存（期望 asof=昨日收盘），不再依赖盘前拉取。
 """
+import os
 import sys
 
-IS_PACKED = sys.version_info[:2] == (3, 14)
-if not IS_PACKED and 'Programs' not in sys.executable:
-    # 慢路径交给 system python（见 launcher 蓝本）；正常 312 直接跑
+SYSTEM_PY = r'C:\Users\Administrator\AppData\Local\Programs\Python\Python312\python.exe'
+_IS_312 = sys.version_info[:2] == (3, 12) and 'Programs' in sys.executable
+
+if __name__ == '__main__' and not _IS_312:
+    # cron 用 hermes 自带 Py3.14（无 pandas）→ 接力到系统 Py312（蓝本同款钉子，已验证）
     import subprocess
-    sys.exit(subprocess.call([r'C:\Users\Administrator\AppData\Local\Programs\Python\Python312\python.exe', __file__] + sys.argv[1:]))
+    sys.stdout.flush(); sys.stderr.flush()
+    sys.exit(subprocess.call([SYSTEM_PY, os.path.abspath(__file__)] + sys.argv[1:]))
 
 sys.path.insert(0, 'D:/Code/AH_analyse')
 sys.path.insert(0, 'D:/Code/AH_analyse/tools')
