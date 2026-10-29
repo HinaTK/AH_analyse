@@ -24,6 +24,31 @@ def daily_bars(path):
         open=('open', 'first'), high=('high', 'max'), low=('low', 'min'), close=('close', 'last'))
 
 
+def regime20_label(daily, window=20, er_th=0.45, drift_th=-0.05):
+    """近20日行情性质标签（2026-10-28 用户要求加进榜单）。
+
+    判据（与 F 方案巡检同族，只用收盘价）：
+    - 单边: 效率比 ER>=0.45（净位移占总行程比例高）
+    - 阴跌: ER<0.35 且净位移<=-5%（低效率但方向向下——589720式磨跌）
+    - 震荡: 其余
+    返回 (label, net_pct, er)，None 数据不足时 label='数据不足'。
+    """
+    closes = daily['close'].tail(window + 1).reset_index(drop=True)
+    if len(closes) < window:
+        return '数据不足', None, None
+    closes = closes.tail(window)
+    net = closes.iloc[-1] / closes.iloc[0] - 1
+    path = closes.diff().abs().sum()
+    er = abs(closes.iloc[-1] - closes.iloc[0]) / path if path > 0 else 0.0
+    if er >= er_th:
+        label = '单边'
+    elif er < 0.35 and net <= drift_th:
+        label = '阴跌'
+    else:
+        label = '震荡'
+    return label, round(net * 100, 1), round(er, 2)
+
+
 def rank_entries(output_dir):
     output_dir = Path(output_dir)
     result = json.loads((output_dir / 'result.json').read_text(encoding='utf-8'))
@@ -40,10 +65,12 @@ def rank_entries(output_dir):
             excluded['no_bars'] += 1
             continue
         try:
-            judged = judge_entry(daily_bars(path), asof=result['summary']['asof'])
+            daily = daily_bars(path)
+            judged = judge_entry(daily, asof=result['summary']['asof'])
         except Exception:
             excluded['error'] += 1
             continue
+        regime, net20, er20 = regime20_label(daily)
         if judged['verdict'] not in ADMITTED and not is_holding:
             excluded['timing'] += 1
             continue
@@ -63,6 +90,9 @@ def rank_entries(output_dir):
             'recent20_cycle_net_per_avg_cost_pct': row.get('recent20_cycle_net_per_avg_cost_pct'),
             'close': judged['close'],
             'exit_price': judged['exit_price'],
+            'regime20': regime,
+            'net20_pct': net20,
+            'er20': er20,
             'reason': '；'.join(judged['reasons']),
         })
     admitted.sort(key=lambda item: (
@@ -100,6 +130,10 @@ def median_r20_threshold(rows):
     return (values[mid - 1] + values[mid]) / 2
 
 
+HEADER = '| 名次 | 代码 | 名称 | 资格 | 判断 | 63日往返 | 净差价 | 近20日往返 | 近20日形态 | 资金效率% |'
+HEADER_SEP = '|---:|---|---|---|---|---:|---:|---:|---|---:|'
+
+
 def window_matrix_label(row, r20_threshold):
     """双窗口判断矩阵标注（四档）。
 
@@ -134,11 +168,11 @@ def render_markdown(report, top_n=10):
         f"asof {report['asof']} 入选 {len(report['rows'])} 只 排除 {report['excluded']}",
         f"近20日高/低线={threshold:g}（当期入选池中位）",
         '',
-        '| 名次 | 代码 | 名称 | 资格 | 判断 | 63日往返 | 净差价 | 近20日往返 | 资金效率% |',
-        '|---:|---|---|---|---|---:|---:|---:|---:|',
+        HEADER,
+        HEADER_SEP,
     ]
     for row in rows:
-        lines.append('| {} | {} | {} | {} | {} | {:g} | {:,.2f} | {:g} | {:.2f} |'.format(
+        lines.append('| {} | {} | {} | {} | {} | {:g} | {:,.2f} | {:g} | {} | {:.2f} |'.format(
             row['rank'],
             row['code'],
             row['name'],
@@ -147,6 +181,7 @@ def render_markdown(report, top_n=10):
             row['full_cycles'] or 0,
             row['full_cycle_net'] or 0.0,
             row['recent20_cycles'] or 0,
+            row.get('regime20') or '',
             row['full_cycle_net_per_avg_cost_pct'] or 0.0,
         ))
     return '\n'.join(lines)

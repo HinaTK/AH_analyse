@@ -140,7 +140,7 @@ def test_weekly_report_includes_entry_rank_gated_listing(tmp_path):
     assert 'sh589720' in entry_block, '持仓要出现在周报榜单里'
     assert 'sz159363' in entry_block, '持仓近20日0次也豁免保留'
     # 表格必须由 entry_rank.render_markdown 原样渲染（表格交付铁律）
-    assert '| 名次 | 代码 | 名称 | 资格 | 判断 | 63日往返 | 净差价 | 近20日往返 | 资金效率% |' in report
+    assert ('| 名次 | 代码 | 名称 | 资格 | 判断 | 63日往返 | 净差价 | 近20日往返 | 近20日形态 | 资金效率% |') in report
     assert '2,279.30' not in entry_block
 
 

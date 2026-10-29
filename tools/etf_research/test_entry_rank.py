@@ -169,3 +169,46 @@ def test_render_markdown_respects_top_n(tmp_path):
     text = entry_rank.render_markdown(report, top_n=10)
     data_lines = [ln for ln in text.splitlines() if ln.startswith('|') and '---' not in ln and '名次' not in ln]
     assert len(data_lines) == 10, f'top_n=10 只渲染10行, got {len(data_lines)}'
+
+
+def test_regime_label_computed_from_last20_bars(tmp_path):
+    """2026-10-28 用户要求：榜单加"近20日行情性质"列（震荡/阴跌/单边）。
+
+    判据（与 F 方案巡检同族，用 20 日窗口收盘价）：
+    - 单边: ER>=0.45（效率比高）
+    - 阴跌: ER<0.35 且净位移<=-5%（低效率但方向向下）
+    - 震荡: 其余
+    数字来自 bars 本身逐格计算，禁止手写。
+    """
+    rows = [
+        {'code': 'sh589720', 'name': '持仓A', 'has_all_four_windows': True, 'full_cycles': 29.0, 'full_cycle_net': 4028.4, 'full_cycle_net_per_avg_cost_pct': 10.6, 'recent20_cycles': 12.0, 'recent20_cycle_net_per_avg_cost_pct': 3.9},
+    ]
+    output = make_output(tmp_path, rows, holdings={'sh589720'})
+    report = entry_rank.rank_entries(output)
+    # 夹具: 缓慢单调爬升 (1.003^i) → ER≈1.0 → 判'单边' (判定器正确识别单调路径)
+    row = report['rows'][0]
+    assert 'regime20' in row, 'rank_entries 必须为每行计算 regime20'
+    assert row['regime20'] == '单边', '单调爬升 ER≈1, 应判单边'
+    assert 'net20_pct' in row and 'er20' in row, '判定依据数字必须入 rows (禁止手写标签)'
+
+    # 真震荡夹具: 上下交替 → ER 低 → 震荡
+    daily = pd.DataFrame({'close': [10.0 + (0.3 if i % 2 == 0 else -0.3) for i in range(25)]})
+    label, _net, _er = entry_rank.regime20_label(daily)
+    assert label == '震荡'
+
+    # 阴跌夹具: 低效率慢跌
+    daily = pd.DataFrame({'close': [10.0 - 0.08 * i + (0.15 if i % 3 == 0 else -0.1) for i in range(25)]})
+    label, net, er = entry_rank.regime20_label(daily)
+    assert label == '阴跌', f'慢跌夹具应判阴跌, got {label} net={net} er={er}'
+
+
+def test_render_markdown_contains_regime_column(tmp_path):
+    """渲染表头含"近20日形态"列，每行标签逐格来自 rows['regime20']。"""
+    rows = [
+        {'code': 'sh589720', 'name': '持仓A', 'has_all_four_windows': True, 'full_cycles': 29.0, 'full_cycle_net': 4028.4, 'full_cycle_net_per_avg_cost_pct': 10.6, 'recent20_cycles': 12.0, 'recent20_cycle_net_per_avg_cost_pct': 3.9},
+    ]
+    output = make_output(tmp_path, rows, holdings={'sh589720'})
+    report = entry_rank.rank_entries(output)
+    text = entry_rank.render_markdown(report, top_n=10)
+    assert '近20日形态' in text, '表头必须含近20日形态列'
+    assert '单边' in text, '持仓行渲染其 regime20 标签(单调爬升夹具=单边)'
