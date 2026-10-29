@@ -203,7 +203,11 @@ def build_gate(root, expect_asof=None, fetch=True):
 
 
 def _regimes_to_cache(regimes):
-    """RegimeGate 兼容 dict（含 adx/bars）→ 缓存格式（level/blocks_buy/reason）。"""
+    """RegimeGate 兼容 dict（含 adx/bars）→ 缓存格式（level/blocks_buy/reason）。
+
+    asof 语义：bars 最后一根的日期（盘中手动落缓存时 fetch 已 drop 今日
+    未收K → asof=昨日；15:30 收盘后落 → asof=今日收盘。戳与数据一致）。
+    """
     out = {}
     root = root_from_home()
     for code, r in regimes.items():
@@ -217,10 +221,16 @@ def _regimes_to_cache(regimes):
                 verdict = gate_fn(frame, regime=r)
             except Exception:
                 verdict = None
+        bars = r.get('bars')
+        try:
+            last_date = str(bars.iloc[-1]['date']) if bars is not None and len(bars) else None
+        except Exception:
+            last_date = None
         entry = dict(level=(verdict or {}).get('level') or ('pause_buy' if r.get('adx') and r['adx'] >= 20 else 'probe_only'),
                      blocks_buy=bool((verdict or {}).get('blocks_buy')),
                      reason=(verdict or {}).get('reason') or '缓存降级判定',
-                     adx=r.get('adx'), asof=date.today().isoformat())
+                     adx=r.get('adx'),
+                     asof=last_date or date.today().isoformat())
         out[code] = entry
     return out
 
@@ -237,7 +247,9 @@ def _cache_to_regimes(cache):
 
         def reason(self, code):
             e = self._entries.get(code) or {}
-            return e.get('reason') or '缓存判定'
+            level_names = {'no_entry': '暂停买入(五线全破)', 'pause_buy': '暂停买入(强动能跌势)'}
+            head = f"{code} {level_names.get(e.get('level'), e.get('level') or '门控')}："
+            return head + (e.get('reason') or '缓存判定')
 
         @property
         def _regimes(self):

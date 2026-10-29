@@ -20,13 +20,29 @@ if __name__ == '__main__':
     import holdings as H
 
     regimes = {}
+    missed = []
     for code in H.held_codes():
         r = rt.fetch_daily_regime(code)
         if r.get('adx') is None and r.get('bars') is None:
-            print(f"warn: {code} 行情缺失，跳过缓存")
+            missed.append(code)
             continue
         regimes[code] = r
     cache = rt._regimes_to_cache(regimes)
+    # 部分失败不丢已有保险：旧缓存里该标的的条目保留（宁可旧判定，不可无门控）
+    old_cache_path = rt._regime_cache_path(rt.root_from_home())
+    if missed and old_cache_path.is_file():
+        import json as _json
+        try:
+            old_cache = _json.loads(old_cache_path.read_text(encoding='utf-8'))
+            for code in missed:
+                if code in old_cache:
+                    cache[code] = old_cache[code]
+                    print(f"warn: {code} 行情缺失，保留旧缓存条目(asof={old_cache[code].get('asof')})")
+        except Exception:
+            pass
+    for code in missed:
+        if code not in cache:
+            print(f"warn: {code} 行情缺失且无旧缓存——明早将现拉或降级")
     path = rt.save_regime_cache(rt.root_from_home(), cache)
     print(f"已落缓存: {path}")
     for code, entry in cache.items():
