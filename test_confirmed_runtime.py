@@ -18,8 +18,16 @@ class RuntimeTests(unittest.TestCase):
                 state['sellable_qty'] = state['qty']
                 (root / f'confirmed-{code[-6:]}.json').write_text(json.dumps(state))
             ticket = runtime.plan(root)
-            self.assertEqual({a['code'] for a in ticket['actions'] if a['side'] == 'sell'}, set(runtime.CODES))
-            self.assertEqual(len(ticket['actions']), 4)
+            import json as _j
+            held_with_qty = set()
+            for c in codes:
+                st = _j.loads((root / f'confirmed-{c[-6:]}.json').read_text())
+                if st['qty'] > 0 and runtime.H.is_active(c):
+                    held_with_qty.add(c)
+            # 卖出集合=有持仓(qty>0)的ETF；空仓注册标的（如512980首格前）无卖单属正常
+            self.assertEqual({a['code'] for a in ticket['actions'] if a['side'] == 'sell'},
+                             held_with_qty & set(runtime.CODES))
+            self.assertEqual(len(ticket['actions']), 2 * len(held_with_qty & set(runtime.CODES)))
             self.assertFalse(ticket['executable'])
             self.assertIsNone(ticket['cash'])
             sale = next(a for a in ticket['actions'] if a['side'] == 'sell')

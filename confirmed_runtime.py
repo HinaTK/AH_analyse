@@ -7,7 +7,12 @@ from decimal import Decimal as D, ROUND_HALF_UP
 
 import holdings as H
 
-CODES = ('sh589720', 'sz159363')          # legacy compatibility only
+def _held_codes_dynamic():
+    try:
+        return H.held_codes()
+    except Exception:
+        return ('sh589720', 'sz159363')
+CODES = _held_codes_dynamic()               # 动态持仓（含迁移退出与空仓注册标的）
 BUDGETS = {'sh589720': D('8000'), 'sz159363': D('6000')}
 GAP = D('0.015')
 
@@ -328,11 +333,20 @@ def plan(root, regime_gate=None, spot=None, gate_lifted=None):
                 raise ValueError('保存的可卖库存无效')
         if active and top and type(available) is int and available >= top['qty'] and state['qty'] - top['qty'] >= (4600 if code == 'sz159363' else 0):
             actions.append(dict(code=code, side='sell', price=price(D(top['price']) * (1 + GAP)), qty=top['qty'], lot=state['max_grid'], buy_id=top['id']))
-        if active and depth < 26 and state['trades'] and budgets.get(code) is not None:
+        entry_px = state.get('entry_price')
+        if (active and depth < 26 and budgets.get(code) is not None
+                and (state['trades'] or entry_px is not None)):
             if regime_gate is not None and regime_gate.blocks_buy(code):
                 regime_blocks.append(regime_gate.reason(code))
             else:
-                px = price(D(top['price'] if top else state['trades'][-1]['price']) / (1 + GAP))
+                # 额度机制（2026-10-22用户定语义"给额度不是买入"，10-29落地）：
+                # 净投入+本格买入 > quota → 不生成买入，显式标注；卖出不受限
+                quota = state.get('quota')
+                base_px = D(top['price']) if top else (D(entry_px) if entry_px is not None else None)
+                if base_px is None:
+                    continue
+                # 首格（空仓+entry_price）：直接用 entry_price，不除 GAP（用户定的首格价）
+                px = price(base_px if (not top and entry_px is not None) else base_px / (1 + GAP))
                 # 门控恢复日重锚（2026-10-29）：旧格价脱离现市>1格距 → 锚到现价下方一档
                 if gate_lifted and gate_lifted.get(code) and spot and spot.get(code) is not None:
                     new_px = reanchor_price(px, spot[code])
@@ -340,6 +354,13 @@ def plan(root, regime_gate=None, spot=None, gate_lifted=None):
                         reanchors.append(dict(code=code, old_price=str(px), new_price=str(new_px),
                                               spot=str(spot[code]), lot=chr(65 + depth)))
                         px = new_px
+                if quota is not None:
+                    qty_probe = int(budgets[code] / (D(px) * 100)) * 100
+                    projected = D(state['net_invested']) + D(px) * qty_probe
+                    if projected > D(str(quota)):
+                        regime_blocks.append(
+                            f"{code} 额度用尽：净投入 {state['net_invested']} + 本格买入约 {projected - D(state['net_invested'])} 超过额度 {quota}（给额度≠买入；额度外不生成买入，卖出不受限）")
+                        continue
                 qty = int(budgets[code] / (D(px) * 100)) * 100
                 if qty:
                     actions.append(dict(code=code, side='buy', price=px, qty=qty, lot=chr(65 + depth)))

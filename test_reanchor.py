@@ -63,7 +63,7 @@ class ReanchorTests(unittest.TestCase):
             return state
 
         Path(td, 'confirmed-589720.json').write_text(json.dumps(make_589720()), encoding='utf-8')
-        for code in ('159363', '159992'):
+        for code in ('159363', '159992', '512980'):
             src = REAL / f'confirmed-{code}.json'
             Path(td, f'confirmed-{code}.json').write_text(src.read_text(encoding='utf-8'), encoding='utf-8')
         return td
