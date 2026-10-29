@@ -749,6 +749,9 @@ def render(ticket):
         lines.append(f"{code} {names.get(code,'')} {tag} 持有={state['qty']} 保存可卖={state['sellable_qty']} 最大格={state['max_grid']} 净投入={state['net_invested']} 已完成T净收益={state['t_net']}")
     for block in ticket.get('regime_blocks') or []:
         lines.append(f"⛔ {block}")
+    for r in ticket.get('reanchor') or []:
+        lines.append(f"📍 {r['code']} 门控恢复日重锚：{r['lot']}格买价 {r['old_price']} → {r['new_price']}"
+                     f"（恢复时收盘 {r['spot']}，旧格价偏离箱体超一档；旧格卖单保持原价等解套）")
     for action in ticket['actions']:
         direction = '买' if action['side'] == 'buy' else '卖'
         name = names.get(action['code'], '')
