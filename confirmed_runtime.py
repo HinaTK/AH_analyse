@@ -1,5 +1,7 @@
 """One confirmed-state runtime. Advice is conditional, never a broker order."""
 import json
+import os
+from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 from decimal import Decimal as D, ROUND_HALF_UP
 
@@ -129,6 +131,118 @@ DAILY_BAR_SOURCES = (
     'https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param={code},day,,,80,qfq',
     'https://ifzq.gtimg.cn/appstock/app/fqkline/get?param={code},day,,,80,qfq',
 )
+
+
+REGIME_CACHE_NAME = 'regime-cache.json'
+REGIME_CACHE_FRESH_DAYS = 1  # 盘前期望昨日收盘；允许今日收盘（15:35后重算）
+
+
+def _regime_cache_path(root):
+    return Path(root) / REGIME_CACHE_NAME
+
+
+def save_regime_cache(root, regimes_verdicts):
+    """把门控判定落盘（15:35 收盘后调用；盘前 09:20 兜底读它）。
+
+    参数 regimes_verdicts: {code: {level, blocks_buy, reason, asof, adx}}
+    2026-10-28 用户定：早间拉行情不可靠，判断要提前做好。
+    """
+    path = _regime_cache_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix('.tmp')
+    tmp.write_text(json.dumps(regimes_verdicts, ensure_ascii=False, indent=1), encoding='utf-8')
+    os.replace(tmp, path)
+    return path
+
+
+def load_regime_cache(root, expect_asof, allow_stale=False):
+    """读缓存；日期戳必须是 expect_asof（昨日收盘）或今日（15:35 后重算的当日）。
+
+    allow_stale=True 用于现拉失败的兜底：过期缓存好过没缓存（门控在，
+    至少拦的是稍旧的状态——宁可多拦一天，不可 fail-open 放行接飞刀）。
+    """
+    path = _regime_cache_path(root)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except (json.JSONDecodeError, OSError):
+        return None
+    today = date.today().isoformat()
+    for v in data.values():
+        asof = v.get('asof')
+        if asof not in (expect_asof, today):
+            return None if not allow_stale else data
+        break
+    return data
+
+
+def build_gate(root, expect_asof=None, fetch=True):
+    """构建门控（三级降级）：现拉 → 缓存（期望日期）→ 过期缓存 → None。
+
+    2026-10-28 之前的行为是"现拉失败即 None（fail-open）"——两次事故
+    （10-27 sys.path、10-28 解释器）都是这个缝隙。现在缓存兜底后，
+    只有连缓存都没有（首次运行/被删）才会 None。
+    """
+    cache = load_regime_cache(root, expect_asof or date.today().isoformat()) if root else None
+    if cache is not None:
+        return _cache_to_regimes(cache)  # _CachedGate：鸭子类型（blocks_buy/reason），不套 RegimeGate
+    if fetch:
+        try:
+            regimes = {code: fetch_daily_regime(code) for code in H.held_codes()}
+            gate = RegimeGate(regimes)
+            # 现拉成功也顺手落缓存（下一道保险）
+            save_regime_cache(root, _regimes_to_cache(regimes))
+            return gate
+        except Exception:
+            pass
+    stale = load_regime_cache(root, expect_asof or date.today().isoformat(), allow_stale=True) if root else None
+    if stale is not None:
+        return _cache_to_regimes(stale)
+    return None
+
+
+def _regimes_to_cache(regimes):
+    """RegimeGate 兼容 dict（含 adx/bars）→ 缓存格式（level/blocks_buy/reason）。"""
+    out = {}
+    root = root_from_home()
+    for code, r in regimes.items():
+        bars = r.get('bars')
+        verdict = None
+        if bars is not None:
+            try:
+                from tools.etf_research.gate_check import gate as gate_fn
+                import pandas as pd
+                frame = bars if isinstance(bars, pd.DataFrame) else pd.DataFrame(bars)
+                verdict = gate_fn(frame, regime=r)
+            except Exception:
+                verdict = None
+        entry = dict(level=(verdict or {}).get('level') or ('pause_buy' if r.get('adx') and r['adx'] >= 20 else 'probe_only'),
+                     blocks_buy=bool((verdict or {}).get('blocks_buy')),
+                     reason=(verdict or {}).get('reason') or '缓存降级判定',
+                     adx=r.get('adx'), asof=date.today().isoformat())
+        out[code] = entry
+    return out
+
+
+def _cache_to_regimes(cache):
+    """缓存格式 → RegimeGate 兼容 dict（直接 blocks_buy 判定走缓存值）。"""
+    class _CachedGate:
+        def __init__(self, entries):
+            self._entries = entries
+
+        def blocks_buy(self, code):
+            e = self._entries.get(code)
+            return bool(e and e.get('blocks_buy'))
+
+        def reason(self, code):
+            e = self._entries.get(code) or {}
+            return e.get('reason') or '缓存判定'
+
+        @property
+        def _regimes(self):
+            return self._entries
+    return _CachedGate(cache)
 
 
 def load_states(root):
@@ -343,11 +457,14 @@ def ops_main(argv=None):
         return
     gate = None
     if not args.no_regime_gate:
+        # 2026-10-28 用户定：早间拉行情不可靠，判断提前做好。
+        # 三级降级：盘前期望"昨日收盘"缓存 → 现拉（成功顺手落缓存）→ 过期缓存 → None
         try:
-            regimes = {code: fetch_daily_regime(code) for code in H.held_codes()}
-            gate = RegimeGate(regimes)
+            from datetime import timedelta as _td
+            yesterday = (datetime.now(timezone(_td(hours=8))) - _td(days=1)).date().isoformat()
+            gate = build_gate(root_from_home(), expect_asof=yesterday)
         except Exception:
-            gate = None  # 行情整体失败：fail-open，不阻断盘前建议
+            gate = None  # 三级全部失败（无缓存+现拉失败）才 fail-open
     ticket = plan(root_from_home(), regime_gate=gate)
     if args.phase == 'grid':
         print('【09:20 盘前网格条件建议：按已确认账本计算，不依赖实时行情】')
