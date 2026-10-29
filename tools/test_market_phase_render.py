@@ -66,11 +66,13 @@ class MonitorRenderTests(unittest.TestCase):
         self.assertIn('方向仓', head)  # 成数指方向仓，不是清仓网格
 
     def test_monitor_main_uses_rich_render(self):
-        """monitor_main 走富渲染路径（不再是一行简报）。"""
+        """monitor_main 走富渲染路径（不再是一行简报）：
+        汇总表 + 表头口径。2026-10-29 起推送到表格为止，明细读数不进报告。"""
         fake_results = [_metrics()]
         text = mp.render_report(fake_results)
-        self.assertIn('MA20', text)
-        self.assertIn('地量', text)
+        self.assertIn('| 标的 |', text)   # 汇总表仍在
+        self.assertIn('3697.52', text)    # 收盘价来自 metrics
+        self.assertIn('地量', text)       # 表头口径说明仍在
 
 
 if __name__ == '__main__':
