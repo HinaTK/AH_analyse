@@ -188,7 +188,7 @@ def test_regime_label_computed_from_last20_bars(tmp_path):
     # 夹具: 缓慢单调爬升 (1.003^i) → ER≈1.0 → 判'单边' (判定器正确识别单调路径)
     row = report['rows'][0]
     assert 'regime20' in row, 'rank_entries 必须为每行计算 regime20'
-    assert row['regime20'] == '单边', '单调爬升 ER≈1, 应判单边'
+    assert row['regime20'] == '单边上涨', '单调爬升 ER≈1 且净位移为正, 应判单边上涨'
     assert 'net20_pct' in row and 'er20' in row, '判定依据数字必须入 rows (禁止手写标签)'
 
     # 真震荡夹具: 上下交替 → ER 低 → 震荡
@@ -201,6 +201,11 @@ def test_regime_label_computed_from_last20_bars(tmp_path):
     label, net, er = entry_rank.regime20_label(daily)
     assert label == '阴跌', f'慢跌夹具应判阴跌, got {label} net={net} er={er}'
 
+    # 单边下跌夹具: 高效率直落
+    daily = pd.DataFrame({'close': [10.0 - 0.3 * i for i in range(25)]})
+    label, net, er = entry_rank.regime20_label(daily)
+    assert label == '单边下跌', f'直落夹具应判单边下跌, got {label} net={net} er={er}'
+
 
 def test_render_markdown_contains_regime_column(tmp_path):
     """渲染表头含"近20日形态"列，每行标签逐格来自 rows['regime20']。"""
@@ -211,4 +216,4 @@ def test_render_markdown_contains_regime_column(tmp_path):
     report = entry_rank.rank_entries(output)
     text = entry_rank.render_markdown(report, top_n=10)
     assert '近20日形态' in text, '表头必须含近20日形态列'
-    assert '单边' in text, '持仓行渲染其 regime20 标签(单调爬升夹具=单边)'
+    assert '单边上涨' in text, '持仓行渲染其 regime20 标签(单调爬升夹具=单边上涨)'

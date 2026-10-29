@@ -25,10 +25,11 @@ def daily_bars(path):
 
 
 def regime20_label(daily, window=20, er_th=0.45, drift_th=-0.05):
-    """近20日行情性质标签（2026-10-28 用户要求加进榜单）。
+    """近20日行情性质标签（2026-10-28 用户要求加进榜单；带方向）。
 
     判据（与 F 方案巡检同族，只用收盘价）：
-    - 单边: 效率比 ER>=0.45（净位移占总行程比例高）
+    - 单边上涨: 效率比 ER>=0.45 且净位移为正
+    - 单边下跌: 效率比 ER>=0.45 且净位移为负
     - 阴跌: ER<0.35 且净位移<=-5%（低效率但方向向下——589720式磨跌）
     - 震荡: 其余
     返回 (label, net_pct, er)，None 数据不足时 label='数据不足'。
@@ -41,7 +42,7 @@ def regime20_label(daily, window=20, er_th=0.45, drift_th=-0.05):
     path = closes.diff().abs().sum()
     er = abs(closes.iloc[-1] - closes.iloc[0]) / path if path > 0 else 0.0
     if er >= er_th:
-        label = '单边'
+        label = '单边上涨' if net >= 0 else '单边下跌'
     elif er < 0.35 and net <= drift_th:
         label = '阴跌'
     else:
