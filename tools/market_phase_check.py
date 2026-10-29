@@ -379,15 +379,11 @@ def render_instrument(m):
 
 
 def render_report(results):
-    """整份报告两段式：表头口径 → 全标的汇总表 → 关键读数分节（每标的一块）→ 新触发提示。"""
-    out = [render_header(results[0]["date"]), "",
-           render_summary_table(results), "",
-           "【关键读数】",
-           ""]
-    for r in results:
-        out.append(render_instrument(r))
-        out.append("")
-    return "\n".join(out).rstrip()
+    """整份报告两段式：表头口径 → 全标的汇总表（2026-10-29 用户定调：
+    【关键读数】分节太长，砍掉——推送到表格为止；render_instrument 保留，
+    供人工查询/诊断单独调用，不再进入每日推送）→ 新触发提示由调用方追加。"""
+    return "\n".join([render_header(results[0]["date"]), "",
+                      render_summary_table(results)]).rstrip()
 
 
 def analyze(secid, name):

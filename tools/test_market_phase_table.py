@@ -67,15 +67,13 @@ class TableRenderTests(unittest.TestCase):
         self.assertIn('●○○', row2)
 
     def test_render_report_has_sections(self):
-        """整份报告分段：表头说明 → 汇总表 → '关键读数'分节 → 每标的块。"""
+        """整份报告分段：表头说明 → 汇总表，到表格为止（2026-10-29 用户定调：
+        【关键读数】分节太长，砍掉，只留表头+汇总表）。"""
         text = mp.render_report([_metrics()])
         self.assertIn('| 标的 |', text)                      # 汇总表
-        self.assertIn('关键读数', text)                      # 分节标题
-        self.assertIn('【上证指数】', text)                  # 标的块仍在
-        # 关键读数块内仍有全量读数（信息量不降级）
-        block = text.split('【上证指数】')[1].split('【')[0]
-        for needle in ('MA20', 'MA60', '量能', 'ADX', '+DI', '距250日高点'):
-            self.assertIn(needle, block)
+        self.assertNotIn('关键读数', text)                   # 分节标题已砍
+        self.assertNotIn('【上证指数】', text)               # 标的读数块不再出现在推送
+        self.assertNotIn('MA20', text)                       # 明细读数不再进入报告
 
     def test_instrument_block_max_two_lines_per_group(self):
         """单标的读数块收紧：收盘/均线/回撤一行，量能/动能一行，信号一行（3行内）。"""
