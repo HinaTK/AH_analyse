@@ -226,10 +226,14 @@ def _regimes_to_cache(regimes):
             last_date = str(bars.iloc[-1]['date']) if bars is not None and len(bars) else None
         except Exception:
             last_date = None
+        try:
+            last_close = str(bars.iloc[-1]['close']) if bars is not None and len(bars) else None
+        except Exception:
+            last_close = None
         entry = dict(level=(verdict or {}).get('level') or ('pause_buy' if r.get('adx') and r['adx'] >= 20 else 'probe_only'),
                      blocks_buy=bool((verdict or {}).get('blocks_buy')),
                      reason=(verdict or {}).get('reason') or '缓存降级判定',
-                     adx=r.get('adx'),
+                     adx=r.get('adx'), close=last_close,
                      asof=last_date or date.today().isoformat())
         out[code] = entry
     return out
@@ -250,6 +254,14 @@ def _cache_to_regimes(cache):
             level_names = {'no_entry': '暂停买入(五线全破)', 'pause_buy': '暂停买入(强动能跌势)'}
             head = f"{code} {level_names.get(e.get('level'), e.get('level') or '门控')}："
             return head + (e.get('reason') or '缓存判定')
+
+        def close(self, code):
+            e = self._entries.get(code) or {}
+            return e.get('close')
+
+        def was_blocked(self, code):
+            """恢复日检测：本 gate 自身不拦但缓存历史拦过（由调用方比对昨日缓存）。"""
+            return False
 
         @property
         def _regimes(self):
@@ -273,13 +285,37 @@ def price(value):
     return str(value.quantize(D('0.001'), rounding=ROUND_HALF_UP))
 
 
-def plan(root, regime_gate=None):
+REANCHOR_DEVIATION = D('0.015')  # 偏离超过一个格距才重锚（2026-10-29 用户定）
+
+
+def reanchor_price(old_next, spot):
+    """门控恢复日重锚判定：旧格买价偏离现市 > 一个格距时，锚到现价下方一档。
+
+    规则（2026-10-29 用户确认"落地一下"）：
+    - 偏离 = old_next / spot - 1，绝对值 > 1.5% 才动
+    - 重锚价 = spot × (1 - GAP)：保证低于现价（挂得出去、不追高）
+    - 偏离在带内 → None（维持原网格价，不抖散结构）
+    """
+    if old_next is None or spot is None:
+        return None
+    old_next = D(str(old_next))
+    spot = D(str(spot))
+    if spot <= 0:
+        return None
+    deviation = abs(old_next / spot - 1)
+    if deviation <= REANCHOR_DEVIATION:
+        return None
+    return price(spot * (1 - GAP))
+
+
+def plan(root, regime_gate=None, spot=None, gate_lifted=None):
     states = load_states(root)
     holdings = H.load_holdings()
     budgets = H.lot_budgets(holdings)
     names = H.names(holdings)
     actions = []
     regime_blocks = []
+    reanchors = []
     for code, state in states.items():
         active = H.is_active(code, holdings)
         top = state['open_grid_positions'][-1] if state['open_grid_positions'] else None
@@ -297,12 +333,21 @@ def plan(root, regime_gate=None):
                 regime_blocks.append(regime_gate.reason(code))
             else:
                 px = price(D(top['price'] if top else state['trades'][-1]['price']) / (1 + GAP))
+                # 门控恢复日重锚（2026-10-29）：旧格价脱离现市>1格距 → 锚到现价下方一档
+                if gate_lifted and gate_lifted.get(code) and spot and spot.get(code) is not None:
+                    new_px = reanchor_price(px, spot[code])
+                    if new_px is not None and new_px != px:
+                        reanchors.append(dict(code=code, old_price=str(px), new_price=str(new_px),
+                                              spot=str(spot[code]), lot=chr(65 + depth)))
+                        px = new_px
                 qty = int(budgets[code] / (D(px) * 100)) * 100
                 if qty:
                     actions.append(dict(code=code, side='buy', price=px, qty=qty, lot=chr(65 + depth)))
     ticket = dict(actions=actions, executable=False, cash=None, warning=WARNING, states=states, names=names)
     if regime_gate is not None:
         ticket['regime_blocks'] = regime_blocks
+    if reanchors:
+        ticket['reanchor'] = reanchors
     return ticket
 
 
@@ -477,7 +522,28 @@ def ops_main(argv=None):
             gate = build_gate(root_from_home(), expect_asof=yesterday)
         except Exception:
             gate = None  # 三级全部失败（无缓存+现拉失败）才 fail-open
-    ticket = plan(root_from_home(), regime_gate=gate)
+    # 恢复日重锚（2026-10-29 用户定）：昨日拦+今日放 → gate_lifted；
+    # spot 用 gate 的收盘价（与恢复判定同源，无未来函数）
+    gate_lifted = {}
+    spot = {}
+    if gate is not None:
+        try:
+            yesterday_cache = load_regime_cache(root_from_home(), expect_asof=yesterday, allow_stale=True)
+        except Exception:
+            yesterday_cache = None
+        for code in H.held_codes():
+            try:
+                if yesterday_cache and yesterday_cache.get(code, {}).get('blocks_buy') and not gate.blocks_buy(code):
+                    gate_lifted[code] = True
+                close_attr = getattr(gate, 'close', None)
+                if close_attr:
+                    c = close_attr(code)
+                    if c is not None:
+                        spot[code] = D(str(c))
+            except Exception:
+                pass
+    ticket = plan(root_from_home(), regime_gate=gate, spot=spot or None,
+                  gate_lifted=gate_lifted or None)
     if args.phase == 'grid':
         print('【09:20 盘前网格条件建议：按已确认账本计算，不依赖实时行情】')
         print(render(ticket))
