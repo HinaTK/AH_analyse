@@ -157,6 +157,8 @@ def main(argv=None,now=None):
         if not is_session(now.date()) or now.hour*60+now.minute<15*60+15:
             text='周度研究：休市或收盘未确认，不生成报告、不更新状态。';print(text);return text
     result=run_weekly(**args)
-    text=result.get('summary') or summarize(result['research'],result['pair_review'])
+    # 2026-10-30 起：cron（no_agent）吃本函数 stdout，用户要求周检推送完整报告、
+    # 禁止缩略——完整周报含逐持仓双轨周检、双规则完整榜单、往返前10、综合排名。
+    text=result.get('report') or result['summary']
     print(text);return text
 if __name__=='__main__':main()
