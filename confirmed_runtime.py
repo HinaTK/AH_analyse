@@ -182,16 +182,51 @@ def load_regime_cache(root, expect_asof, allow_stale=False):
     return data
 
 
+def _holdings_codes_for_root(root):
+    """root 下有 holdings.json 优先用（与 plan 同源）；否则生产默认路径。"""
+    if root and (Path(root) / 'holdings.json').exists():
+        return list(H.load_holdings_from_root(root).keys())
+    return list(H.held_codes())
+
+
 def build_gate(root, expect_asof=None, fetch=True):
     """构建门控（三级降级）：现拉 → 缓存（期望日期）→ 过期缓存 → None。
 
     2026-10-28 之前的行为是"现拉失败即 None（fail-open）"——两次事故
     （10-27 sys.path、10-28 解释器）都是这个缝隙。现在缓存兜底后，
     只有连缓存都没有（首次运行/被删）才会 None。
+
+    2026-10-30 第三击（用户抓包：512980 五线全破却推了买入）：缓存键集
+    ≠ holdings 键集。新注册标的（昨晚轮换筛选后 00:01 入 holdings）不在
+    昨日 16:43 的缓存里 → _CachedGate 静默放行。修复：缓存命中后发现
+    holdings 有代码缺条目 → 补拉现算并入缓存；拉不到 → 市况未知降级为
+    拦截（宁拦勿放）。
     """
     cache = load_regime_cache(root, expect_asof or date.today().isoformat()) if root else None
     if cache is not None:
-        return _cache_to_regimes(cache)  # _CachedGate：鸭子类型（blocks_buy/reason），不套 RegimeGate
+        missing = [c for c in _holdings_codes_for_root(root) if c not in cache]
+        if not missing:
+            return _cache_to_regimes(cache)  # _CachedGate：鸭子类型（blocks_buy/reason），不套 RegimeGate
+        merged = dict(cache)
+        for code in missing:
+            try:
+                r = fetch_daily_regime(code)
+            except Exception:
+                r = None
+            if r and (r.get('adx') is not None or r.get('bars') is not None):
+                merged.update(_regimes_to_cache({code: r}))
+            else:
+                merged[code] = dict(level='unknown', blocks_buy=True,
+                                    reason='行情拉取失败，市况未知（缓存未覆盖的新注册标的），暂停买入',
+                                    adx=None, close=None,
+                                    asof=expect_asof or date.today().isoformat())
+                print(f"warn: {code} 门控缓存未覆盖且补拉失败——降级为暂停买入（宁拦勿放）")
+        try:
+            save_regime_cache(root, merged)
+            print(f"warn: {code} 等 {len(missing)} 只新注册标的已补拉门控判定并入缓存")
+        except Exception:
+            pass
+        return _cache_to_regimes(merged)
     if fetch:
         try:
             regimes = {code: fetch_daily_regime(code) for code in H.held_codes()}
@@ -252,10 +287,17 @@ def _cache_to_regimes(cache):
 
         def blocks_buy(self, code):
             e = self._entries.get(code)
-            return bool(e and e.get('blocks_buy'))
+            if e is None:
+                # 2026-10-30 第三击：缓存未覆盖的代码一律拦截（fail-closed）。
+                # 事故：512980 新注册不在昨日缓存 → 返回 False 放行 → 五线
+                # 全破仍推出买入。门控覆盖集以缓存键集为界，界外不放行。
+                return True
+            return bool(e.get('blocks_buy'))
 
         def reason(self, code):
-            e = self._entries.get(code) or {}
+            e = self._entries.get(code)
+            if e is None:
+                return f"{code} 门控缓存未覆盖（新注册或缓存残缺），暂停买入；等门控缓存更新后自动恢复"
             level_names = {'no_entry': '暂停买入(五线全破)', 'pause_buy': '暂停买入(强动能跌势)'}
             head = f"{code} {level_names.get(e.get('level'), e.get('level') or '门控')}："
             return head + (e.get('reason') or '缓存判定')
