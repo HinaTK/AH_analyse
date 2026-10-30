@@ -178,6 +178,15 @@ def run_pair_review(result, state_path=DEFAULT_STATE, taxonomy=None, name_exclus
     return output
 
 
+def _table(header, rows):
+    """Markdown 表格（飞书可渲染）；header 为列名列表，rows 为每行单元格列表。"""
+    lines = ['| ' + ' | '.join(header) + ' |',
+             '|' + '|'.join('---' for _ in header) + '|']
+    for row in rows:
+        lines.append('| ' + ' | '.join(str(c) for c in row) + ' |')
+    return lines
+
+
 def report_lines(output):
     lines = ['【逐持仓双轨周检】', '159992 exit-only：仅退出管理，不建立替换线。',
              'temporary name-based有限过滤：' + (' / '.join(output['name_exclusions']) or '关闭') + '；未改变生产资格池，不代表官方港股暴露分类。']
@@ -185,28 +194,68 @@ def report_lines(output):
     lines.append(f"taxonomy已核{coverage['verified_assets']}只；本次池内已核{coverage['universe_verified']}只，未知待核{coverage['unknown_assets']}只（有限官方分类覆盖）。")
     lines.append('cross_theme仅按官方细分theme划线；细分分类不等于无重叠，科创板创新药与创新药仍可能有共同产业暴露，不代表组合互补。')
     lines.append('前后半窗展示稳定性；期末槽包括未退出持仓，不等同未闭合循环数；未闭合天数及占用/库存浮盈亏仅风险观察，不加波动或趋势硬否决。')
-    def fmt(v):return '不可用' if v is None else f'{v:.3f}'
-    def metrics(x):
-        return (f"中期往返={fmt(x.get('full_cycles'))} / 成本效率%={fmt(x.get('full_cycle_net_per_avg_cost_pct'))}；"
-                f"recent20往返={fmt(x.get('recent20_cycles'))} / 成本效率%={fmt(x.get('recent20_cycle_net_per_avg_cost_pct'))}；"
-                f"净差价={fmt(x.get('full_cycle_net'))}元；前半往返={fmt(x.get('early_cycles'))}/效率%={fmt(x.get('early_cycle_net_per_avg_cost_pct'))}；"
-                f"后半往返={fmt(x.get('late_cycles'))}/效率%={fmt(x.get('late_cycle_net_per_avg_cost_pct'))}；"
-                f"未闭合最长={fmt(x.get('full_max_unclosed_cycle_days'))}交易日/期末持仓槽={fmt(x.get('full_end_slots'))}；"
-                f"平均占用={fmt(x.get('full_avg_cost'))}元/期末占用={fmt(x.get('full_end_cost'))}元/库存浮盈亏={fmt(x.get('full_inventory_pnl'))}元")
-    def detail(x):
-        return (f"{x['code']} {x.get('name','')} [{x['classification']}/{x['status']}]：{metrics(x)}；{x['reason']}；"
-                f"保留{x['retained_holding']}相关性={fmt(x['retained_correlation'])}" +
-                ('；高重叠需人工核验，不代表组合互补（abs corr>=0.8，仅提示不否决）' if x['retained_correlation'] is not None and abs(x['retained_correlation']) >= .8 else ''))
+    # 2026-10-30 用户反馈“没有一点可读性”：双轨周检改 Markdown 表格渲染，
+    # 数字逐格取自同一 dict 字段（表格交付铁律），禁止 300 字符机器长行。
+    def fmt(v):return '不可用' if v is None else f'{v:g}'
+    def pct(v):return '不可用' if v is None else f'{v:.2f}'
+    def money(v):return '不可用' if v is None else f'{v:,.0f}'
+    def half(cycles, efficiency):
+        if cycles is None:return '不可用'
+        return f'{fmt(cycles)}次/{pct(efficiency)}%'
+    header = ['标的', '轨道', '身份', '中期往返', '成本效率%', '近20往返', '近20效率%',
+              '净差价元', '前半', '后半', '未闭最长', '平均占用元', '库存浮亏元', '备注']
+    def table_row(x, track, identity):
+        early = half(x.get('early_cycles'), x.get('early_cycle_net_per_avg_cost_pct'))
+        late = half(x.get('late_cycles'), x.get('late_cycle_net_per_avg_cost_pct'))
+        corr = '不可用' if x.get('retained_correlation') is None else pct(x['retained_correlation'])
+        # 备注列只放短标签：完整 reason 原文仍在 result 数据里，避免行宽爆炸。
+        tags = []
+        if 'taxonomy待核' in x.get('reason', ''):
+            tags.append('待核')
+        if x.get('retained_correlation') is not None and abs(x['retained_correlation']) >= .8:
+            tags.append('高重叠')
+        if '近期至少一指标落后' in x.get('reason', ''):
+            tags.append('近期回落')
+        if '已有priority leader' in x.get('reason', ''):
+            tags.append('第二优先')
+        return [f"{x['code']} {x.get('name','')}", track, identity,
+                fmt(x.get('full_cycles')), pct(x.get('full_cycle_net_per_avg_cost_pct')),
+                fmt(x.get('recent20_cycles')), pct(x.get('recent20_cycle_net_per_avg_cost_pct')),
+                money(x.get('full_cycle_net')), early, late,
+                fmt(x.get('full_max_unclosed_cycle_days')), money(x.get('full_avg_cost')),
+                money(x.get('full_inventory_pnl')), corr + ('｜' + '｜'.join(tags) if tags else '')]
+    def baseline_row(data):
+        b = data['baseline']
+        early = half(b.get('early_cycles'), b.get('early_cycle_net_per_avg_cost_pct'))
+        late = half(b.get('late_cycles'), b.get('late_cycle_net_per_avg_cost_pct'))
+        return [f"{b.get('code', '')} {b.get('name','')}", '基线', '持仓',
+                fmt(b.get('full_cycles')), pct(b.get('full_cycle_net_per_avg_cost_pct')),
+                fmt(b.get('recent20_cycles')), pct(b.get('recent20_cycle_net_per_avg_cost_pct')),
+                money(b.get('full_cycle_net')), early, late,
+                fmt(b.get('full_max_unclosed_cycle_days')), money(b.get('full_avg_cost')),
+                money(b.get('full_inventory_pnl')), '期末占用' + money(b.get('full_end_cost')) + '元/槽' + fmt(b.get('full_end_slots'))]
     for holding, data in output['holdings'].items():
-        lines.append(f"【持仓{holding}】{metrics(data['baseline'])}")
+        lines.append(f"持仓{holding}（基线+替换候选，同一张表）")
+        rows = [baseline_row(data)]
+        track_names = {'same_class': '同类', 'cross_theme': '跨主题'}
         for track, group in data['tracks'].items():
-            lines.append('同类替换（same_index/same_theme）' if track == 'same_class' else '跨主题（cross_theme）')
-            if group['priority']:lines.append(detail(group['priority']))
-            else:lines.append('无priority leader。')
-            for x in group['observe']:lines.append(detail(x))
+            label = track_names.get(track, track)
+            if group['priority']:
+                rows.append(table_row(group['priority'], label, 'priority'))
+            for x in group['observe']:
+                rows.append(table_row(x, label, 'observe'))
+        for x in data['unknown']:
+            rows.append(table_row(x, '待核', 'observe'))
+        lines.extend(_table(header, rows))
+        lines.append('图例：轨道=同类/跨主题/待核；高重叠=abs corr≥0.8，仅提示不否决，不代表组合互补；待核=官方taxonomy未核不能累计priority；近期回落=近20日至少一指标落后。')
+        signals = []
+        for track, group in data['tracks'].items():
             signal = output['state']['pairs'][holding + '/' + track]
-            lines.append(f"有效priority连续{signal['consecutive_weeks']}周；" +
-                         (f"HUMAN_ROTATION_REVIEW {holding} {track} {signal['candidate']}：仅人工复核，不授权换仓。" if signal['review_due'] else '未触发人工复核。'))
-        lines.append('unknown：待核分类，不能触发替换复核。')
-        for x in data['unknown']:lines.append(detail(x))
+            if signal['review_due']:
+                signals.append(f"{track_names.get(track, track)}触发 HUMAN_ROTATION_REVIEW {signal['candidate']}（连续{signal['consecutive_weeks']}周，仅人工复核，不授权换仓）")
+            elif signal['candidate']:
+                signals.append(f"{track_names.get(track, track)}候选{signal['candidate']}领先{signal['consecutive_weeks']}周，未达2周门槛")
+            else:
+                signals.append(f"{track_names.get(track, track)}无priority")
+        lines.append('复核状态：' + '；'.join(signals) + '。')
     return lines

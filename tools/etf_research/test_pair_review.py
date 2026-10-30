@@ -67,6 +67,8 @@ def api():
     except ModuleNotFoundError:
         raise AssertionError('independent pair review module missing')
 
+import json as json_mod
+
 
 def row(code, cycles=10, efficiency=2, recent=3, recent_eff=1, **extra):
     return dict(code=code, name=code, has_all_four_windows=True,
@@ -91,6 +93,64 @@ def taxonomy():
                           ('sh510001','ai1','ai'),('sh510002','ai2','ai'),
                           ('sh510003','drug2','drug'),('sh510004','other','other')]}
     return dict(version='official-test-v1',entries=entries)
+
+
+def test_weekly_report_tables_readable_no_machine_lines(tmp_path):
+    # 2026-10-30 用户反馈：周报“没有一点可读性”——双轨周检 metrics() 一行 300+ 字符
+    # 的机器格式（中期往返=26.000 / 成本效率%=8.268；前半往返=…）整段不可读。
+    # 整改：双轨周检、三持仓、往返前10、综合排名全部表格化（飞书渲染 Markdown 表），
+    # 数字仍逐格取自同一数据源，禁止编造。
+    from tools.etf_research import weekly, research
+    r = fixture()
+    r.update(leader=dict(code='sh510001', full_cycles=20, full_cycle_net=1500.0), errors=[])
+    for c in ('sz159363', 'sh589720', 'sz159992'):
+        r['holdings'][c].update(name=c, full_cycle_net=1000.0)
+    top = []
+    for i in range(10):
+        x = row('sh5100%02d' % (i + 10), 30 - i, 9)
+        x['name'] = '候选%02d' % i
+        x.update(full_cycle_net=3000.0 - i * 100)
+        top.append(x)
+    r['ranking'] = [dict(row('sh510001', 20, 4), name='sh510001', full_cycle_net=1500.0), *top]
+    r['summary'].update(version=research.VERSION, window_start='2026-07-07', window_end='2026-10-09',
+                        successful_runs=1284, failed_runs=0, attempted_assets=321,
+                        output_path=str(tmp_path))
+    bars_dir = tmp_path / 'bars'; bars_dir.mkdir()
+    for cand in r['ranking']:
+        bars_dir.joinpath(cand['code'] + '-m5.csv').write_text('time,open,high,low,close', encoding='utf-8')
+    (tmp_path / 'result.json').write_text(json_mod.dumps(
+        dict(summary=dict(asof='2026-10-09'), ranking=r['ranking'])), encoding='utf-8')
+    def runner(**kwargs):
+        return r
+    out = weekly.run_weekly(state_path=tmp_path / 'legacy.json', pair_state_path=tmp_path / 'pair.json',
+                            research_runner=runner, taxonomy=taxonomy())
+    text = out['report']
+    assert text.count(weekly.ENTRY_BLOCK_TITLE) == 1, 'entry rank block must appear exactly once'
+    lines = text.splitlines()
+    # 1) 双轨周检 metrics 不再是机器长行：任何一行不得超过 120 字符。
+    machine_lines = [x for x in lines if '中期往返=' in x or '前半往返=' in x]
+    assert not machine_lines, f'machine-format metric lines must be table rows, got: {machine_lines[:2]}'
+    overlong = [x for x in lines if len(x) > 120]
+    assert not overlong, f'no report line may exceed 120 chars: {overlong[:3]}'
+    # 2) 双轨周检表格化：表头 + 数据行，列值逐格来自同一字段。
+    assert '【逐持仓双轨周检】' in text
+    pair_table_header = next((x for x in lines if x.startswith('| 标的') or x.startswith('| ETF')), None)
+    assert pair_table_header is not None, 'pair review must render a markdown table header'
+    # 基线行 + 候选行都走同一表格；数字存在但不允许旧格式“指标名=值”串联。
+    assert '26' not in ''.join(machine_lines)  # trivially true; machine lines gone
+    # 3) 三持仓表格化。
+    assert '【当前三持仓·全部展示，不参与领先者】' in text
+    holdings_table = [x for x in lines if x.startswith('|') and 'sz159363' in x and '4,0' not in x]
+    assert holdings_table, 'holdings must render as markdown table rows'
+    # 4) 往返前10表格化。
+    assert '【轮换往返前10·同一套5分钟模拟】' in text
+    rot = [x for x in lines if x.startswith('|') and 'sh510010' in x]
+    assert rot, 'rotation top10 must render as markdown table rows'
+    # 5) 综合排名表格化。
+    assert '【综合研究排名·第三ETF互补视图】' in text
+    comp = [x for x in lines if x.startswith('|') and 'score' not in x and 'sh5100' in x]
+    assert comp, 'composite ranking must render as markdown table rows'
+
 
 
 def test_pair_selection_is_per_holding_two_tracks_verified_only():
@@ -219,10 +279,11 @@ def test_weekly_single_research_call_pair_report_and_no_legacy_review(tmp_path):
     assert 'pair_review' in first
     assert '【逐持仓双轨周检】' in first['report']
     assert 'name-based' in first['report'] and '有限过滤' in first['report']
-    assert 'unknown' in first['report'] and '待核' in first['report']
+    assert '待核' in first['report']
     assert '159992 exit-only' in first['report']
-    assert '保留sz159363相关性=0.850' in first['report']
-    assert '同类替换' in first['report'] and '跨主题' in first['report']
+    # 2026-10-30 表格化改版：相关性在表格“与保留持仓相关性”列，不再拼在长行里。
+    assert '0.85' in first['report']
+    assert '同类' in first['report'] and '跨主题' in first['report']
     r['summary']['asof']='2026-10-16'
     assert 'HUMAN_ROTATION_REVIEW' in run()['report']
     # Legacy can still hit its historical threshold but cannot drive the new report.
@@ -247,7 +308,7 @@ def test_official_assets_schema_unknown_observe_and_diagnostics():
     assert all('待核' in x['reason'] for x in unknown)
     report='\n'.join(p.report_lines(out))
     assert '前半' in report and '后半' in report and '未闭合' in report and '平均占用' in report
-    assert '35.000' in report and '32000.000' in report
+    assert '| 35 |' in report and '| 32,000 |' in report
 
 
 def test_default_taxonomy_and_same_index_precedence(tmp_path,monkeypatch):
@@ -287,7 +348,7 @@ def test_high_retained_correlation_warns_not_veto_and_taxonomy_coverage():
     out=p.run_pair_review(r,state_path=None,taxonomy=taxonomy())
     assert out['holdings']['sz159363']['tracks']['cross_theme']['priority']['code']=='sh510004'
     report='\n'.join(p.report_lines(out))
-    assert '高重叠需人工核验' in report and '不代表组合互补' in report
+    assert '高重叠' in report and '不代表组合互补' in report
     assert 'taxonomy已核' in report and '未知待核' in report
     assert out['taxonomy_coverage']['verified_assets']==6
 
@@ -309,8 +370,8 @@ def test_real_default_taxonomy_same_index_and_known_pair_lines():
     expected=sum(p.taxonomy_entry(entries,c).get('verified') is True and bool(p.taxonomy_entry(entries,c).get('sources')) for c in universe)
     assert out['taxonomy_coverage']['universe_verified']==expected
     report='\n'.join(p.report_lines(out))
-    assert 'sz159246 sz159246 [same_index/priority]' in report
-    assert 'sh589120 sh589120 [same_index/priority]' in report
+    assert '| sz159246 sz159246 | 同类 | priority |' in report
+    assert '| sh589120 sh589120 | 同类 | priority |' in report
 
 
 def test_subthemes_preserved_report_does_not_claim_no_overlap():

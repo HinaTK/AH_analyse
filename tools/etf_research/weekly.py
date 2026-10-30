@@ -5,6 +5,7 @@ import json
 from . import research, pair_review
 from .entry_rank import rank_entries, render_markdown
 from .engine import dump
+from .pair_review import _table as _md_table
 STATE_VERSION=research.VERSION+'-rotation-streak-v1'
 DEFAULT_STATE=Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account/rotation')/f'{STATE_VERSION}.json'
 # 榜单区块唯一标题：周报/摘要/测试三方共用，禁止任何一方手写。
@@ -119,8 +120,11 @@ def run_weekly(state_path=DEFAULT_STATE,research_runner=None,pair_state_path=Non
     def number(v):return '不可用' if v is None else str(int(v))
     lines.append(f"完整四窗口可排名{s.get('rankable_rows','未知')}只；其余占位失败行不算成功。")
     lines.append('【当前三持仓·全部展示，不参与领先者】')
-    for c in research.HOLDINGS:
-        x=result['holdings'][c];lines.append(f"{c}：往返{number(x.get('full_cycles'))}次；净差价{money(x.get('full_cycle_net'))}元")
+    # 2026-10-30 表格化：与双轨周检同口径，数字逐格取自 holdings dict。
+    lines.extend(_md_table(
+        ['持仓', '往返次数', '净差价元'],
+        [[f"{c} {result['holdings'][c].get('name','')}", number(x.get('full_cycles')), money(x.get('full_cycle_net'))]
+         for c in research.HOLDINGS for x in [result['holdings'][c]]]))
     output=s.get('output_path')
     # 2026-10-23 起：周报必须带上过两道建仓规则（五线全破禁入 + 近20日<2 出榜）的榜单。
     # 2026-10-24 起：榜单同时进飞书精简摘要（定时任务推送的是 summarize，不带即整改未落地）。
@@ -128,11 +132,15 @@ def run_weekly(state_path=DEFAULT_STATE,research_runner=None,pair_state_path=Non
     lines.extend(entry_report_lines)
     lines.append('【轮换往返前10·同一套5分钟模拟】')
     top10=result.get('rotation_top10') or result.get('rotation_ranking',[])[:10]
-    for x in top10:lines.append(f"{x['code']} {x.get('name','')}：{number(x.get('full_cycles'))}次；净差价{money(x.get('full_cycle_net'))}元")
+    lines.extend(_md_table(
+        ['代码', '名称', '往返次数', '净差价元'],
+        [[x['code'], x.get('name',''), number(x.get('full_cycles')), money(x.get('full_cycle_net'))] for x in top10]))
     lines.append('【综合研究排名·第三ETF互补视图】')
-    for x in result['ranking'][:10]:
-        score='不可用' if x.get('score') is None else f"{x['score']:.3f}"
-        lines.append(f"{x['code']} {x.get('name','')}：score={score}；资格={x.get('qualification')}")
+    lines.extend(_md_table(
+        ['代码', '名称', 'score', '资格'],
+        [[x['code'], x.get('name',''),
+          '不可用' if x.get('score') is None else f"{x['score']:.3f}", x.get('qualification')]
+         for x in result['ranking'][:10]]))
     lines.append(f"数据/模拟错误记录{len(result['errors'])}条；详见研究目录errors.json。")
     if not production_scope:lines.append('仅验证：非生产范围（离线、小规模、自定义资格池、非63交易日或历史时点），不宣称最新生产全池，不读取或更新生产连续周状态，不触发生产复核门槛。')
     lines.append('独立10万元模拟账户，不是共同资金账户；当根成交量参与限制有前视偏差，非真实成交。禁止自动买入、撤单、改账本。')
