@@ -315,7 +315,9 @@ def reanchor_price(old_next, spot):
 
 def plan(root, regime_gate=None, spot=None, gate_lifted=None):
     states = load_states(root)
-    holdings = H.load_holdings()
+    # root 下有 holdings.json 优先用（测试/部署同源）；否则退回 HERMES_HOME 生产路径
+    holdings = (H.load_holdings_from_root(root) if (Path(root) / 'holdings.json').exists()
+                else H.load_holdings())
     budgets = H.lot_budgets(holdings)
     names = H.names(holdings)
     actions = []
@@ -336,12 +338,17 @@ def plan(root, regime_gate=None, spot=None, gate_lifted=None):
         entry_px = state.get('entry_price')
         if (active and depth < 26 and budgets.get(code) is not None
                 and (state['trades'] or entry_px is not None)):
+            if holdings.get(code, {}).get('buy_paused'):
+                regime_blocks.append(f"{code} 用户暂停买入：不生成新格买入，卖出保留（holdings.buy_paused=true，改回 false 或删字段即恢复）")
+                continue
             if regime_gate is not None and regime_gate.blocks_buy(code):
                 regime_blocks.append(regime_gate.reason(code))
             else:
                 # 额度机制（2026-10-22用户定语义"给额度不是买入"，10-29落地）：
                 # 净投入+本格买入 > quota → 不生成买入，显式标注；卖出不受限
                 quota = state.get('quota')
+                if quota is None:
+                    quota = holdings.get(code, {}).get('quota')
                 base_px = D(top['price']) if top else (D(entry_px) if entry_px is not None else None)
                 if base_px is None:
                     continue

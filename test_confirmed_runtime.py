@@ -17,6 +17,12 @@ class RuntimeTests(unittest.TestCase):
                 state = confirmed_589720.build(code=code, name=code)
                 state['sellable_qty'] = state['qty']
                 (root / f'confirmed-{code[-6:]}.json').write_text(json.dumps(state))
+            # 封闭测试：写入无 quota/buy_paused 的 holdings，不随生产配置漂移
+            hermetic = {c: dict(runtime.H.load_holdings()[c]) for c in codes}
+            for entry in hermetic.values():
+                entry.pop('quota', None)
+                entry.pop('buy_paused', None)
+            runtime.H.save_holdings_to_root(hermetic, root)
             ticket = runtime.plan(root)
             import json as _j
             held_with_qty = set()
