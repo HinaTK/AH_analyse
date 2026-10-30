@@ -23,11 +23,17 @@ def decide(r, pe_pct):
     trend = r.get("trend")
     pct52 = r.get("pct52") if r.get("pct52") is not None else 50
     year_line = r.get("year_line")
+    np_yoy = r.get("np_yoy")
     red = "🚩" in grade
 
     if red:
         return ("回避", "红旗: 净利大幅下滑或派息超盈利, 分红水源不可持续", None)
     if yld >= 4.5 and ey >= 7 and p < 50 and pct52 < 60 and trend != "空头":
+        # 边界带(2026-10-30固化): 净利YoY在-15%~-20%之间, 引擎买入但水源在恶化,
+        # 不许裸输出"买入"——必须带⚠️并强制小仓提示, 防止人工警告被埋没
+        if np_yoy is not None and -20 < np_yoy < -15:
+            return ("买入⚠️边界", f"四维达标但净利YoY {np_yoy:+.1f}% 处边界带(-15%~-20%), "
+                                 f"只许小仓试(≤总资金3%), 触-20%即转回避, 盯季报", None)
         return ("买入", f"股息{yld:.1f}%+盈利收益率{ey:.1f}%+PE分位{p:.0f}%+价格分位{pct52}%+{trend}", None)
     if p < 30 and (pct52 >= 60 or trend == "空头" or ey < 7):
         anchor = year_line if year_line else price

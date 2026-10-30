@@ -44,3 +44,14 @@ check("PE缺失保守", decide(base, None)[0] != "买入", True)
 
 print(f"\n{'❌ FAILED' if FAIL else '✅ ALL PASS'} ({FAIL} failures)")
 sys.exit(1 if FAIL else 0)
+
+# ===== 2026-10-30 新增: 边界带测试 =====
+# 11. 净利YoY在-15~-20边界带: 买入须带⚠️边界+小仓提示
+a, why, _ = decide({**base, "np_yoy_note": None, "grade": "A", "yield_t": 5.0, "eyield": 10.0, "pct52": 30, "trend": "震荡"}, 20)
+check("边界带买入带警示", a, "买入⚠️边界")
+check("边界带理由含小仓", "小仓" in why, True)
+# 12. -15以上不带(正常买入)
+a, why, _ = decide(base, 20)
+check("净利-15以上正常买入", a, "买入")
+# 13. -15.0恰好不带(边界带不含-15)
+check("净利恰-15不带警示", decide({**base, "np_yoy_note": None}, 20)[0], "买入")
