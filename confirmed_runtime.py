@@ -7,6 +7,13 @@ from decimal import Decimal as D, ROUND_HALF_UP
 
 import holdings as H
 
+# 门控方案切换（2026-10-30 用户指令：执行策略切换成方案F，原方案切成备份）。
+#   'f'      = 方案F：五线全破 OR ATR5/ATR20>1.15（全池回测避损+317.1k 最优）
+#   'legacy' = 原四级门控（五线全破>强动能跌势>试错仓>正常）——备份，可随时切回
+# 环境变量 GATE_MODE 可覆盖默认；ops_main 读取一次传给 RegimeGate。
+GATE_MODE_DEFAULT = os.environ.get('GATE_MODE', 'f')
+ATR_EXPAND_TH = 1.15          # 方案F波动扩张阈值（与 patrol_f 同值，回测定稿勿改）
+
 def _held_codes_dynamic():
     try:
         return H.held_codes()
@@ -18,27 +25,60 @@ GAP = D('0.015')
 
 
 class RegimeGate:
-    """统一四级门控（2026-10-26 合并 entry_timing 位置判定与 ADX 动能判定）。
+    """统一门控（2026-10-30 起默认方案F；原四级为备份）。
 
-    级别：暂停买入(五线全破) > 暂停买入(强动能跌势, ADX>=25且收盘<60日线) > 试错仓（破
-    1-4 条线）> 正常。从严者胜，任一级拦截即不生成买入建议；卖出保留。
-    均线判定复用 tools.etf_research.gate_check（与榜单同源，不重复实现）。
+    mode='f'（默认，用户 2026-10-30 切换指令）：
+        暂停新格买入 = 五线全破（收盘 < ma5/10/20/30/60 全部）
+                    OR  ATR扩张（ATR5/ATR20 > 1.15）
+        全池回测（283只/10405日/7634次接格机会）：避损 +317.1k，
+        比纯五线 +251.9k 多拦的 680 次全部避损（均 -95.9 元/次）。
+        实盘验证：10-29 拦 512980 于 10-30 大阴线 -4.76% 前夜。
+        判定逻辑与 tools/patrol_f.py 同源（独立模块已并行运行验证 2 天）。
+
+    mode='legacy'（备份）：
+        原四级：五线全破 > 强动能跌势（ADX>=20 且 -DI>+DI 且收盘<60日线）
+        > 试错仓 > 正常。可用 GATE_MODE=legacy 环境变量或 mode 参数随时切回。
+
     regime 无 bars 时退回纯 ADX 判定（向后兼容）；行情缺失 fail-open。
+    卖出永不拦截。
     """
 
-    def __init__(self, regimes):
+    def __init__(self, regimes, mode=None):
         self._regimes = regimes or {}
+        mode = (mode or GATE_MODE_DEFAULT or 'f').lower()
+        self.mode = mode if mode in ('f', 'legacy') else 'f'
 
     @staticmethod
     def _adonly_blocks(regime):
         return regime['adx'] >= 25 and regime.get('mdi', 0) > regime.get('pdi', 0)
 
     def _unified(self, code):
-        """走 gate_check 的统一判定；返回 (blocks_buy, reason) 或 None。"""
+        """按 mode 分派判定；返回 (blocks_buy, reason) 或 None。"""
         r = self._regimes.get(code) or {}
         bars = r.get('bars')
         if bars is None:
             return None
+        if self.mode == 'f':
+            return self._patrol_f(code, r, bars)
+        return self._legacy_gate(code, r, bars)
+
+    def _patrol_f(self, code, r, bars):
+        """方案F：五线全破 OR ATR扩张>1.15（与 patrol_f.py 同口径）。"""
+        try:
+            import pandas as pd
+            frame = bars if isinstance(bars, pd.DataFrame) else pd.DataFrame(bars)
+            from tools.patrol_f import patrol
+            verdict = patrol(frame)
+        except Exception:
+            return None  # 判定失败退回纯 ADX，不放大拦截范围
+        blocks = verdict['blocks_buy']
+        level_names = {'five_break': 'F方案·暂停买入(五线全破)',
+                       'atr_expand': 'F方案·暂停买入(波动扩张)'}
+        head = level_names.get(verdict['reason_tag'], 'F方案')
+        return blocks, f"{code} {head}：{verdict['reason']}"
+
+    def _legacy_gate(self, code, r, bars):
+        """备份：原四级 gate_check 判定（2026-10-26 版本，行为不变）。"""
         try:
             from tools.etf_research.gate_check import gate
             verdict = gate(bars, regime=r)

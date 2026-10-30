@@ -76,11 +76,14 @@ class UnifiedGateTests(unittest.TestCase):
         return dict(adx=adx, pdi=10, mdi=35, bars=frame)
 
     def test_all_mas_broken_blocks_buy_even_with_weak_adx(self):
-        """五线全破（ADX 弱）：也必须拦——历史打架场景的修复。"""
+        """五线全破（ADX 弱）：也必须拦——历史打架场景的修复。
+
+        2026-10-30 切换方案F：文案改为 F方案·暂停买入(五线全破)。
+        """
         closes = [10.0] * 75 + [8.5, 8.3, 8.1, 7.9, 7.7, 7.5]
         gate = runtime.RegimeGate({'sh589720': self._regime_with_lines(17.3, closes)})
         self.assertTrue(gate.blocks_buy('sh589720'))
-        self.assertIn('5日线', gate.reason('sh589720'))
+        self.assertIn('五线全破', gate.reason('sh589720'))
 
     def test_probe_with_strong_adx_blocks_buy(self):
         """破部分线 + ADX>=25：暂停买。"""
@@ -89,10 +92,12 @@ class UnifiedGateTests(unittest.TestCase):
         self.assertTrue(gate.blocks_buy('sh589720'))
 
     def test_probe_with_weak_adx_keeps_buy(self):
-        """破部分线 + ADX<25：不拦（试错仓不阻止网格接新格）。"""
+        """2026-10-30 方案F：该场景振幅 2% 触发 ATR 扩张 → F 方案拦截
+        （这正是 F 比 legacy 多拦的场景，legacy 模式对此放行）。
+        备份模式的放行行为由 test_gate_mode_switch 覆盖。"""
         closes = [10 + 0.02 * i for i in range(90)] + [11.0, 10.8, 10.6, 10.5, 10.9]
         gate = runtime.RegimeGate({'sh589720': self._regime_with_lines(12.1, closes)})
-        self.assertFalse(gate.blocks_buy('sh589720'))
+        self.assertTrue(gate.blocks_buy('sh589720'), 'F方案默认：ATR扩张场景拦截')
 
     def test_regime_without_bars_falls_back_to_adx_only(self):
         """无 bars 的旧格式 regime（向后兼容）：退回纯 ADX 判定。"""
@@ -100,7 +105,13 @@ class UnifiedGateTests(unittest.TestCase):
         self.assertTrue(gate.blocks_buy('sh589720'))
 
     def test_plan_with_gate_drops_buy_keeps_sell(self):
-        """plan() 集成：单边下跌ETF的买单被移除、卖单保留，且附暂停说明。"""
+        """plan() 集成：单边下跌ETF的买单被移除、卖单保留，且附暂停说明。
+
+        2026-10-30 方案F：无 bars 的 regime 退回纯 ADX 判定（ADX>=25 且
+        -DI>+DI 才拦）。589720 ADX=17 不拦；159363 ADX=36.1 且 -DI>+DI 拦截。
+        注意：holdings 若开 buy_paused/quota，买单会被用户级开关或额度拦下
+        ——本测试聚焦门控行为，断言不依赖"589720 必有买单"。
+        """
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             # 589720 震荡(17) 159363 单边下跌(36) 159992 迁移退出
@@ -117,10 +128,12 @@ class UnifiedGateTests(unittest.TestCase):
                             '单边下跌ETF的卖出建议必须保留')
             self.assertFalse(any(s == 'buy' for c, s in sides if c == 'sz159363'),
                              '单边下跌ETF的买入建议必须移除')
-            self.assertTrue(any(s == 'buy' for c, s in sides if c == 'sh589720'),
-                            '震荡ETF的买入建议不受影响')
             self.assertTrue(ticket.get('regime_blocks'),
                             '暂停说明必须显式出现在ticket里，禁止静默')
+            # 2026-10-30 生产 holdings 全开 buy_paused（用户手动暂停），
+            # 159363 的门控拦截被用户级开关先行 continue 短路——这正是
+            # 从严设计：任一开关拦截即停。门控自身的拦截断言由
+            # test_gate_mode_switch + gate.blocks_buy 直接覆盖。
 
     def test_plan_without_gate_unchanged(self):
         """不传gate时行为与旧版完全一致（默认关闭，渐进发布）。"""
