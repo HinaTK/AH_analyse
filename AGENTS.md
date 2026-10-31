@@ -23,8 +23,10 @@
 - Generate a stored report without network: `python run_daily_job.py --mock`
 - Generate a stored report with live upstream data: `python run_daily_job.py`
 - One-shot report run via scheduler wrapper: `python -m scheduler.daily_job --run-now`
-- Run all tests: `python -m unittest discover -s tests -p "test_*.py"`
-- Run one test module: `python -m unittest tests.test_ah_pair_mapping`
+- Run grid/tools tests (from repo root): `python -m unittest discover -s tests -t . -p "test_*.py"`
+- Run one grid test module: `python -m unittest tests.test_grid_state`
+- Run app tests: `python -m unittest discover -s ah_recommendation_system/backend/tests -t . -p "test_*.py"`
+- Do not use `discover -s . -t .` across the whole repo: the app's `tests` package and the root `tests` package share the name `tests`, so one shadows the other and imports fail.
 - Optional type check (no repo-local pyright install): `pyright -p pyrightconfig.json`
 
 ## Runtime / data quirks

@@ -59,6 +59,8 @@ _*.jsonl
 _*.txt
 _*.md
 NUL
+# tests/__init__.py 是测试包标记，不是临时脚本
+!tests/__init__.py
 
 # ── Generated reports (regenerated daily) ────────────────────────────────
 ah_recommendation_system/backend/data/daily_reports/

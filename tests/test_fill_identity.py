@@ -93,6 +93,12 @@ class FillIdentityTests(unittest.TestCase):
             state = confirmed_589720.build(code=code, name=code)
             state['sellable_qty'] = state['qty']
             (root / f'confirmed-{code[-6:]}.json').write_text(json.dumps(state), encoding='utf-8')
+        # 临时根必须有 holdings.json：否则 plan(root) 会回退到生产 HERMES_HOME，
+        # 而子进程用 HERMES_HOME=home 又读默认值，两侧标的集合不一致。
+        holdings = json.loads(Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account/holdings.json').read_text(encoding='utf-8'))
+        for entry in holdings['holdings'].values():
+            entry.pop('buy_paused', None)
+        (root / 'holdings.json').write_text(json.dumps(holdings), encoding='utf-8')
         deploy(home)
         env = dict(os.environ, HERMES_HOME=str(home), PYTHONIOENCODING='utf-8')
         command = [sys.executable, str(home / 'scripts/grid_weixin_confirm.py'), '成功',

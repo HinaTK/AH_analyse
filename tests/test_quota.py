@@ -11,7 +11,7 @@ import unittest
 from decimal import Decimal as D
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import confirmed_runtime as rt
 
@@ -24,6 +24,16 @@ def _no_gate():
         def reason(self, code):
             return ''
     return G()
+
+
+def _write_holdings(td):
+    """把生产 holdings 拷进临时根并清掉 buy_paused：测试不得继承用户当前暂停状态。"""
+    import json
+    src = Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account/holdings.json')
+    data = json.loads(src.read_text(encoding='utf-8'))
+    for entry in data['holdings'].values():
+        entry.pop('buy_paused', None)
+    Path(td, 'holdings.json').write_text(json.dumps(data), encoding='utf-8')
 
 
 class QuotaTests(unittest.TestCase):
@@ -41,6 +51,7 @@ class QuotaTests(unittest.TestCase):
             for code in ('159363', '159992', '512980'):
                 src = Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account') / f'confirmed-{code}.json'
                 Path(td, f'confirmed-{code}.json').write_text(src.read_text(encoding='utf-8'), encoding='utf-8')
+            _write_holdings(td)
 
             ticket = rt.plan(td, regime_gate=_no_gate())
             buys = [a for a in ticket['actions'] if a['side'] == 'buy' and a['code'] == 'sh589720']
@@ -63,6 +74,7 @@ class QuotaTests(unittest.TestCase):
             for code in ('159363', '159992', '512980'):
                 src = Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account') / f'confirmed-{code}.json'
                 Path(td, f'confirmed-{code}.json').write_text(src.read_text(encoding='utf-8'), encoding='utf-8')
+            _write_holdings(td)
 
             ticket = rt.plan(td, regime_gate=_no_gate())
             buys = [a for a in ticket['actions'] if a['side'] == 'buy' and a['code'] == 'sh589720']
@@ -81,6 +93,7 @@ class QuotaTests(unittest.TestCase):
             for code in ('159363', '159992', '512980'):
                 src = Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account') / f'confirmed-{code}.json'
                 Path(td, f'confirmed-{code}.json').write_text(src.read_text(encoding='utf-8'), encoding='utf-8')
+            _write_holdings(td)
 
             ticket = rt.plan(td, regime_gate=_no_gate())
             buys = [a for a in ticket['actions'] if a['side'] == 'buy' and a['code'] == 'sh589720']
@@ -104,6 +117,7 @@ class FirstGridTests(unittest.TestCase):
             for code in ('589720', '159363', '159992'):
                 src = Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account') / f'confirmed-{code}.json'
                 Path(td, f'confirmed-{code}.json').write_text(src.read_text(encoding='utf-8'), encoding='utf-8')
+            _write_holdings(td)
 
             ticket = rt.plan(td, regime_gate=_no_gate())
             buys = [a for a in ticket['actions'] if a['side'] == 'buy' and a['code'] == 'sh512980']
@@ -124,6 +138,7 @@ class FirstGridTests(unittest.TestCase):
             for code in ('589720', '159363', '159992'):
                 src = Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account') / f'confirmed-{code}.json'
                 Path(td, f'confirmed-{code}.json').write_text(src.read_text(encoding='utf-8'), encoding='utf-8')
+            _write_holdings(td)
 
             ticket = rt.plan(td, regime_gate=_no_gate())
             buys = [a for a in ticket['actions'] if a['side'] == 'buy' and a['code'] == 'sh512980']

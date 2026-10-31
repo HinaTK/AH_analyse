@@ -44,7 +44,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_launchers_use_unified_runtime_without_legacy_imports(self):
         import ast
-        launchers = Path(__file__).parent / 'tools' / 'confirmed_grid' / 'launchers'
+        launchers = Path(__file__).parent.parent / 'tools' / 'confirmed_grid' / 'launchers'
         self.assertTrue((launchers / 'grid_weixin_ops.py').exists(), 'live launcher replacement missing')
         for name in ('grid_weixin_ops.py', 'grid_weixin_intraday.py', 'grid_weixin_confirm.py', 'grid_eod_decision.py'):
             tree = ast.parse((launchers / name).read_text(encoding='utf-8'))
@@ -198,7 +198,7 @@ class FillTests(unittest.TestCase):
             sync = subprocess.Popen([sys.executable,'-c',"import grid_state,sys;grid_state.rollover(sys.argv[1],'2026-10-14')",str(path)])
             self.assertEqual(fill.wait(),0)
             self.assertEqual(sync.wait(),0)
-            saved = json.loads(path.read_text())
+            saved = json.loads(path.read_text(encoding='utf-8'))
             self.assertEqual((saved['qty'],saved['sellable_qty'],saved['max_grid']),(18600,18600,'B'))
             self.assertEqual(saved['trades'][-1]['id'],'race-1')
             self.assertEqual(grid_state.rollover(path,'2026-10-14'),saved)
@@ -228,7 +228,7 @@ class FillTests(unittest.TestCase):
                 state.update(sellable_qty=28200,sellable_updated_on='2026-10-14')
                 (root / f'confirmed-{code[-6:]}.json').write_text(json.dumps(state))
             env = dict(os.environ,HERMES_HOME=str(home),PYTHONIOENCODING='utf-8')
-            launcher = Path(__file__).parent / 'tools/confirmed_grid/launchers/grid_weixin_confirm.py'
+            launcher = Path(__file__).parent.parent / 'tools/confirmed_grid/launchers/grid_weixin_confirm.py'
             bare = subprocess.run([sys.executable,str(launcher),'成功'],env=env,capture_output=True,text=True,encoding='utf-8')
             self.assertEqual(bare.returncode,2)
             filled = subprocess.run([sys.executable,str(launcher),'成功','--code','sh589720','--side','sell','--qty','9600','--price','0.850','--date','2026-10-14','--id','cli-1'],env=env,capture_output=True,text=True,encoding='utf-8')
@@ -252,7 +252,7 @@ class FillTests(unittest.TestCase):
             self.assertEqual(grid_state.rollover(path, '2026-10-14'), updated)
             with self.assertRaises(ValueError):
                 grid_state.record(path, 'sell', 9600, '0.851', '2026-10-14', execution_id='broker-explicit-1')
-            self.assertEqual(json.loads(path.read_text()), updated)
+            self.assertEqual(json.loads(path.read_text(encoding='utf-8')), updated)
             self.assertEqual(updated['trades'][:9], state['trades'])
 
 if __name__ == '__main__':

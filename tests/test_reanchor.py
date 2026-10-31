@@ -17,7 +17,7 @@ import unittest
 from decimal import Decimal as D
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import confirmed_runtime as rt
 
@@ -66,6 +66,11 @@ class ReanchorTests(unittest.TestCase):
         for code in ('159363', '159992', '512980'):
             src = REAL / f'confirmed-{code}.json'
             Path(td, f'confirmed-{code}.json').write_text(src.read_text(encoding='utf-8'), encoding='utf-8')
+        # 生产 holdings 自 2026-10-31 起 buy_paused=true，测试不得继承用户暂停状态
+        holdings = json.loads((REAL / 'holdings.json').read_text(encoding='utf-8'))
+        for entry in holdings['holdings'].values():
+            entry.pop('buy_paused', None)
+        Path(td, 'holdings.json').write_text(json.dumps(holdings), encoding='utf-8')
         return td
 
 

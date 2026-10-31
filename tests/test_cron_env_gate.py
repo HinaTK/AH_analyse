@@ -18,7 +18,7 @@ import sys
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent  # 仓库根目录（本测试就在根下）
+ROOT = Path(__file__).resolve().parent.parent  # 仓库根目录（本测试就在根下）
 
 
 def run_in_clean_env(code):

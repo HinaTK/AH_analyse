@@ -4,7 +4,7 @@ from pathlib import Path
 
 class ConfirmedTradesTests(unittest.TestCase):
     def test_authoritative_rebuild(self):
-        p = Path(__file__).with_name('confirmed_589720.py')
+        p = Path(__file__).resolve().parent.parent / 'confirmed_589720.py'
         self.assertTrue(p.exists(), '缺少无副作用的已确认成交重建模块')
         spec = importlib.util.spec_from_file_location('confirmed', p)
         m = importlib.util.module_from_spec(spec)

@@ -13,7 +13,7 @@ import unittest
 from decimal import Decimal as D
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import confirmed_runtime as rt
 import holdings as H
@@ -45,13 +45,16 @@ def _setup_root(td, buy_paused=None, holdings_quota=None, state_quota=None):
     for code in ('159363', '159992', '512980'):
         src = GRID_ACCOUNT / f'confirmed-{code}.json'
         Path(td, f'confirmed-{code}.json').write_text(src.read_text(encoding='utf-8'), encoding='utf-8')
-    if buy_paused is not None or holdings_quota is not None:
-        data = json.loads((GRID_ACCOUNT / 'holdings.json').read_text(encoding='utf-8'))
-        if buy_paused is not None:
-            data['holdings']['sh589720']['buy_paused'] = buy_paused
-        if holdings_quota is not None:
-            data['holdings']['sh589720']['quota'] = holdings_quota
-        Path(td, 'holdings.json').write_text(json.dumps(data), encoding='utf-8')
+    # 生产 holdings 会随用户操作变化（2026-10-31 起三只标的 buy_paused=true），
+    # 测试必须隔离：先清掉所有 buy_paused，再按用例显式设置。
+    data = json.loads((GRID_ACCOUNT / 'holdings.json').read_text(encoding='utf-8'))
+    for entry in data['holdings'].values():
+        entry.pop('buy_paused', None)
+    if buy_paused is not None:
+        data['holdings']['sh589720']['buy_paused'] = buy_paused
+    if holdings_quota is not None:
+        data['holdings']['sh589720']['quota'] = holdings_quota
+    Path(td, 'holdings.json').write_text(json.dumps(data), encoding='utf-8')
     return td
 
 
