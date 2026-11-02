@@ -94,7 +94,7 @@ def test_policy_sentry_tier_a_label():
 def test_policy_sentry_tier_b_label():
     items = [(1, "2026-11-02 15:30:00", "央行将进一步完善互换便利机制")]
     st, note = wm.policy_sentry(items)
-    assert "B级" in st and "机制完善" in st
+    assert "B级" in st and "仅记录" in st  # 2026-11-02 用户定文案：B级直接写"仅记录，不操作"
     assert "反转开关候选" not in st
 
 
@@ -121,13 +121,13 @@ def test_today_real_news_batch_is_B():
          "央行召开完善证券、基金、保险公司互换便利（SFISF）与股票回购增持再贷款政策座谈会"),
     ]
     st, note = wm.policy_sentry(items)
-    assert "B级" in st and "机制完善" in st
+    assert "B级" in st and "仅记录" in st
     assert "A级" not in st
 
 
 # ---------- render（读法行同步判级口径） ----------
 
 def test_render_mentions_grading():
-    sigs = [("policy_924", "哨④924级政策开关", "🔔B级命中·机制完善", "x", "")]
+    sigs = [("policy_924", "哨④924级政策开关", "🔔B级命中·仅记录，不操作", "x", "")]
     out = wm.render(sigs)
     assert "A级" in out and "B级" in out

@@ -269,7 +269,7 @@ def policy_sentry(news, window_days=POLICY_WINDOW_DAYS):
             parts.append(f"[{tier}]{'/'.join(names)} {ctime[:16]}：{reason}｜{text[:40]}")
         if batch_tier == "A":
             return ("🔔A级命中·反转开关候选", "；".join(parts))
-        return ("🔔B级命中·机制完善", "；".join(parts))
+        return ("🔔B级命中·仅记录，不操作", "；".join(parts))
     return ("人工盯守", "已自动扫快讯无命中（近90天窗口）")
 
 
@@ -347,7 +347,7 @@ def render(sigs):
     for key, label, st, note, d in sigs:
         dd = f"（{d}）" if d else ""
         lines.append(f"| {label} | {st} | {note}{dd} |")
-    lines += ["", "读法：哨①+哨②同时达成=出清末段（右侧三信号的地量件先满足）；哨③财报验证定2022/2021路径分岔；哨④A级（新创设工具/扩容≥2000亿/双工具组合拳）=反转开关候选待人工确认，B级=机制完善·记录不升级。"]
+    lines += ["", "读法：哨①+哨②同时达成=出清末段（右侧三信号的地量件先满足）；哨③财报验证定2022/2021路径分岔；哨④A级（新创设工具/扩容≥2000亿/双工具组合拳）=反转开关候选待人工确认，B级=仅记录，不操作。"]
     return "\n".join(lines)
 
 
