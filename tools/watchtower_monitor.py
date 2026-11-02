@@ -18,7 +18,7 @@ import subprocess
 import sys
 import time
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 WESTOCK = r"C:/Users/Administrator/.local/bin/westock.exe"
@@ -80,6 +80,143 @@ def margin_data():
         return {"error": str(e)}
 
 
+# 哨④ 关键词规则（924级政策=SFISF/回购增持再贷款加码/央行直连股市新工具）
+# 化债级财政明确排除（属地方财政常规线，与924工具不同轴）——2026-11-02 定口径
+SINA_724_URL = ("https://zhibo.sina.com.cn/api/zhibo/feed?"
+                "page={page}&page_size=100&zhibo_id=152&tag_id=0")
+SCAN_MAX_PAGES = 20          # 翻页上限（20页×100条≈2天快讯，防接口异常无限回扫）
+POLICY_WINDOW_DAYS = 90      # 命中判定窗口：只认90天内的条目
+POLICY_STATE_KEYS = ("policy_last_seen_id",)  # 游标持久化键
+
+
+def fetch_sina_724(page=1):
+    """拉取新浪7x24快讯单页（100条）；网络失败返回 None。"""
+    try:
+        req = urllib.request.Request(
+            SINA_724_URL.format(page=page),
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn"})
+        raw = json.loads(urllib.request.urlopen(req, timeout=15).read().decode("utf-8", "replace"))
+        return parse_sina_feed(raw)
+    except Exception:
+        return None
+
+
+def scan_since(last_seen_id):
+    """回扫快讯：从新到旧翻页，扫到 last_seen_id（含）或页上限为止。
+
+    无游标（首跑）只扫第一页建基线——不追旧闻、不告警。
+    返回新→旧排序的 (id, time, text) 列表；首页失败返回 None（整体降级）。
+    """
+    items = []
+    seen = set()
+    max_pages = 1 if last_seen_id is None else SCAN_MAX_PAGES
+    for page in range(1, max_pages + 1):
+        page_items = fetch_sina_724(page=page)
+        if page_items is None:
+            if page == 1:
+                return None          # 首页失败=拿不到当前快讯，哨④降级
+            break                    # 中途失败：返回已收部分（尽力而为）
+        stop = False
+        for nid, ctime, text in page_items:
+            if nid in seen:
+                continue
+            seen.add(nid)
+            items.append((nid, ctime, text))
+            if last_seen_id is not None and nid == last_seen_id:
+                stop = True
+        if stop:
+            break
+    return items
+
+
+def load_last_seen_id(path=STATE_PATH):
+    """读游标；文件缺失/损坏返回 None。"""
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))["policy_last_seen_id"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def save_last_seen_id(news_id, path=STATE_PATH):
+    """写游标（保留同文件其他键）。"""
+    data = {}
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    data["policy_last_seen_id"] = news_id
+    Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+POLICY_KW = [
+    # (关键词, 展示名) —— 长词优先，短词需搭配语境词防误伤
+    ("互换便利", "SFISF互换便利"),
+    ("回购增持再贷款", "回购增持再贷款"),
+    ("股票回购增持再贷款", "回购增持再贷款"),
+]
+POLICY_KW_SHORT = [
+    # (短关键词, 语境词元组, 展示名)
+    ("直连", ("股市", "资本市场"), "央行直连股市新工具"),
+    ("新工具", ("股市", "资本市场"), "央行直连股市新工具"),
+]
+
+
+def parse_sina_feed(raw):
+    """新浪7x24结构 result.data.feed.list[] → [(id, create_time, rich_text)]；异常返回 None。"""
+    try:
+        lst = raw["result"]["data"]["feed"]["list"]
+        items = []
+        for it in lst:
+            if not isinstance(it, dict):
+                continue
+            text = it.get("rich_text") or ""
+            items.append((it.get("id"), it.get("create_time", ""), text))
+        return items if items else None
+    except (KeyError, TypeError, AttributeError):
+        return None
+
+
+def match_policy_keywords(text):
+    """文本 → 命中关键词列表 [(展示名, 原文片段)]；无命中返回 []。"""
+    if not text:
+        return []
+    hits = []
+    for kw, display in POLICY_KW:
+        if kw in text:
+            hits.append((display, text))
+    for kw, ctx_words, display in POLICY_KW_SHORT:
+        if kw in text and any(c in text for c in ctx_words):
+            hits.append((display, text))
+    return hits
+
+
+def policy_sentry(news, window_days=POLICY_WINDOW_DAYS):
+    """哨④状态机：快讯命中 → ("🔔命中…", 详情)；否则 ("人工盯守", 巡检正常文案)。"""
+    if news is None:
+        return ("人工盯守", "快讯接口失败降级；盯: SFISF扩容/回购增持再贷款加码/央行直连股市新工具")
+    cutoff = datetime.now() - timedelta(days=window_days)
+    matched = {}  # nid → (时间, 原文, [命中名])——同一条快讯只报一次
+    for nid, ctime, text in news:
+        try:
+            t = datetime.strptime(ctime, "%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError):
+            t = None
+        if t is None or t < cutoff:
+            continue
+        names = [d for d, _ in match_policy_keywords(text)]
+        if names:
+            m = matched.setdefault(nid, (ctime, text, []))
+            for n in names:
+                if n not in m[2]:
+                    m[2].append(n)
+    if matched:
+        parts = []
+        for ctime, text, names in list(matched.values())[:3]:
+            parts.append(f"{'/'.join(names)} {ctime[:16]}：{text[:50]}")
+        return ("🔔命中（自动扫描）", "；".join(parts))
+    return ("人工盯守", "已自动扫快讯无命中（近90天窗口）")
+
+
 def check_sentries():
     sigs = []
     # 哨① 地量
@@ -127,10 +264,24 @@ def check_sentries():
             st, note = "窗口已过", "验证已落地，按结果重估情景概率"
     sigs.append(("ai_earnings", "哨③AI财报季验证", st, note, ""))
 
-    # 哨④ 924级政策（人工盯守清单）
-    sigs.append(("policy_924", "哨④924级政策开关", "人工盯守",
-                 "盯: SFISF扩容/回购增持再贷款加码/央行直连股市新工具/化债级财政——出现任意一项即推送人工判定", ""))
+    # 哨④ 924级政策（新浪7x24快讯自动扫描：回扫到上次游标，关键词规则判定）
+    last_seen = load_last_seen_id()
+    news = scan_since(last_seen)
+    st4, note4 = policy_sentry(news)
+    sigs.append(("policy_924", "哨④924级政策开关", st4, note4, ""))
+    if news:
+        save_last_seen_id(news[0][0])  # 游标推进到本批最新id（新闻→旧）
     return sigs
+
+
+TRIGGER_MARKS = ("✅", "⚡", "⏰", "🔔")
+
+
+def is_trigger_state(state):
+    """触发态判定：✅⚡⏰🔔 任一标记在状态里即为触发（推送语义）。"""
+    if not state:
+        return False
+    return any(m in state for m in TRIGGER_MARKS)
 
 
 def render(sigs):
@@ -142,6 +293,21 @@ def render(sigs):
         lines.append(f"| {label} | {st} | {note}{dd} |")
     lines += ["", "读法：哨①+哨②同时达成=出清末段（右侧三信号的地量件先满足）；哨③财报验证定2022/2021路径分岔；哨④任何一项出现=反转开关候选，需人工确认级别。"]
     return "\n".join(lines)
+
+
+def write_state(sigs, path=STATE_PATH):
+    """落盘四哨状态（保留同文件其他键，如 policy_last_seen_id 游标）。"""
+    data = {}
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    today = datetime.now().strftime("%Y-%m-%d")
+    for s in sigs:
+        data[s[0]] = {"state": s[2], "date": today}
+    Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 def main():
@@ -157,19 +323,18 @@ def main():
     today = datetime.now().strftime("%Y-%m-%d")
     triggered = []
     for s in sigs:
-        if any(t in s[2] for t in ("✅", "⚡", "⏰")):
+        if is_trigger_state(s[2]):
             # 同日同状态不重复推（状态翻转日推一次）
             if prev.get(s[0], {}).get("state") != s[2] or prev.get(s[0], {}).get("date") != today:
                 triggered.append(s)
-    flipped = any(prev.get(s[0], {}).get("state") != s[2] for s in sigs if s[2] not in ("人工盯守",))
+    flipped = any(prev.get(s[0], {}).get("state") != s[2] for s in sigs)
     if as_json:
         print(json.dumps({"sentries": [{"key": k, "state": s, "note": n, "date": d} for k, l, s, n, d in sigs]}, ensure_ascii=False))
         return
     if triggered or flipped or not prev:
         print(render(sigs))
-    new_state = {s[0]: {"state": s[2], "date": today} for s in sigs}
-    # 翻转检测须在写状态前完成——上面 flipped 已在写前计算
-    STATE_PATH.write_text(json.dumps(new_state, ensure_ascii=False, indent=1), encoding="utf-8")
+    # 落盘（write_state 保留 policy_last_seen_id 游标；翻转检测已在写前完成）
+    write_state(sigs)
 
 
 if __name__ == "__main__":
