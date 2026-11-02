@@ -112,8 +112,8 @@ def test_policy_sentry_no_hits_in_scan():
 def test_policy_sentry_triggers_on_sfisf():
     items = [(2, "2026-11-02 15:30:00", "【央行：第二次互换便利操作规模扩大】")]
     st, note = wm.policy_sentry(items)
-    assert st.startswith("🔔命中")
-    assert "SFISF" in note
+    assert st.startswith("🔔")  # 2026-11-02 起带判级标签（A级·反转开关候选/B级·机制完善）
+    assert "SFISF" in note or "互换" in note
     assert "15:30" in note
 
 
@@ -122,7 +122,7 @@ def test_policy_sentry_dedupes_one_news_multiple_hits():
     items = [(2, "2026-11-02 15:30:00",
               "央行完善互换便利与股票回购增持再贷款政策")]
     st, note = wm.policy_sentry(items)
-    assert st.startswith("🔔命中")
+    assert st.startswith("🔔")
     assert note.count("15:30") == 1  # 同一快讯只出现一次
     assert "互换便利" in note and "回购增持再贷款" in note  # 但两个命中名都点到
 
@@ -133,7 +133,8 @@ def test_is_trigger_state_recognizes_all_alert_states():
     assert wm.is_trigger_state("✅地量达成") is True
     assert wm.is_trigger_state("⚡加速出清") is True
     assert wm.is_trigger_state("⏰窗口开启") is True
-    assert wm.is_trigger_state("🔔命中（自动扫描）") is True
+    assert wm.is_trigger_state("🔔A级命中·反转开关候选") is True
+    assert wm.is_trigger_state("🔔B级命中·机制完善") is True
 
 
 def test_is_trigger_state_rejects_quiet_states():
@@ -280,10 +281,10 @@ def test_write_state_preserves_cursor(tmp_path):
     wm.save_last_seen_id(5187042, p)
     sigs = [
         ("vol_dry", "哨①", "未到", "n", "2026-11-02"),
-        ("policy_924", "哨④", "🔔命中（自动扫描）", "n", ""),
+        ("policy_924", "哨④", "🔔B级命中·机制完善", "n", ""),
     ]
     wm.write_state(sigs, path=p)
     assert wm.load_last_seen_id(p) == 5187042
     raw = json.loads(p.read_text(encoding="utf-8"))
     assert raw["vol_dry"]["state"] == "未到"
-    assert raw["policy_924"]["state"] == "🔔命中（自动扫描）"
+    assert raw["policy_924"]["state"] == "🔔B级命中·机制完善"

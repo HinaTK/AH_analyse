@@ -190,12 +190,64 @@ def match_policy_keywords(text):
     return hits
 
 
+# 哨④ 命中判级（2026-11-02 用户授权"你来做判级吧"；口径=924配方研究）
+#   A级·反转开关候选：新创设工具 / 扩容≥2000亿 / 双工具同文扩容（924组合拳形态）
+#   B级·机制完善：费率/完善机制/常规第N次招标/座谈 / 小额或未披露量级扩容——记录不升级
+GRADE_A_EXPANSION_YI = 2000.0  # 扩容量级线(亿)：对标924的5000亿+3000亿档
+GRADE_A_WORDS = ("创设", "新设", "推出新")
+GRADE_B_WORDS = ("完善", "费率", "招标", "座谈", "会议", "例行")
+GRADE_EXP_WORDS = ("扩大", "扩容", "加码", "增加", "提高")
+AMOUNT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(万亿|亿)")
+
+
+def _amount_yi(text):
+    """提取文本中的最大金额（亿）；无金额返回 None。"""
+    best = None
+    for m in AMOUNT_RE.finditer(text):
+        v = float(m.group(1))
+        if m.group(2) == "万亿":
+            v *= 10000
+        best = max(best, v) if best is not None else v
+    return best
+
+
+def grade_policy_text(text, hit_names):
+    """单条命中快讯判级 → (tier, reason)。tier: 'A'=反转开关候选 / 'B'=机制完善级。"""
+    if not text:
+        return ("B", "无文本")
+    names = "/".join(hit_names) if hit_names else "政策工具"
+    if any(w in text for w in GRADE_A_WORDS):
+        return ("A", f"新创设工具（{names}）——924形态")
+    amt = _amount_yi(text)
+    amt_str = f"量级{amt:.0f}亿" if amt is not None else "未披露量级"
+    dual = len(hit_names) >= 2
+    exp = any(w in text for w in GRADE_EXP_WORDS)
+    if dual:
+        if exp and (amt is None or amt >= GRADE_A_EXPANSION_YI):
+            return ("A", f"双工具同文扩容（{names}）——924组合拳形态，{amt_str}")
+        if exp:
+            return ("B", f"双工具扩容但{amt_str}，未到{GRADE_A_EXPANSION_YI:.0f}亿量级线")
+        return ("B", f"双工具提及（{names}）但为机制完善/座谈，无扩容语境")
+    if amt is not None and exp:
+        if amt >= GRADE_A_EXPANSION_YI:
+            return ("A", f"扩容{amt:.0f}亿≥{GRADE_A_EXPANSION_YI:.0f}亿量级线（{names}）")
+        return ("B", f"扩容{amt:.0f}亿未到{GRADE_A_EXPANSION_YI:.0f}亿量级线")
+    if exp:
+        return ("B", f"扩容但{amt_str}——等正式数字再升级")
+    if any(w in text for w in GRADE_B_WORDS):
+        return ("B", "机制完善/常规操作（费率·招标·座谈）")
+    return ("B", "命中工具词，无升级语境")
+
+
 def policy_sentry(news, window_days=POLICY_WINDOW_DAYS):
-    """哨④状态机：快讯命中 → ("🔔命中…", 详情)；否则 ("人工盯守", 巡检正常文案)。"""
+    """哨④状态机：快讯命中 → (带判级标签的状态, 详情)；否则 ("人工盯守", 巡检正常文案)。
+
+    批级 = 同批最高级（A>B）；A级推"反转开关候选"待人工确认，B级记录不升级。
+    """
     if news is None:
         return ("人工盯守", "快讯接口失败降级；盯: SFISF扩容/回购增持再贷款加码/央行直连股市新工具")
     cutoff = datetime.now() - timedelta(days=window_days)
-    matched = {}  # nid → (时间, 原文, [命中名])——同一条快讯只报一次
+    matched = {}  # nid → (时间, 原文, [命中名], tier, reason)——同一条快讯只报一次
     for nid, ctime, text in news:
         try:
             t = datetime.strptime(ctime, "%Y-%m-%d %H:%M:%S")
@@ -205,15 +257,19 @@ def policy_sentry(news, window_days=POLICY_WINDOW_DAYS):
             continue
         names = [d for d, _ in match_policy_keywords(text)]
         if names:
-            m = matched.setdefault(nid, (ctime, text, []))
+            tier, reason = grade_policy_text(text, names)
+            m = matched.setdefault(nid, (ctime, text, [], tier, reason))
             for n in names:
                 if n not in m[2]:
                     m[2].append(n)
     if matched:
+        batch_tier = "A" if any(v[3] == "A" for v in matched.values()) else "B"
         parts = []
-        for ctime, text, names in list(matched.values())[:3]:
-            parts.append(f"{'/'.join(names)} {ctime[:16]}：{text[:50]}")
-        return ("🔔命中（自动扫描）", "；".join(parts))
+        for ctime, text, names, tier, reason in list(matched.values())[:3]:
+            parts.append(f"[{tier}]{'/'.join(names)} {ctime[:16]}：{reason}｜{text[:40]}")
+        if batch_tier == "A":
+            return ("🔔A级命中·反转开关候选", "；".join(parts))
+        return ("🔔B级命中·机制完善", "；".join(parts))
     return ("人工盯守", "已自动扫快讯无命中（近90天窗口）")
 
 
@@ -291,7 +347,7 @@ def render(sigs):
     for key, label, st, note, d in sigs:
         dd = f"（{d}）" if d else ""
         lines.append(f"| {label} | {st} | {note}{dd} |")
-    lines += ["", "读法：哨①+哨②同时达成=出清末段（右侧三信号的地量件先满足）；哨③财报验证定2022/2021路径分岔；哨④任何一项出现=反转开关候选，需人工确认级别。"]
+    lines += ["", "读法：哨①+哨②同时达成=出清末段（右侧三信号的地量件先满足）；哨③财报验证定2022/2021路径分岔；哨④A级（新创设工具/扩容≥2000亿/双工具组合拳）=反转开关候选待人工确认，B级=机制完善·记录不升级。"]
     return "\n".join(lines)
 
 
