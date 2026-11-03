@@ -69,3 +69,17 @@
 - `可埋伏` 必须通过可靠性门槛：1~3个月慢变量改善、价格不再无序破位或接近客观止损位、无直接证伪的新P0事件、试错仓上限为目标方向最终计划仓位的10%-30%（不是总账户仓位），并给出 `右侧确认加仓` 与减仓/退出条件。趋势或相对强度不合格时只能写 `等待触发` 或 `降级观察`，不能因跌幅大、估值低或故事合理就称为可埋伏。
 - Abnormal-movement ledger/stat updates and hit-rate tables are only required when the user explicitly asks for `异动分析`, `命中率`, `预测验证`, or historical prediction verification.
 - X/Twitter early-signal lookup is disabled by default. Do not call X/Twitter MCP tools, X search tools, or browser navigation to `x.com` during `盘前分析`、`盘中分析`、`盘后分析`、`综合分析`、`异动分析`、`投资分析` unless the user explicitly asks to use X/Twitter. If a report needs an audit line, write `X早期信号已按用户偏好禁用，未调用X/Twitter工具` and continue with official, market-data, and mainstream-media sources.
+
+## ETF 网格脚本开发规范（用户既定习惯，动手前必读）
+
+适用：所有网格、监控、记账、跨境类脚本（AH_analyse 开发，部署到 hermes-home/scripts 运行）。
+
+1. **数据真实性**：账本、持仓、做T、盈亏等一切汇报数据必须由脚本实际写入并读回核验；禁止手工推算、临时测试账本、旧票据数据；未核实的现金、现价、市值、浮盈不报告；不得把测试结果当成实际保存值。
+2. **成交入库**：严格按用户给定顺序入库，不混入旧账本；日期未提供则留空、不补造；格子标签（A–Z）与做T配对由脚本按该 ETF 当前最大序号自动生成（买入取下一号并更新，卖出取当前号、成交后退一号）；成交 ID 按 ETF 序列自动递增，不要求用户提供券商编号；手续费按分段 fee_rule 由脚本计算（2026-09-23 至 09-30 每笔最低 5 元；2026-10-08 起万一免五、每笔最低 1 元）。
+3. **账本口径**：逐格记录数量/单价/含费成本/T+1 可卖状态；总份额与 T+1 可用两个口径并存；卖出使用总可卖库存池、不按买入批次绑定，同一批库存不得被多个卖单重复占用；买入须同时满足 CASH_FLOOR=0、TOTAL_CAP=100000、holdings.json 的 per-ETF quota；每次入账后校验 pos["qty"] == lot 合计。
+4. **测试纪律**：测试必须隔离账本路径，禁止覆盖真实账本（2026-09-29 事故）；账本改动前后核对哈希；先复现、查根因，再修复验证，不叠未验证补丁。
+5. **交付完整性**：改代码必须同步切换全部自动链路（00:01 可卖份额、09:10 预告、09:20 建议、盘中每分钟检查、15:20 收盘评估、15:25/15:30 regime 与轮换），并读写同一份持久化状态；禁止只在新脚本里演示通过而旧链路继续运行；交付不完整必须主动说明，不等用户追问。
+6. **唯一真源**：confirmed-*.json 已确认子账为唯一账本来源；旧 ledger.json 与旧脚本不得留在活跃路径。
+7. **定时任务**：暂停或恢复通知任务后必须读回确认启用状态。
+8. **规则固化**：同一规则类错误不允许出现第二次；修复优先做成脚本检查或 skill，不靠口头记忆。
+9. **仓库分工**：AH_analyse 为开发源（deploy_scripts/ 与 tools/confirmed_grid/launchers/ 出启动脚本，经 deploy.py 复制到 hermes-home/scripts 并做字节校验）；hermes-home 只保留运行时数据（cache/grid-account、cron、output）与已部署副本。改代码改 AH_analyse 一侧，部署走既有链路；不要把运行数据搬进本仓库。
