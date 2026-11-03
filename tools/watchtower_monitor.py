@@ -195,6 +195,9 @@ def match_policy_keywords(text):
 #   B级·机制完善：费率/完善机制/常规第N次招标/座谈 / 小额或未披露量级扩容——记录不升级
 GRADE_A_EXPANSION_YI = 2000.0  # 扩容量级线(亿)：对标924的5000亿+3000亿档
 GRADE_A_WORDS = ("创设", "新设", "推出新")
+# 历史指称短语：形如"该工具创设以来的第三次操作"是对存量工具的回顾，
+# 不是新创设动作（2026-11-03 实战误判A级事故）。判A级前先剔除。
+GRADE_A_PHRASE_EXCLUDES = ("创设以来",)
 GRADE_B_WORDS = ("完善", "费率", "招标", "座谈", "会议", "例行")
 GRADE_EXP_WORDS = ("扩大", "扩容", "加码", "增加", "提高")
 AMOUNT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(万亿|亿)")
@@ -212,11 +215,16 @@ def _amount_yi(text):
 
 
 def grade_policy_text(text, hit_names):
-    """单条命中快讯判级 → (tier, reason)。tier: 'A'=反转开关候选 / 'B'=机制完善级。"""
+    """单条快讯判级 → (tier, reason)。tier: 'A'=反转开关候选 / 'B'=机制完善级。"""
     if not text:
         return ("B", "无文本")
     names = "/".join(hit_names) if hit_names else "政策工具"
-    if any(w in text for w in GRADE_A_WORDS):
+    # 剔除历史指称短语（"创设以来"）后再判新创设——否则存量工具的第三次
+    # 常规操作会被误判成 924 级新工具（2026-11-03 事故）。
+    a_text = text
+    for phrase in GRADE_A_PHRASE_EXCLUDES:
+        a_text = a_text.replace(phrase, "")
+    if any(w in a_text for w in GRADE_A_WORDS):
         return ("A", f"新创设工具（{names}）——924形态")
     amt = _amount_yi(text)
     amt_str = f"量级{amt:.0f}亿" if amt is not None else "未披露量级"
