@@ -8,6 +8,16 @@
 （只重拉缺失标的，退避 120s→600s 封顶）；安全截止线=次日 09:00
 （早于 09:20 消费方），到线仍缺才带 missed 退出（走旧缓存兜底）。
 本任务投递 local，不再推送汇报。
+
+2026-11-03 事故修复（11-02/11-03 连续两天 15:30 任务被 cron 3600s
+硬杀、零落盘）："重试到次日 09:00" 与 cron 硬超时冲突——行情源在
+15:30-16:30 持续故障时脚本整晚重试，16:30 被杀时循环尚未自然结束，
+一次都没落盘。两处修复：
+A. 自身截止线收紧为 min(次日09:00, now+1800s)：15:30 触发最晚
+   16:00 自然退出落盘，永远早于 3600s 硬杀（09:00 线保留给晨间手动补跑）。
+B. collect_regimes 增加 on_round 回调，每轮结束即增量落盘
+   （成功标的新条目 + 缺失标的保留旧缓存条目）——任意时点被杀
+   都不丢已成功标的。
 """
 import os
 import sys
@@ -29,19 +39,49 @@ sys.path.insert(0, 'D:/Code/AH_analyse/tools')
 _CN = timezone(timedelta(hours=8))
 RETRY_BACKOFF_START = 120.0   # 首轮失败后等 2 分钟再重拉
 RETRY_BACKOFF_MAX = 600.0     # 退避封顶 10 分钟
+SELF_LIMIT_SECONDS = 1800.0   # 2026-11-03：自设 30 分钟上限，防撞 cron 3600s 硬杀
 
 
 def production_deadline(now=None):
-    """安全截止线：次日 09:00（早于 09:20 盘前消费方；窗口<24h 不跨天堆叠）。"""
+    """安全截止线：min(次日 09:00, now+1800s)——两个上界取小。
+
+    - now+1800s（2026-11-03 修复A）：自设 30 分钟上限。15:30 cron 触发
+      → 最晚 16:00 自然退出，永远早于 cron 3600s 硬杀；任何时段手动
+      补跑同样只重试 30 分钟，不无限占机。重试 5-6 轮的实测最坏成功
+      案例（10-30：5 轮 17 分钟）在此窗内，留一半余量。
+    - 次日 09:00（早于 09:20 盘前消费方；窗口<24h 不跨天堆叠）：只在
+      now+1800s 越过它时起钳制（如 08:45 跑 → 09:00 而非 09:15），
+      保证晨间补跑不挤占盘前消费窗口。
+    """
     now = now or datetime.now(_CN)
     dl = now.replace(hour=9, minute=0, second=0, microsecond=0)
     if dl <= now:
         dl += timedelta(days=1)
-    return dl
+    self_limit = now + timedelta(seconds=SELF_LIMIT_SECONDS)
+    return min(dl, self_limit)
+
+
+def merge_old_entries(cache, missed, old_cache_path):
+    """缺失标的保留旧缓存条目（宁可用旧判定，不可无门控）。
+
+    供 __main__ 与 on_round 回调共用：cache 原地更新并返回。
+    """
+    if not missed or not old_cache_path.is_file():
+        return cache
+    import json as _json
+    try:
+        old_cache = _json.loads(old_cache_path.read_text(encoding='utf-8'))
+    except Exception:
+        return cache
+    for code in missed:
+        if code in old_cache and code not in cache:
+            cache[code] = old_cache[code]
+    return cache
 
 
 def collect_regimes(fetch_fn, codes, sleep_fn=time.sleep,
-                    deadline=None, clock=None, is_fresh=None):
+                    deadline=None, clock=None, is_fresh=None,
+                    on_round=None, old_cache_path=None):
     """逐标的拉门控行情，失败的循环重试直到全部成功或到截止线。
 
     返回 (regimes, missed, attempts)：
@@ -51,6 +91,8 @@ def collect_regimes(fetch_fn, codes, sleep_fn=time.sleep,
     退避：120s → ×1.5 递增 → 600s 封顶；只重拉缺失标的，成功的不重拉。
     is_fresh(r)：非空但陈旧的数据（收盘后 asof≠今日）也判失败重试；
     None=只按"拉空"判失败（盘中跑时用，当日K线本来就不该在）。
+    on_round(round_no, regimes, missed)（2026-11-03 修复B）：每轮结束
+    调用一次，供调用方增量落盘——任意时点被杀不丢已成功标的。
     """
     clock = clock or (lambda: datetime.now(_CN))
     if deadline is None:
@@ -73,6 +115,11 @@ def collect_regimes(fetch_fn, codes, sleep_fn=time.sleep,
             else:
                 regimes[code] = r
         missed = still
+        if on_round is not None:
+            try:
+                on_round(attempts, regimes, missed)
+            except Exception:
+                pass  # 落盘失败不阻断重试（下一轮还会再试）
         if not missed:
             break
         if clock() >= deadline:
@@ -98,26 +145,32 @@ if __name__ == '__main__':
             return False
         return last == now.strftime('%Y-%m-%d')
 
+    old_cache_path = rt._regime_cache_path(rt.root_from_home())
+
+    def _on_round(round_no, got, still_missing):
+        """修复B：每轮增量落盘——任意时点被杀不丢已成功标的。"""
+        cache_now = rt._regimes_to_cache(dict(got))
+        merge_old_entries(cache_now, still_missing, old_cache_path)
+        try:
+            rt.save_regime_cache(rt.root_from_home(), cache_now)
+        except Exception:
+            pass  # 落盘失败不阻断重试；warn 留给最终落盘处
+        if still_missing:
+            print(f"warn: 第{round_no}轮后仍缺 {len(still_missing)} 只，已增量落盘 {len(cache_now)} 条")
+
     regimes, missed, attempts = collect_regimes(
-        rt.fetch_daily_regime, list(H.held_codes()), is_fresh=_is_fresh_after_close)
+        rt.fetch_daily_regime, list(H.held_codes()), is_fresh=_is_fresh_after_close,
+        on_round=_on_round, old_cache_path=old_cache_path)
     if attempts > 1:
         tail = '（仍有缺失，走旧缓存兜底）' if missed else ''
         print(f"行情源不稳，重试 {attempts} 轮{tail}")
     cache = rt._regimes_to_cache(regimes)
     # 部分失败不丢已有保险：旧缓存里该标的的条目保留（宁可旧判定，不可无门控）
-    old_cache_path = rt._regime_cache_path(rt.root_from_home())
-    if missed and old_cache_path.is_file():
-        import json as _json
-        try:
-            old_cache = _json.loads(old_cache_path.read_text(encoding='utf-8'))
-            for code in missed:
-                if code in old_cache:
-                    cache[code] = old_cache[code]
-                    print(f"warn: {code} 行情缺失，保留旧缓存条目(asof={old_cache[code].get('asof')})")
-        except Exception:
-            pass
+    merge_old_entries(cache, missed, old_cache_path)
     for code in missed:
-        if code not in cache:
+        if code in cache:
+            print(f"warn: {code} 行情缺失，保留旧缓存条目(asof={cache[code].get('asof')})")
+        else:
             print(f"warn: {code} 行情缺失且无旧缓存——明早将现拉或降级")
     path = rt.save_regime_cache(rt.root_from_home(), cache)
     print(f"已落缓存: {path}")
