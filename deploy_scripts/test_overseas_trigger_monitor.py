@@ -105,6 +105,54 @@ class TestNikkeiTouch(unittest.TestCase):
         self.assertEqual(data.get('low'), 1.515)
 
 
+class TestNikkeiStop(unittest.TestCase):
+    """止损线代码载体（2026-11-03 收编缺口：账本写明止损=成本×0.75，脚本零执行）。
+
+    规则来源：overseas-positions.json plan 字段"止损=加权成本×0.75"（用户既定）。
+    止损价动态取账本 unit_cost×0.75，不写死数字；账本缺失/损坏 → None 不误报。
+    止损优先于二/三档买入提醒：盘中破过止损线还提示买入是错误信号。
+    """
+
+    def setUp(self):
+        self.otm = _load()
+        self.otm.date = FakeDate
+        self.otm._nikkei_stop_price = lambda: 1.2002
+
+    def test_price_at_stop_fires_persistent(self):
+        """现价 1.200 已破止损线 1.2002 → 持续触发 nikkei_stop。"""
+        self.otm._quote = lambda sym: _quote_f(1.200, 1.61, 1.198)
+        fires, data = self.otm.check_nikkei()
+        self.assertEqual([f[0] for f in fires], ['nikkei_stop'])
+        self.assertTrue(fires[0][2], '止损属持续触发，必须标记 persistent')
+
+    def test_price_above_stop_no_fire(self):
+        """现价 1.589 远高于止损线 → 不触发。"""
+        self.otm._quote = lambda sym: _quote_f(1.589, 1.60, 1.585)
+        fires, _ = self.otm.check_nikkei()
+        self.assertNotIn('nikkei_stop', [f[0] for f in fires])
+
+    def test_stop_takes_priority_over_tranches(self):
+        """现价 1.19 同时穿二/三档与止损线 → 只推止损，不推买入档位。"""
+        self.otm._quote = lambda sym: _quote_f(1.19, 1.61, 1.188)
+        fires, _ = self.otm.check_nikkei()
+        self.assertEqual([f[0] for f in fires], ['nikkei_stop'])
+
+    def test_intraday_low_touches_stop_is_touch_alert(self):
+        """盘中最低 1.199 破止损线、现价 1.51 回升 → 触价型提醒，且不再提示买入档位。"""
+        self.otm._quote = lambda sym: _quote_f(1.51, 1.61, 1.199)
+        fires, data = self.otm.check_nikkei()
+        self.assertEqual([f[0] for f in fires], ['nikkei_stop'])
+        self.assertFalse(fires[0][2], '触价回升属 touch 型，不进 active')
+        self.assertEqual(data.get('low'), 1.199)
+
+    def test_ledger_missing_no_crash_no_false_alarm(self):
+        """账本缺失/损坏 → stop=None → 不触发、不崩溃。"""
+        self.otm._nikkei_stop_price = lambda: None
+        self.otm._quote = lambda sym: _quote_f(1.200, 1.61, 1.198)
+        fires, _ = self.otm.check_nikkei()
+        self.assertNotIn('nikkei_stop', [f[0] for f in fires])
+
+
 class TestTouchPushDedup(unittest.TestCase):
     """main() 层：触价每日一次、跨日重推、不产生解除噪音。"""
 

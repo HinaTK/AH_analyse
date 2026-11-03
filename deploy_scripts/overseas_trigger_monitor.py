@@ -78,8 +78,24 @@ def check_nasdaq():
     return fires, dict(nav=nav, peak=peak, dd=dd, prem=prem, date=navs[-1][0])
 
 
+def _nikkei_stop_price():
+    """止损价 = 账本加权成本 × 0.75（overseas-positions.json plan 字段既定规则）。
+
+    2026-11-03 收编缺口补齐：此前账本写了规则、脚本零执行（第二个"有规则无代码"）。
+    动态读账本 unit_cost，不写死数字（分红/加减仓后成本变，线跟着变）；
+    账本缺失/损坏/无持仓 → None（调用方不判定止损，宁缺勿误报）。
+    """
+    positions_path = Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account/overseas-positions.json')
+    try:
+        data = json.loads(positions_path.read_text(encoding='utf-8'))
+        unit_cost = float(data['sz159866']['unit_cost'])
+        return round(unit_cost * 0.75, 4)
+    except Exception:
+        return None
+
+
 def check_nikkei():
-    """159866 三档监控：一档已成交(11-03)，盯二档≤1.52、三档≤1.42；触价=min(现价,日低)。"""
+    """159866 三档+止损监控：一档已成交(11-03)，盯二档≤1.52、三档≤1.42、止损=成本×0.75；触价=min(现价,日低)。"""
     q = _quote('sz159866')
     price = q['price']
     # 脏数据退化：盘前/异常 low=0 时用现价
@@ -91,6 +107,16 @@ def check_nikkei():
             and qt[8:12] >= '0930')
     if not live:
         return fires, dict(price=price, low=low, quote_time=qt)
+    stop = _nikkei_stop_price()
+    # 止损优先：现价已破线 → 持续触发；日低破过线现价回升 → 触价提醒（每日一次）。
+    # 止损线在场即不再提示买入档位（都低于止损线，此时提示买入是错误信号）。
+    if stop is not None:
+        if price <= stop:
+            fires.append(('nikkei_stop', f"🔴 159866 现价 {price:.3f} 已跌破止损线 {stop:.4f}（成本×0.75）——按既定规则执行止损，卖出全部持仓", True))
+            return fires, dict(price=price, low=low, quote_time=qt, stop=stop)
+        if low <= stop:
+            fires.append(('nikkei_stop', f"⚠️ 159866 盘中最低 {low:.3f} 已触及止损线 {stop:.4f}，现价 {price:.3f} 回升——触价≠成交，按既定规则应执行止损", False))
+            return fires, dict(price=price, low=low, quote_time=qt, stop=stop)
     # 2026-11-03 第一档已成交（9,000份@1.600，账本 overseas-positions.json）→ 盯二档/三档
     TRANCHES = (
         ('t2', 1.52, "第二档 1.50-1.52 买入30%（约9,000份）"),
