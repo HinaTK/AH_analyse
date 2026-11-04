@@ -49,8 +49,12 @@ MAX_PUSH_CHARS = 8000
 
 # DSH-IM 主动投递（复用设置页里已接入的飞书机器人，不依赖 Hermes webhook）。
 # 目标要在「设置 → IM机器人 → 齿轮 → 新建目标」里建，名字与此处一致。
+# 用户与 Chief 的飞书私聊（kind=user，openId=ou_ed54bb49…523f）。
+# 2026-11-04 12:10 以 targetId=chief-chat 建立并实测发送成功；同日 15:20 投递
+# 被拒 unknown-target：workspaces.json 里该目标的 id 已变为 tgt_0697a00b9868ffbd
+# （路由未变，仅 id 改名），脚本同步改成新 id。
 IM_BOT_ID = 'bot_33dda378bac343d695e4e63180c53d11'
-IM_TARGET_ID = 'grid-alerts'
+IM_TARGET_ID = 'tgt_0697a00b9868ffbd'
 
 # 任务注册表：id -> 显示名 / 脚本 / 工作目录 / 是否推送
 # 与 Hermes cron/jobs.json 的 13 个脚本任务一一对应（gateway_keeper 守护的是
@@ -61,7 +65,10 @@ JOBS: dict[str, dict[str, object]] = {
     'intraday':       {'name': '网格盘中触价',      'script': 'grid_weixin_intraday.py',          'cwd': None,  'push': 'on'},
     'eod_1520':       {'name': '网格1520收盘',      'script': 'grid_eod_decision.py',             'cwd': None,  'push': 'on'},
     'weekly_fri':     {'name': '网格周五1525周报',  'script': 'grid_weekly_rotation.py',          'cwd': None,  'push': 'on', 'timeout': 2700},
-    'regime_1530':    {'name': '网格1530门控缓存',  'script': 'grid_regime_cache.py',             'cwd': None,  'push': 'off'},
+    # 2026-11-04：grid_regime_cache.py 自设 30 分钟自限（SELF_LIMIT_SECONDS=1800，
+    # 逐轮增量落盘），但 wrapper 默认 240s 会在脚本完成前强杀（当日 15:34 超时事故）。
+    # 给 1900s，让脚本在 1800s 自限处优雅退出，而非被外部杀掉。
+    'regime_1530':    {'name': '网格1530门控缓存',  'script': 'grid_regime_cache.py',             'cwd': None,  'push': 'off', 'timeout': 1900},
     'market_1535':    {'name': '市况1535右侧信号',  'script': 'market_phase_monitor.py',          'cwd': None,  'push': 'on'},
     'rate_1540':      {'name': '利率1540点火',      'script': 'rate_ignition_monitor_wrapper.py', 'cwd': None,  'push': 'on'},
     'watchtower_1550':{'name': '观察哨1550',        'script': 'watchtower_wrapper.py',            'cwd': None,  'push': 'on'},
@@ -184,8 +191,9 @@ def _im_urls() -> list[str]:
 def _push_im(text: str) -> bool:
     """走 DSH-IM 主动投递：不依赖已停用的 Hermes webhook，也复用同一个飞书机器人。"""
     body = text if len(text) <= MAX_PUSH_CHARS else text[:MAX_PUSH_CHARS] + '\n…（内容过长已截断，完整内容见日志）'
+    # format=markdown：接口按富文本渲染表格/加粗；不带此字段会被当成纯文本（2026-11-04 用户反馈表格不渲染）。
     payload = json.dumps(
-        {'botId': IM_BOT_ID, 'targetId': IM_TARGET_ID, 'text': body},
+        {'botId': IM_BOT_ID, 'targetId': IM_TARGET_ID, 'text': body, 'format': 'markdown'},
         ensure_ascii=False,
     ).encode('utf-8')
     for url in _im_urls():

@@ -64,5 +64,46 @@ class TencentFallbackTests(unittest.TestCase):
         self.assertEqual(mp.tencent_symbol('1.589720'), 'sh589720')
 
 
+class TencentKlineUrlTests(unittest.TestCase):
+    """回归（2026-11-04）：腾讯 K 线 URL 写死 end=2030-12-31 会让部分标的
+    （实测 159363）丢当天已完成 K 线——同一时刻实时收盘 0.873，日K只到 11-03 的
+    0.810，导致 regime 门控与市况信号都停在昨天。end 必须留空才能拿到当天这根。
+    """
+
+    def test_tencent_kline_url_leaves_end_empty(self):
+        import json
+
+        captured = {}
+
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    'data': {'sz159363': {'qfqday': [
+                        ['2026-11-04', '0.830', '0.873', '0.878', '0.804', '123456'],
+                    ]}}
+                }, ensure_ascii=False).encode('utf-8')
+
+        def fake_urlopen(req, timeout=None):
+            captured['url'] = getattr(req, 'full_url', None) or req.get_full_url()
+            return _Resp()
+
+        with patch.object(mp.urllib.request, 'urlopen', side_effect=fake_urlopen):
+            rows = mp.fetch_tencent_kline('0.159363')
+
+        url = captured['url']
+        self.assertNotIn('2030', url, f'URL 不得再写死未来结束日期：{url}')
+        param = url.split('param=', 1)[1]
+        fields = param.split(',')  # code,period,start,end,count,fq
+        self.assertEqual(fields[3], '',
+                         f'end 字段必须留空（写死未来日期会让 159363 丢当日K），实际={fields[3]!r}')
+        self.assertEqual(rows[0]['date'], '2026-11-04')
+
+
 if __name__ == '__main__':
     unittest.main()

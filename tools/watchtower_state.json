@@ -1,19 +1,19 @@
 {
  "vol_dry": {
   "state": "未到",
-  "date": "2026-11-03"
+  "date": "2026-11-04"
  },
  "margin_clear": {
   "state": "⚡加速出清",
-  "date": "2026-11-03"
+  "date": "2026-11-04"
  },
  "ai_earnings": {
   "state": "待窗口",
-  "date": "2026-11-03"
+  "date": "2026-11-04"
  },
  "policy_924": {
-  "state": "🔔B级命中·仅记录，不操作",
-  "date": "2026-11-03"
+  "state": "🔔A级命中·反转开关候选",
+  "date": "2026-11-04"
  },
- "policy_last_seen_id": 5190412
+ "policy_last_seen_id": 5192677
 }

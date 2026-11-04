@@ -67,8 +67,11 @@ def fetch_tencent_kline(secid, lmt=300, klt="101"):
     code = tencent_symbol(secid)
     period = "week" if klt == "102" else "day"
     count = min(lmt, 120) if klt == "102" else min(lmt, 300)
+    # end 必须留空：历史版本写死 end=2030-12-31，实测会让部分标的（159363）
+    # 丢掉当天已完成的日K（实时收 0.873，日K只回到昨日 0.810），导致 regime
+    # 门控与市况信号都停在昨天。空 end 才能取到当天这根（2026-11-04 修复）。
     url = (f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?"
-           f"param={code},{period},,2030-12-31,{count},qfq")
+           f"param={code},{period},,,{count},qfq")
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=30) as r:
         data = json.loads(r.read().decode("utf-8"))
