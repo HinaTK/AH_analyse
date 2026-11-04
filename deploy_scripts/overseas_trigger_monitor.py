@@ -4,8 +4,10 @@
 用户2026-10-29总纲：辅助赚钱。两条线等触发，触发即推飞书：
 
 纳指 513300（趋势持有方案，存档 reports/nasdaq-etf-trend-holding-plan.md）：
-  ① 溢价 <5%  → 方案启动信号（QDII额度松/情绪退潮，干净入场）
+  ① 溢价 <3% → 方案启动信号（QDII额度松/情绪退潮，干净入场）
+     ——2026-11-04 用户拍板：跨境溢价 >3% 放弃；旧 <5% 启动线废弃（5% 本身就破 3% 线）
   ② 净值距一年峰值回撤 ≥8% → 加仓信号（按方案分份买入）
+     ——同日拍板：加仓信号受 >3% 溢价闸门否决（溢价超标时整体静默）
 
 日经 159866（2026-10-20三档方案）：
   ③ 场内价 ≤ 1.600 → 第一档触发（建仓30%）
@@ -36,7 +38,10 @@ if __name__ == '__main__' and not IS_312:
     sys.exit(subprocess.call([r'C:\Users\Administrator\AppData\Local\Programs\Python\Python312\python.exe',
                               os.path.abspath(__file__)] + sys.argv[1:]))
 
-STATE = Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account/overseas-triggers.json')
+STATE = Path('D:/Code/AH_analyse/.cache/grid-home/cache/grid-account/overseas-triggers.json')
+# 2026-11-04 用户拍板 STATE 迁移：活体状态从 hermes cache 迁到 AH .cache/grid-home
+#（run_and_push.py L44 指定的账本根），复制不剪切、hermes 侧留冻结备份；
+# 迁移操作记录见 cache/confirmed-runtime-deploy/20261104-* 目录。
 
 
 def _nav_series(code, n=250):
@@ -63,7 +68,7 @@ def _spot(sym):
 
 
 def check_nasdaq():
-    """513300：溢价<5%（启动）+ 净值回撤≥8%（加仓）。均为持续触发。"""
+    """513300：溢价<3%（启动，2026-11-04 从5%收紧）+ 净值回撤≥8%（加仓，受3%闸门）。均为持续触发。"""
     navs = _nav_series('513300')
     nav = navs[-1][1]
     peak = max(v for _, v in navs)
@@ -71,10 +76,11 @@ def check_nasdaq():
     price = _spot('sh513300')
     prem = (price / nav - 1) * 100
     fires = []
-    if prem < 5.0:
-        fires.append(('nasdaq_premium', f"🟢 513300 溢价 {prem:+.1f}% 已回到 <5% 安全区——纳指方案可启动（按存档方案执行：底仓40%+回撤8%加仓）", True))
-    if dd <= -8.0:
-        fires.append(('nasdaq_drawdown', f"📉 513300 净值距一年峰值回撤 {dd:+.1f}%，达 -8% 加仓线（注意当前溢价 {prem:+.1f}%，>5% 时按纪律暂缓买入）", True))
+    if prem < 3.0:
+        fires.append(('nasdaq_premium', f"🟢 513300 溢价 {prem:+.1f}% 已回到 <3% 放弃线内——纳指方案可启动（按存档方案执行：底仓40%+回撤8%加仓）", True))
+    # 溢价硬闸门（2026-11-04 用户拍板：跨境 >3% 放弃）：超标时加仓信号整体静默，只留启动线口径
+    if dd <= -8.0 and prem < 3.0:
+        fires.append(('nasdaq_drawdown', f"📉 513300 净值距一年峰值回撤 {dd:+.1f}%，达 -8% 加仓线，当前溢价 {prem:+.1f}% 已过 <3% 闸门（按方案分份买入）", True))
     return fires, dict(nav=nav, peak=peak, dd=dd, prem=prem, date=navs[-1][0])
 
 
@@ -94,8 +100,23 @@ def _nikkei_stop_price():
         return None
 
 
+def _nikkei_prem(price):
+    """日经 159866 实时溢价（%）：场内价 ÷ 东财最新净值 - 1。
+
+    拉不到（净值源故障）→ None：闸门语义为"不硬拦"——这是提示型监控，
+    触价≠成交，用户执行前还有当天实时 IOPV 一道人工闸；但 data 里记 None 备查。
+    """
+    try:
+        navs = _nav_series('159866')
+        nav = navs[-1][1]
+        return (price / nav - 1) * 100
+    except Exception:
+        return None
+
+
 def check_nikkei():
-    """159866 三档+止损监控：一档已成交(11-03)，盯二档≤1.52、三档≤1.42、止损=成本×0.75；触价=min(现价,日低)。"""
+    """159866 三档+止损监控：一档已成交(11-03)，盯二档≤1.52、三档≤1.42、止损=成本×0.75；触价=min(现价,日低)。
+    买入档位受溢价闸门（2026-11-04 用户拍板：日经 >2% 不买/不加仓）；止损不受闸门约束。"""
     q = _quote('sz159866')
     price = q['price']
     # 脏数据退化：盘前/异常 low=0 时用现价
@@ -117,6 +138,10 @@ def check_nikkei():
         if low <= stop:
             fires.append(('nikkei_stop', f"⚠️ 159866 盘中最低 {low:.3f} 已触及止损线 {stop:.4f}，现价 {price:.3f} 回升——触价≠成交，按既定规则应执行止损", False))
             return fires, dict(price=price, low=low, quote_time=qt, stop=stop)
+    prem = _nikkei_prem(price)
+    # 溢价硬闸门（2026-11-04 用户拍板：日经 >2% 不买/不加仓）：超标时买入档位整体静默
+    if prem is not None and prem > 2.0:
+        return fires, dict(price=price, low=low, quote_time=qt, prem=prem)
     # 2026-11-03 第一档已成交（9,000份@1.600，账本 overseas-positions.json）→ 盯二档/三档
     TRANCHES = (
         ('t2', 1.52, "第二档 1.50-1.52 买入30%（约9,000份）"),

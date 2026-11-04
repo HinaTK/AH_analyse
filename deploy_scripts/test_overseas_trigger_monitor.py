@@ -55,6 +55,7 @@ class TestNikkeiTouch(unittest.TestCase):
     def setUp(self):
         self.otm = _load()
         self.otm.date = FakeDate
+        self.otm._nikkei_prem = lambda p: 1.0  # 溢价在闸门内（不触网）
 
     def test_intraday_low_touches_t2_even_if_price_rebounded(self):
         """盘中最低1.515≤1.52、现价1.55已回升 → 必须触发二档触价提醒。"""
@@ -105,6 +106,85 @@ class TestNikkeiTouch(unittest.TestCase):
         self.assertEqual(data.get('low'), 1.515)
 
 
+class TestPremiumGate(unittest.TestCase):
+    """溢价硬闸门（2026-11-04 用户拍板：日经 159866 >2% 不买/不加仓；纳指 513300 >3% 放弃；
+    L74 旧启动线 prem<5% 一并改掉——5% 本身就破了 3% 放弃线）。
+
+    闸门语义：溢价超标 → 买入类信号整体静默（不推送），data 里记 prem 供排查；
+    止损线不受闸门影响（卖出信号任何时候都要响）。
+    """
+
+    def setUp(self):
+        self.otm = _load()
+        self.otm.date = FakeDate
+        # 净值序列：峰值 2.2 → 现值 2.0 = 回撤 -9.1%（≥8% 加仓线）
+        self.otm._nav_series = lambda code, n=250: [('2026-01-01', 2.2), ('2026-11-03', 2.0)]
+
+    # ---- 纳指侧 ----
+
+    def test_nasdaq_startup_line_requires_prem_below_3(self):
+        """溢价 +3.5%：旧 prem<5% 启动线会推「方案可启动」——新口径必须静默。"""
+        self.otm._spot = lambda sym: 2.07  # 2.07/2.0-1 = +3.5%
+        fires, _ = self.otm.check_nasdaq()
+        self.assertNotIn('nasdaq_premium', [f[0] for f in fires])
+
+    def test_nasdaq_startup_fires_when_prem_below_3(self):
+        """溢价 +2.5%：<3% 安全区 → 启动信号照常推。"""
+        self.otm._spot = lambda sym: 2.05
+        fires, _ = self.otm.check_nasdaq()
+        self.assertIn('nasdaq_premium', [f[0] for f in fires])
+
+    def test_nasdaq_drawdown_suppressed_when_prem_above_3(self):
+        """回撤 -9.1% 达加仓线，但溢价 +11% → 闸门否决，不推加仓信号。"""
+        self.otm._spot = lambda sym: 2.22
+        fires, data = self.otm.check_nasdaq()
+        self.assertNotIn('nasdaq_drawdown', [f[0] for f in fires])
+        self.assertIn('prem', data)
+
+    def test_nasdaq_drawdown_fires_when_prem_below_3(self):
+        """回撤 -9.1% 且溢价 +1% → 加仓信号照常推。"""
+        self.otm._spot = lambda sym: 2.02
+        fires, _ = self.otm.check_nasdaq()
+        self.assertIn('nasdaq_drawdown', [f[0] for f in fires])
+
+    # ---- 日经侧（>2% 不买/不加仓） ----
+
+    def test_nikkei_tranche_suppressed_when_prem_above_2(self):
+        """现价 1.51 在二档区，但溢价 +2.5% → 闸门否决，不推买入档位。"""
+        self.otm._quote = lambda sym: _quote_f(1.51, 1.517, 1.505)
+        self.otm._nikkei_stop_price = lambda: None
+        self.otm._nikkei_prem = lambda p: 2.5
+        fires, data = self.otm.check_nikkei()
+        self.assertEqual([f[0] for f in fires], [])
+        self.assertIn('prem', data)
+
+    def test_nikkei_tranche_fires_when_prem_below_2(self):
+        """现价 1.51 在二档区，溢价 +1.5% → 二档信号照常推。"""
+        self.otm._quote = lambda sym: _quote_f(1.51, 1.517, 1.505)
+        self.otm._nikkei_stop_price = lambda: None
+        self.otm._nikkei_prem = lambda p: 1.5
+        fires, _ = self.otm.check_nikkei()
+        self.assertEqual([f[0] for f in fires], ['nikkei_t2'])
+
+    def test_nikkei_stop_not_gated_by_premium(self):
+        """现价破止损线时溢价再高也必须响——卖出信号不受买入闸门约束。"""
+        self.otm._quote = lambda sym: _quote_f(1.19, 1.61, 1.188)
+        self.otm._nikkei_stop_price = lambda: 1.2002
+        self.otm._nikkei_prem = lambda p: 5.0
+        fires, _ = self.otm.check_nikkei()
+        self.assertEqual([f[0] for f in fires], ['nikkei_stop'])
+
+    def test_nikkei_prem_fetch_fail_no_silent_block(self):
+        """溢价拉不到（None）→ 闸门不放行也不硬拦：信号照常推（fail-open 提示型监控，
+        且触价≠成交，用户执行前还有当天实时 IOPV 一道人工闸）。"""
+        self.otm._quote = lambda sym: _quote_f(1.51, 1.517, 1.505)
+        self.otm._nikkei_stop_price = lambda: None
+        self.otm._nikkei_prem = lambda p: None
+        fires, data = self.otm.check_nikkei()
+        self.assertEqual([f[0] for f in fires], ['nikkei_t2'])
+        self.assertIsNone(data.get('prem'))
+
+
 class TestNikkeiStop(unittest.TestCase):
     """止损线代码载体（2026-11-03 收编缺口：账本写明止损=成本×0.75，脚本零执行）。
 
@@ -117,6 +197,7 @@ class TestNikkeiStop(unittest.TestCase):
         self.otm = _load()
         self.otm.date = FakeDate
         self.otm._nikkei_stop_price = lambda: 1.2002
+        self.otm._nikkei_prem = lambda p: 1.0  # 止损不受溢价闸门影响，但避免触网
 
     def test_price_at_stop_fires_persistent(self):
         """现价 1.200 已破止损线 1.2002 → 持续触发 nikkei_stop。"""
