@@ -154,7 +154,7 @@ def check_nikkei():
         if low <= level:
             fires.append((f'nikkei_{tag}', f"⚠️ 159866 盘中最低 {low:.3f} 触及{act.split('买入')[0]}触发线，现价 {price:.3f} 回升——触价≠成交，未执行则等回落再触发", False))
             break
-    return fires, dict(price=price, low=low, quote_time=qt)
+    return fires, dict(price=price, low=low, quote_time=qt, prem=prem)
 
 
 def main():

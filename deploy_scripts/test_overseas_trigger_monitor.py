@@ -105,6 +105,13 @@ class TestNikkeiTouch(unittest.TestCase):
         _, data = self.otm.check_nikkei()
         self.assertEqual(data.get('low'), 1.515)
 
+    def test_normal_path_records_prem(self):
+        """未触发时 data 也要带 prem（2026-11-04 验收瑕疵：只有闸门拦截分支带，
+        正常分支缺失导致状态文件 nikkei.prem 为空、无法事后审计溢价）。"""
+        self.otm._quote = lambda sym: _quote_f(1.55, 1.56, 1.515)
+        _, data = self.otm.check_nikkei()
+        self.assertEqual(data.get('prem'), 1.0)
+
 
 class TestPremiumGate(unittest.TestCase):
     """溢价硬闸门（2026-11-04 用户拍板：日经 159866 >2% 不买/不加仓；纳指 513300 >3% 放弃；
