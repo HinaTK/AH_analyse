@@ -42,6 +42,8 @@ STATE = Path('D:/Code/AH_analyse/.cache/grid-home/cache/grid-account/overseas-tr
 # 2026-11-04 用户拍板 STATE 迁移：活体状态从 hermes cache 迁到 AH .cache/grid-home
 #（run_and_push.py L44 指定的账本根），复制不剪切、hermes 侧留冻结备份；
 # 迁移操作记录见 cache/confirmed-runtime-deploy/20261104-* 目录。
+# 2026-11-05 用户定：持仓账本也读 DSH 自己那份（与 STATE 同目录），不再读 hermes-home。
+POSITIONS = STATE.parent / 'overseas-positions.json'
 
 
 def _nav_series(code, n=250):
@@ -91,9 +93,8 @@ def _nikkei_stop_price():
     动态读账本 unit_cost，不写死数字（分红/加减仓后成本变，线跟着变）；
     账本缺失/损坏/无持仓 → None（调用方不判定止损，宁缺勿误报）。
     """
-    positions_path = Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account/overseas-positions.json')
     try:
-        data = json.loads(positions_path.read_text(encoding='utf-8'))
+        data = json.loads(POSITIONS.read_text(encoding='utf-8'))
         unit_cost = float(data['sz159866']['unit_cost'])
         return round(unit_cost * 0.75, 4)
     except Exception:

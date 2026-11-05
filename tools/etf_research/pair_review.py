@@ -106,7 +106,9 @@ import os
 import tempfile
 
 STATE_VERSION = 'pair-review-v1'
-DEFAULT_STATE = Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account/rotation') / (STATE_VERSION + '.json')
+# 跟随 HERMES_HOME（DSH 链指向 .cache/grid-home；未设则为 Hermes 生产根），口径同 confirmed_runtime.root_from_home。
+ROTATION_DIR = Path(os.environ.get('HERMES_HOME', 'D:/Hermes Agent CN Desktop/data/hermes-home')) / 'cache/grid-account/rotation'
+DEFAULT_STATE = ROTATION_DIR / (STATE_VERSION + '.json')
 
 
 DEFAULT_TAXONOMY = Path(__file__).with_name('taxonomy.json')

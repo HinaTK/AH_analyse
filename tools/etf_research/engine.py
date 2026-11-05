@@ -1,13 +1,14 @@
 """Single simulation pipeline; both ranking views share these runs."""
 from pathlib import Path
-import json, math, urllib.request
+import json, math, os, urllib.request
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 import pandas as pd
 from .research import BASE,HOLDINGS,VERSION,load_universe,select_window,latest_session,get_model
-DEFAULT_INPUT=Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-broad-20260923')
-DEFAULT_OUTPUT=Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-research')
+CACHE_ROOT = Path(os.environ.get('HERMES_HOME', 'D:/Hermes Agent CN Desktop/data/hermes-home')) / 'cache'
+DEFAULT_INPUT = CACHE_ROOT / 'grid-broad-20260923'
+DEFAULT_OUTPUT = CACHE_ROOT / 'grid-research'
 WINDOWS=['full','early','late','recent20']
 WEIGHTS={'idle_net_per_avg_cost_pct':.35,'full_cycle_net_per_avg_cost_pct':.20,'recent20_cycle_net_per_avg_cost_pct':.15,'worst_half_efficiency_pct':.15,'max_down_corr_to_base':-.15}
 URL='https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol={code}&scale=5&ma=no&datalen=10000'

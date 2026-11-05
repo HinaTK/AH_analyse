@@ -50,7 +50,7 @@ except Exception as e:
 
 # Sina kline for closes
 import sys
-sys.path.insert(0, 'D:/Hermes Agent CN Desktop/data/hermes-home/skills/@user_5d56ad01/etf-grid-screener/scripts')
+sys.path.insert(0, 'D:/Code/AH_analyse/skills/@user_5d56ad01/etf-grid-screener/scripts')
 from grid_tool import fetch_kline
 r = fetch_kline('159866', 260)
 dates, opens, closes, highs, lows, vols = r

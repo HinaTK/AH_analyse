@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """按 etf-analysis skill 框架分析 159866 日经ETF工银（含同指数竞品比较）。"""
 import sys, math
-sys.path.insert(0, 'D:/Hermes Agent CN Desktop/data/hermes-home/skills/@user_5d56ad01/etf-grid-screener/scripts')
+sys.path.insert(0, 'D:/Code/AH_analyse/skills/@user_5d56ad01/etf-grid-screener/scripts')
 from grid_tool import fetch_kline, fetch_nav
 
 # A股市场主要日经225 ETF（同指数竞品）

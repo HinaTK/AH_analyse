@@ -1,3 +1,8 @@
+---
+name: abnormal-movement-advisor
+description: 用户要求「异动分析」时，分析A股和港股行业异动归因、事件传导及预测验证。
+---
+
 # Skill: abnormal-movement-advisor
 
 You are an abnormal market movement analyst for China-market sector rotation.

@@ -36,8 +36,11 @@ from pathlib import Path
 CST = timezone(timedelta(hours=8))
 
 SYSTEM_PY = Path(r'C:\Users\Administrator\AppData\Local\Programs\Python\Python312\python.exe')
-SCRIPTS = Path(r'D:\Hermes Agent CN Desktop\data\hermes-home\scripts')
 REPO = Path(r'D:\Code\AH_analyse')
+# 2026-11-05 用户定：DSH 链只跑 AH_analyse 里的脚本，不调用 hermes-home/scripts 的部署副本。
+# JOBS 里的 script 是相对 REPO 的路径；网格启动脚本在 tools/confirmed_grid/launchers，其余在 deploy_scripts。
+LAUNCHERS = 'tools/confirmed_grid/launchers'
+DEPLOY = 'deploy_scripts'
 
 # 迁移后的账本根目录：root_from_home() 取 HERMES_HOME/cache/grid-account。
 # 原 Hermes 目录只读保留（复制而非剪切），便于随时回滚。
@@ -57,26 +60,79 @@ IM_BOT_ID = 'bot_33dda378bac343d695e4e63180c53d11'
 IM_TARGET_ID = 'tgt_0697a00b9868ffbd'
 
 # 任务注册表：id -> 显示名 / 脚本 / 工作目录 / 是否推送
-# 与 Hermes cron/jobs.json 的 13 个脚本任务一一对应（gateway_keeper 守护的是
-# Hermes 自己，随 Hermes 退役，不迁移）。
+# 迁移任务对应 Hermes 的脚本任务（gateway_keeper 属 Hermes 自身守护，不迁移）。
+# gate_watch 是 DSH 新增的独立盘中观察任务，不覆盖两条链的正式门控。
 JOBS: dict[str, dict[str, object]] = {
-    'preview_0910':   {'name': '网格0910预告',      'script': 'grid_weixin_preview.py',           'cwd': None,  'push': 'off'},
-    'morning_0920':   {'name': '网格0920盘前建议',  'script': 'grid_weixin_execute.py',           'cwd': None,  'push': 'on'},
-    'intraday':       {'name': '网格盘中触价',      'script': 'grid_weixin_intraday.py',          'cwd': None,  'push': 'on'},
-    'eod_1520':       {'name': '网格1520收盘',      'script': 'grid_eod_decision.py',             'cwd': None,  'push': 'on'},
-    'weekly_fri':     {'name': '网格周五1525周报',  'script': 'grid_weekly_rotation.py',          'cwd': None,  'push': 'on', 'timeout': 2700},
+    'preview_0910':   {'name': '网格0910预告',      'script': f'{LAUNCHERS}/grid_weixin_preview.py',  'cwd': None,  'push': 'off'},
+    'morning_0920':   {'name': '网格0920盘前建议',  'script': f'{DEPLOY}/grid_weixin_execute.py',     'cwd': None,  'push': 'on'},
+    'intraday':       {'name': '网格盘中触价',      'script': f'{LAUNCHERS}/grid_weixin_intraday.py', 'cwd': None,  'push': 'on'},
+    'gate_watch':     {'name': '网格盘中门控观察',  'script': f'{DEPLOY}/grid_intraday_gate_watch.py', 'cwd': None, 'push': 'on'},
+    'eod_1520':       {'name': '网格1520收盘',      'script': f'{LAUNCHERS}/grid_eod_decision.py',    'cwd': None,  'push': 'on'},
+    'weekly_fri':     {'name': '网格周五1525周报',  'script': f'{DEPLOY}/grid_weekly_rotation.py',    'cwd': None,  'push': 'on', 'timeout': 2700},
     # 2026-11-04：grid_regime_cache.py 自设 30 分钟自限（SELF_LIMIT_SECONDS=1800，
     # 逐轮增量落盘），但 wrapper 默认 240s 会在脚本完成前强杀（当日 15:34 超时事故）。
     # 给 1900s，让脚本在 1800s 自限处优雅退出，而非被外部杀掉。
-    'regime_1530':    {'name': '网格1530门控缓存',  'script': 'grid_regime_cache.py',             'cwd': None,  'push': 'off', 'timeout': 1900},
-    'market_1535':    {'name': '市况1535右侧信号',  'script': 'market_phase_monitor.py',          'cwd': None,  'push': 'on'},
-    'rate_1540':      {'name': '利率1540点火',      'script': 'rate_ignition_monitor_wrapper.py', 'cwd': None,  'push': 'on'},
-    'watchtower_1550':{'name': '观察哨1550',        'script': 'watchtower_wrapper.py',            'cwd': None,  'push': 'on'},
-    'overseas':       {'name': '海外盘中触发',      'script': 'overseas_trigger_monitor.py',      'cwd': None,  'push': 'on'},
-    'midnight_0001':  {'name': '网格0001可卖同步',  'script': 'grid_midnight_rollover.py',        'cwd': None,  'push': 'off'},
-    'git_2300':       {'name': '运维2300git推送',   'script': 'git_daily_push.py',                'cwd': str(REPO), 'push': 'off'},
-    'openviking':     {'name': '运维OpenViking守卫','script': 'openviking_auto_heal.py',          'cwd': None,  'push': 'on'},
+    'regime_1530':    {'name': '网格1530门控缓存',  'script': f'{DEPLOY}/grid_regime_cache.py',             'cwd': None,  'push': 'off', 'timeout': 1900},
+    'market_1535':    {'name': '市况1535右侧信号',  'script': f'{DEPLOY}/market_phase_monitor.py',          'cwd': None,  'push': 'on'},
+    'rate_1540':      {'name': '利率1540点火',      'script': f'{DEPLOY}/rate_ignition_monitor_wrapper.py', 'cwd': None,  'push': 'on'},
+    'watchtower_1550':{'name': '观察哨1550',        'script': f'{DEPLOY}/watchtower_wrapper.py',            'cwd': None,  'push': 'on'},
+    'overseas':       {'name': '海外盘中触发',      'script': f'{DEPLOY}/overseas_trigger_monitor.py',      'cwd': None,  'push': 'on'},
+    'midnight_0001':  {'name': '网格0001可卖同步',  'script': f'{LAUNCHERS}/grid_midnight_rollover.py',     'cwd': None,  'push': 'off'},
+    'git_2300':       {'name': '运维2300git推送',   'script': f'{DEPLOY}/git_daily_push.py',                'cwd': str(REPO), 'push': 'off'},
+    'openviking':     {'name': '运维OpenViking守卫','script': f'{DEPLOY}/openviking_auto_heal.py',          'cwd': None,  'push': 'on'},
 }
+
+
+def resolve_script(job: str) -> Path:
+    """任务 id → AH_analyse 内的脚本绝对路径。"""
+    return REPO / str(JOBS[job]['script'])
+
+
+# 双链配置漂移只读校验（2026-11-05 防复发）。
+# PROD_HOME 仅作为只读比对源，绝不写入；Hermes 链不经过本包装器。
+PROD_HOME = Path(r'D:\Hermes Agent CN Desktop\data\hermes-home')
+PARITY_JOBS = frozenset({'midnight_0001'})
+
+
+def _parity_module():
+    """延迟导入，避免计划任务在无关 job 上多做一次模块加载。"""
+    try:
+        from config_parity import check_holdings_parity, format_alert
+    except ImportError:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from config_parity import check_holdings_parity, format_alert
+    return check_holdings_parity, format_alert
+
+
+def assert_dsh_home(hermes_home: Path) -> None:
+    """DSH 链不得把生产账本根当自己的 HERMES_HOME（防误传跨链写）。"""
+    prod = PROD_HOME.resolve()
+    target = Path(hermes_home).resolve()
+    if target == prod or prod in target.parents:
+        raise ValueError(
+            f'拒绝执行：--hermes-home 指向 Hermes 生产根 {target}；'
+            f'DSH 链只能用 {DEFAULT_HERMES_HOME}')
+
+
+def config_parity_guard(dsh_home: Path, prod_home: Path,
+                        push_fn=None, log_fn=None) -> str | None:
+    """00:01 只读比对两链 holdings.json；不一致只告警，不复制/镜像/改写。
+
+    返回已推送的告警文本，一致或推送失败时返回 None。
+    告警文本只含字段名与标的个数，不含标的代码或字段值。
+    """
+    check, render = _parity_module()
+    result = check(dsh_home, prod_home)
+    alert = render(result)
+    if not alert:
+        return None
+    log = log_fn or (lambda text: _log('双链配置校验', text))
+    push = push_fn or _push
+    log(alert)
+    if push(alert):
+        return alert
+    log('告警推送失败，保留日志；不自动修复任何一侧配置')
+    return None
 
 
 def _log(name: str, message: str) -> None:
@@ -250,8 +306,30 @@ def _remember_endpoint(url: str) -> None:
         pass
 
 
+def _push_feishu_post(text: str) -> bool:
+    """Hermes 同款富文本 post（md 节点）；不打印或记录凭据。"""
+    try:
+        from feishu_post import send_post
+    except ImportError:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from feishu_post import send_post
+    body = text if len(text) <= MAX_PUSH_CHARS else text[:MAX_PUSH_CHARS] + '\n…（内容过长已截断，完整内容见日志）'
+    try:
+        ok = send_post(body, bot_id=IM_BOT_ID, target_id=IM_TARGET_ID)
+    except Exception as exc:
+        _log('_push', f'富文本 post 失败 {type(exc).__name__}: {str(exc)[:120]}')
+        return False
+    if ok:
+        _log('_push', '富文本 post 已发送 @ open.feishu.cn/im/v1/messages')
+    else:
+        _log('_push', '富文本 post 未确认 message_id')
+    return ok
+
+
 def _push(text: str) -> bool:
-    """优先走 DSH-IM（同一个飞书机器人），失败再退回 webhook。"""
+    """优先 Hermes 同款 post 富文本，失败再走 DSH-IM 卡片，最后 webhook。"""
+    if _push_feishu_post(text):
+        return True
     if _push_im(text):
         return True
     return _push_webhook(text)
@@ -293,7 +371,7 @@ def main() -> int:
     if options.job:
         spec = JOBS[options.job]
         name = str(spec['name'])
-        script = SCRIPTS / str(spec['script'])
+        script = resolve_script(options.job)
         cwd = Path(str(spec['cwd'])) if spec['cwd'] else script.parent
         push = str(options.push or spec['push'])
         timeout = options.timeout or int(spec.get('timeout', 240))
@@ -308,6 +386,12 @@ def main() -> int:
 
     hermes_home = Path(options.hermes_home)
     started = time.monotonic()
+
+    # 防误传：DSH 链绝不能把 Hermes 生产根当自己的账本根。
+    assert_dsh_home(hermes_home)
+    # 00:01 可卖同步前做一次只读双链配置校验（只告警，不自动复制/镜像）。
+    if options.job in PARITY_JOBS:
+        config_parity_guard(hermes_home, PROD_HOME)
 
     if not script.exists():
         _log(name, f'脚本不存在：{script}')

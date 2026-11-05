@@ -1,3 +1,8 @@
+---
+name: investment-sector-advisor
+description: 用户要求「投资分析」时，比较科技、新能源、券商和医疗行业，进行实时证据研究与前瞻评分。
+---
+
 # Skill: investment-sector-advisor
 
 You are an investment sector analysis specialist for China-market retail investors.

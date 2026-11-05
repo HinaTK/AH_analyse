@@ -395,6 +395,51 @@ def reanchor_price(old_next, spot):
     return price(spot * (1 - GAP))
 
 
+def _build_gate_and_reanchor_context(root, now=None):
+    """门控 + 恢复日重锚上下文（共享：盘前/盘中/成交确认后/EOD 四条路径同源）。
+
+    2026-11-05 事故：intraday_main 裸调 plan(root) 不带 regime_gate，被门控拦截的
+    买入（159363 I格@1.064）在盘中监控里复活，现价 0.855 触价误报。
+    根因不是 monitor 判定错，而是喂给它的 ticket 没过门控。
+    三级降级与 ops_main 同源：缓存(期望昨日) → 现拉(顺手落缓存) → 过期缓存 → None。
+    """
+    gate = None
+    gate_lifted = {}
+    spot = {}
+    try:
+        from datetime import timedelta as _td
+        yesterday = (datetime.now(timezone(_td(hours=8))) - _td(days=1)).date().isoformat()
+        gate = build_gate(root, expect_asof=yesterday)
+    except Exception:
+        gate = None
+    if gate is not None:
+        try:
+            yesterday_cache = load_regime_cache(root, expect_asof=yesterday, allow_stale=True)
+        except Exception:
+            yesterday_cache = None
+        for code in H.held_codes():
+            try:
+                if yesterday_cache and yesterday_cache.get(code, {}).get('blocks_buy') and not gate.blocks_buy(code):
+                    gate_lifted[code] = True
+                close_attr = getattr(gate, 'close', None)
+                if close_attr:
+                    c = close_attr(code)
+                    if c is not None:
+                        spot[code] = D(str(c))
+            except Exception:
+                pass
+    return gate, spot or None, gate_lifted or None
+
+
+def plan_with_gate(root):
+    """带门控与重锚上下文的 plan（盘中监控/成交确认后建议/EOD 同源）。
+
+    与 ops_main 的盘前路径共用同一段门控+重锚逻辑，避免裸调 plan(root) 复活被拦截的买入。
+    """
+    gate, spot, gate_lifted = _build_gate_and_reanchor_context(root)
+    return plan(root, regime_gate=gate, spot=spot, gate_lifted=gate_lifted)
+
+
 def plan(root, regime_gate=None, spot=None, gate_lifted=None):
     states = load_states(root)
     # root 下有 holdings.json 优先用（测试/部署同源）；否则退回 HERMES_HOME 生产路径
@@ -580,7 +625,7 @@ def monitor(ticket, quotes, state, day):
             if hit:
                 state['alerts'][key] = True
                 direction = '买' if action['side'] == 'buy' else '卖'
-                messages.append(f"{action['code']} {action['lot']}格 条件{direction} {action['qty']:,}份 @ {action['price']}；现价={last}，腾讯时间={quote.get('time','未知')}；触价发生在建议生成后（首见现价触价），无法确定触价时刻，触价不等于成交，请核对银河。")
+                messages.append(f"✅ {action['code']} {action['lot']}格 条件{direction} {action['qty']:,}份 @ {action['price']}；现价={last}，腾讯时间={quote.get('time','未知')}；触价发生在建议生成后（首见现价触价），无法确定触价时刻，触价不等于成交，请核对银河。")
             continue
         if key in state['alerts']:
             continue
@@ -597,7 +642,7 @@ def monitor(ticket, quotes, state, day):
             key_extreme = 'low' if action['side'] == 'buy' else 'high'
             evidence = (f"建议生成后日内{'最低' if key_extreme == 'low' else '最高'}={extremes[key_extreme]}（基准{base[key_extreme]}）" if key_extreme in extremes else f'现价={last}')
             direction = '买' if action['side'] == 'buy' else '卖'
-            messages.append(f"{action['code']} {action['lot']}格 条件{direction} {action['qty']:,}份 @ {action['price']}；{evidence}，现价={last}，腾讯时间={quote.get('time','未知')}；无法确定触价时刻，可能早于建议，触价不等于成交，请核对银河。")
+            messages.append(f"✅ {action['code']} {action['lot']}格 条件{direction} {action['qty']:,}份 @ {action['price']}；{evidence}，现价={last}，腾讯时间={quote.get('time','未知')}；无法确定触价时刻，可能早于建议，触价不等于成交，请核对银河。")
     return '\n'.join(messages)
 
 
@@ -676,8 +721,8 @@ def intraday_main():
     if not quotes_are_live(quotes, now):
         return
     root = root_from_home()
-    ticket = plan(root)  # Always regenerate from current authoritative fills, never old tickets.
-    path = root / 'confirmed-intraday-alerts.json'
+    ticket = plan_with_gate(root)  # 带门控：被拦截的买入不得在盘中复活误报（2026-11-05 事故修复）
+    path = root / "confirmed-intraday-alerts.json"
     with locked(path):
         state = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
         message = monitor(ticket, quotes, state, now.date().isoformat())
@@ -716,7 +761,7 @@ def confirm_main(argv=None):
                    fill_item_key=args.fill_item_key, ingestion_at=started_at)
     print(json.dumps({key:state[key] for key in ('code','qty','sellable_qty','max_grid')}, ensure_ascii=False))
     print('现在的剩余操作建议')
-    print(render(plan(root_from_home())))
+    print(render(plan_with_gate(root_from_home())))
 
 
 def eod_report(root, now, quotes, bars):
@@ -865,5 +910,5 @@ def render(ticket):
     for action in ticket['actions']:
         direction = '买' if action['side'] == 'buy' else '卖'
         name = names.get(action['code'], '')
-        lines.append(f"- {action['code']} {name} 条件{direction} {action['lot']}格 **{action['qty']:,}份** @ **{action['price']}**")
+        lines.append(f"- ✅ {action['code']} {name} 条件{direction} {action['lot']}格 **{action['qty']:,}份** @ **{action['price']}**")
     return '\n'.join(lines)

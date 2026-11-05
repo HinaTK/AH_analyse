@@ -292,5 +292,23 @@ class TestTouchPushDedup(unittest.TestCase):
             FakeDate.current = '2026-10-30'
 
 
+class TestPositionsPath(unittest.TestCase):
+    """2026-11-05 用户定：DSH 链只读 DSH 自己那份账本，海外持仓不得再读 hermes-home。"""
+
+    def setUp(self):
+        self.otm = _load()
+
+    def test_positions_beside_state_not_hermes(self):
+        self.assertEqual(self.otm.POSITIONS, self.otm.STATE.parent / 'overseas-positions.json')
+        self.assertNotIn('hermes-home', str(self.otm.POSITIONS).lower())
+
+    def test_stop_price_reads_module_positions(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'overseas-positions.json'
+            path.write_text('{"sz159866": {"unit_cost": "1.6"}}', encoding='utf-8')
+            self.otm.POSITIONS = path
+            self.assertEqual(self.otm._nikkei_stop_price(), 1.2)
+
+
 if __name__ == '__main__':
     unittest.main()

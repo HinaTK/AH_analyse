@@ -100,7 +100,7 @@ def main():
             else:
                 print(f"  {k}: {v}")
 
-    out_dir = Path("D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-research")
+    out_dir = engine.DEFAULT_OUTPUT
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f"single_{code}.json"
     r_clean = {k: v for k, v in r.items() if k not in ('events', 'equity_curve')}

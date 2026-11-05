@@ -10,7 +10,7 @@ from pathlib import Path
 from decimal import Decimal as D
 
 DEFAULT = {
-    'sh589720': {'name': '科创创新药ETF国泰', 'lot_budget': '8000', 'active': True},
+    'sh589720': {'name': '科创创新药ETF国泰', 'lot_budget': '12000', 'active': True},
     'sz159363': {'name': '创业板人工智能ETF华宝', 'lot_budget': '6000', 'active': True},
     'sz159992': {'name': '创新药ETF银华', 'lot_budget': None, 'active': False},
 }

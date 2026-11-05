@@ -31,7 +31,7 @@ class HoldingsListTests(unittest.TestCase):
 
     def test_lot_budget_none_for_inactive(self):
         budgets = H.lot_budgets()
-        self.assertEqual(budgets['sh589720'], D('8000'))
+        self.assertEqual(budgets['sh589720'], D('12000'))
         self.assertEqual(budgets['sz159363'], D('6000'))
         self.assertIsNone(budgets['sz159992'])
 

@@ -7,7 +7,7 @@ from .entry_rank import rank_entries, render_markdown
 from .engine import dump
 from .pair_review import _table as _md_table
 STATE_VERSION=research.VERSION+'-rotation-streak-v1'
-DEFAULT_STATE=Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account/rotation')/f'{STATE_VERSION}.json'
+DEFAULT_STATE=pair_review.ROTATION_DIR/f'{STATE_VERSION}.json'  # 跟随 HERMES_HOME，见 pair_review.ROTATION_DIR
 # 榜单区块唯一标题：周报/摘要/测试三方共用，禁止任何一方手写。
 # 2026-10-24 教训：测试手写子串与实现表头不一致，误判功能缺失。
 ENTRY_BLOCK_TITLE='【可建仓候选·双规则过滤（五线全破暂停买入+近20日往返<2出榜，持仓豁免）】'
