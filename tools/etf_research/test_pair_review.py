@@ -112,6 +112,8 @@ def test_weekly_report_tables_readable_no_machine_lines(tmp_path):
         x.update(full_cycle_net=3000.0 - i * 100)
         top.append(x)
     r['ranking'] = [dict(row('sh510001', 20, 4), name='sh510001', full_cycle_net=1500.0), *top]
+    # 轮换往返前10 区块自有一份数据（原断言靠被移除的双轨周检表格蹭行，属假阳性）。
+    r['rotation_top10'] = top
     r['summary'].update(version=research.VERSION, window_start='2026-07-07', window_end='2026-10-09',
                         successful_runs=1284, failed_runs=0, attempted_assets=321,
                         output_path=str(tmp_path))
@@ -127,17 +129,28 @@ def test_weekly_report_tables_readable_no_machine_lines(tmp_path):
     text = out['report']
     assert text.count(weekly.ENTRY_BLOCK_TITLE) == 1, 'entry rank block must appear exactly once'
     lines = text.splitlines()
-    # 1) 双轨周检 metrics 不再是机器长行：任何一行不得超过 120 字符。
+    # 1) 2026-11-06 Master 整改：开头口径压缩成 1~2 行紧凑头部，
+    #    逐持仓双轨周检表格区块与 legacy reference 两行不再进入周报正文。
     machine_lines = [x for x in lines if '中期往返=' in x or '前半往返=' in x]
-    assert not machine_lines, f'machine-format metric lines must be table rows, got: {machine_lines[:2]}'
+    assert not machine_lines, f'不允许机器格式指标行：{machine_lines[:2]}'
     overlong = [x for x in lines if len(x) > 120]
-    assert not overlong, f'no report line may exceed 120 chars: {overlong[:3]}'
-    # 2) 双轨周检表格化：表头 + 数据行，列值逐格来自同一字段。
-    assert '【逐持仓双轨周检】' in text
-    pair_table_header = next((x for x in lines if x.startswith('| 标的') or x.startswith('| ETF')), None)
-    assert pair_table_header is not None, 'pair review must render a markdown table header'
-    # 基线行 + 候选行都走同一表格；数字存在但不允许旧格式“指标名=值”串联。
-    assert '26' not in ''.join(machine_lines)  # trivially true; machine lines gone
+    assert not overlong, f'任何报告行不得超过 120 字符：{overlong[:3]}'
+    assert '【逐持仓双轨周检】' not in text, '逐持仓双轨周检表格区块须移除'
+    assert 'legacy reference' not in text, 'legacy reference 两行须删除'
+    # 轮换复核状态收敛为一行；开头口径行 ≤2 行（provenance 保留审计价值）。
+    assert any(x.startswith('轮换复核：') for x in lines), '须保留一行轮换复核状态'
+    provenance = [x for x in lines[:8] if not x.startswith('轮换复核：')
+                  and any(k in x for k in
+                  ('共同窗口', '共同5分钟窗口', '资格池', '资格快照池', '成功模拟',
+                   '模型资格排除', '数据覆盖', 'legacy reference', '口径', '数据截止'))]
+    assert len(provenance) <= 2, f'开头口径行须 ≤2 行，实际 {provenance}'
+    # 其余区块仍在（可建仓候选/轮换往返前10/TOP2/错误记录/底部免责）。
+    for marker in (weekly.ENTRY_BLOCK_TITLE, '【轮换往返前10·同一套5分钟模拟】',
+                   'TOP2', '数据/模拟错误记录', '禁止自动买入、撤单、改账本'):
+        assert marker in text, f'区块缺失：{marker}'
+    # 任务4：TOP2 区块只作观察候选，不得出现替换暗示。
+    assert '替换候选' not in text and '持仓→候选' not in text
+    assert '本区块不生成替换建议' in text
     # 3) 三持仓表格化。
     assert '【当前三持仓·全部展示，不参与领先者】' in text
     holdings_table = [x for x in lines if x.startswith('|') and 'sz159363' in x and '4,0' not in x]
@@ -146,10 +159,10 @@ def test_weekly_report_tables_readable_no_machine_lines(tmp_path):
     assert '【轮换往返前10·同一套5分钟模拟】' in text
     rot = [x for x in lines if x.startswith('|') and 'sh510010' in x]
     assert rot, 'rotation top10 must render as markdown table rows'
-    # 5) 综合排名表格化。
-    assert '【综合研究排名·第三ETF互补视图】' in text
-    comp = [x for x in lines if x.startswith('|') and 'score' not in x and 'sh5100' in x]
-    assert comp, 'composite ranking must render as markdown table rows'
+    # 5) 2026-11-06 Master 指令：去掉「第三ETF互补视图」区块（只报告，不再出现在周报）。
+    assert '【综合研究排名·第三ETF互补视图】' not in text, 'third-ETF complement view must be removed'
+    assert not [x for x in lines if x.startswith('| 代码 | 名称 | score | 资格 |')], \
+        'composite score table must not be rendered'
 
 
 
@@ -277,21 +290,23 @@ def test_weekly_single_research_call_pair_report_and_no_legacy_review(tmp_path):
     first=run()
     assert len(calls)==1 and calls[0]=={}
     assert 'pair_review' in first
-    assert '【逐持仓双轨周检】' in first['report']
-    assert 'name-based' in first['report'] and '有限过滤' in first['report']
-    assert '待核' in first['report']
-    assert '159992 exit-only' in first['report']
-    # 2026-10-30 表格化改版：相关性在表格“与保留持仓相关性”列，不再拼在长行里。
-    assert '0.85' in first['report']
-    assert '同类' in first['report'] and '跨主题' in first['report']
+    # 2026-11-06 Master 整改：双轨周检表格区块与 legacy reference 不再进正文，
+    # 收敛为恰好一行轮换复核状态；run_pair_review 状态机仍照常运行推进连续周。
+    assert '【逐持仓双轨周检】' not in first['report']
+    assert 'legacy reference' not in first['report']
+    review_lines=[x for x in first['report'].splitlines() if x.startswith('轮换复核：')]
+    assert len(review_lines)==1, f'须恰好一行轮换复核状态：{review_lines}'
+    assert '159992 exit-only' not in first['report']
+    assert 'name-based' not in first['report']
     r['summary']['asof']='2026-10-16'
-    assert 'HUMAN_ROTATION_REVIEW' in run()['report']
+    assert '轮换复核：触发' in run()['report']
     # Legacy can still hit its historical threshold but cannot drive the new report.
     r['ranking'][0]['recent20_cycles']=2
     r['summary']['asof']='2026-10-23'
     final=run()
     assert final['state']['review_due'] is True
-    assert 'HUMAN_ROTATION_REVIEW sz159363 same_class' not in final['report']
+    assert 'HUMAN_ROTATION_REVIEW' not in final['report']
+    assert 'legacy reference' not in final['report']
 
 
 def test_official_assets_schema_unknown_observe_and_diagnostics():

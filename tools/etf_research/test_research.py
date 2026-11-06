@@ -329,20 +329,22 @@ def test_weekly_summary_compact_and_actionable():
     assert '降级' in text and '不触发复核' in text
     assert '完整报告' in text and 'weekly-report.txt' in text
     assert '【逐持仓双轨周检】' not in text and 'legacy reference' not in text
+    assert '双轨周检明细' not in text, '完整报告说明不得再宣称含双轨周检明细'
     assert len(lines)<=16, f'summary too long: {len(lines)} lines'
 
 
 def test_weekly_cli_prints_full_report(monkeypatch,capfd):
     # 2026-10-30 用户明确：周检推送禁止缩略，cron（no_agent）吃 main() 的 stdout，
-    # 因此 main() 必须打印完整周报（逐持仓双轨周检+完整榜单），而不是 summarize 精简摘要。
+    # 因此 main() 必须打印完整周报（紧凑头部+各数据区块表格），而不是 summarize 精简摘要。
     weekly=importlib.import_module('tools.etf_research.weekly')
     fake=dict(state={},pair_review={},holdings={},research={},
-              report='【每周ETF轮换研究·只报告，不自动换仓】\n逐持仓双轨周检完整行'*10,summary='【每周ETF轮换研究·精简】一行摘要')
+              report='【每周ETF轮换研究·只报告，不自动换仓】\n完整报告正文数据行'*10,summary='【每周ETF轮换研究·精简】一行摘要')
     monkeypatch.setattr(weekly,'run_weekly',lambda **kwargs:fake)
     text=weekly.main(['--offline'])
     out=capfd.readouterr().out
     assert text==fake['report']
-    assert '逐持仓双轨周检' in out
+    assert '完整报告正文数据行' in out
+    assert '逐持仓双轨周检' not in out and 'legacy reference' not in out
     assert '一行摘要' not in out and '精简' not in out
 
 

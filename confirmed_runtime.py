@@ -7,12 +7,15 @@ from decimal import Decimal as D, ROUND_HALF_UP
 
 import holdings as H
 
-# 门控方案切换（2026-10-30 用户指令：执行策略切换成方案F，原方案切成备份）。
-#   'f'      = 方案F：五线全破 OR ATR5/ATR20>1.15（全池回测避损+317.1k 最优）
-#   'legacy' = 原四级门控（五线全破>强动能跌势>试错仓>正常）——备份，可随时切回
-# 环境变量 GATE_MODE 可覆盖默认；ops_main 读取一次传给 RegimeGate。
-GATE_MODE_DEFAULT = os.environ.get('GATE_MODE', 'f')
-ATR_EXPAND_TH = 1.15          # 方案F波动扩张阈值（与 patrol_f 同值，回测定稿勿改）
+# 门控方案（2026-11-06 Master 拍板：F 方案先放弃，默认回退 legacy）。
+#   'legacy' = 原四级门控（五线全破>强动能跌势>试错仓>正常）——默认，
+#              与 15:30 缓存链、09:20 门控实际执行口径一致。
+#   'f'      = 方案F：五线全破 OR ATR5/ATR20>1.15（回测数字仅为注释声称、
+#              无脚本/数据可复核；且把用户确认的 ER+ATR 组合降维成单指标）。
+#              2026-10-30 曾设为默认，11-06 批判性检查后回退，保留为显式可选备份。
+# 环境变量 GATE_MODE 可覆盖默认；RegimeGate 读取一次。
+GATE_MODE_DEFAULT = os.environ.get('GATE_MODE', 'legacy')
+ATR_EXPAND_TH = 1.15          # 方案F波动扩张阈值（仅 F 模式使用，回测口径待补）
 
 def _held_codes_dynamic():
     try:
@@ -25,19 +28,18 @@ GAP = D('0.015')
 
 
 class RegimeGate:
-    """统一门控（2026-10-30 起默认方案F；原四级为备份）。
+    """统一门控（2026-11-06 起默认 legacy；F 为显式可选备份）。
 
-    mode='f'（默认，用户 2026-10-30 切换指令）：
+    mode='f'（备份，需显式 mode='f' 或 GATE_MODE=f）：
         暂停新格买入 = 五线全破（收盘 < ma5/10/20/30/60 全部）
                     OR  ATR扩张（ATR5/ATR20 > 1.15）
-        全池回测（283只/10405日/7634次接格机会）：避损 +317.1k，
-        比纯五线 +251.9k 多拦的 680 次全部避损（均 -95.9 元/次）。
-        实盘验证：10-29 拦 512980 于 10-30 大阴线 -4.76% 前夜。
-        判定逻辑与 tools/patrol_f.py 同源（独立模块已并行运行验证 2 天）。
+        11-06 批判性检查后回退为备份：+317.1k 等回测数字仅为注释声称、
+        仓库内无脚本/数据可复核；F 把用户确认的 ER+ATR 组合判向降维成
+        单 ATR 指标；生产缓存链从未执行 F。补回测与统一链路前不得设为默认。
 
-    mode='legacy'（备份）：
+    mode='legacy'（默认，与 15:30 缓存链 / 09:20 门控实际执行口径一致）：
         原四级：五线全破 > 强动能跌势（ADX>=20 且 -DI>+DI 且收盘<60日线）
-        > 试错仓 > 正常。可用 GATE_MODE=legacy 环境变量或 mode 参数随时切回。
+        > 试错仓 > 正常。卖出永不拦截。
 
     regime 无 bars 时退回纯 ADX 判定（向后兼容）；行情缺失 fail-open。
     卖出永不拦截。
@@ -45,8 +47,8 @@ class RegimeGate:
 
     def __init__(self, regimes, mode=None):
         self._regimes = regimes or {}
-        mode = (mode or GATE_MODE_DEFAULT or 'f').lower()
-        self.mode = mode if mode in ('f', 'legacy') else 'f'
+        mode = (mode or GATE_MODE_DEFAULT or 'legacy').lower()
+        self.mode = mode if mode in ('f', 'legacy') else 'legacy'
 
     @staticmethod
     def _adonly_blocks(regime):

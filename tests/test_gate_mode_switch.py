@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
-"""方案切换测试（2026-10-30 用户指令：执行策略切换成方案F，原方案切成备份）。
+"""方案切换测试（2026-11-06 Master 拍板：F 方案先放弃，默认回退 legacy）。
 
-方案F（全池回测定稿）：暂停新格买入 = 五线全破 OR ATR5/ATR20>1.15。
-原四级门控（五线全破 > 强动能跌势 > 试错仓 > 正常）整体保留为备份模式，
-通过 GATE_MODE 环境变量 / gate_mode 参数切换：
-  - 'f'（默认）：走方案F判定（patrol_f 同源逻辑）
-  - 'legacy'：走原四级 gate_check 判定（备份，可随时切回）
+背景：2026-10-30 曾把默认切成方案F（五线全破 OR ATR5/ATR20>1.15），
+但 11-06 批判性检查发现生产缓存链全程走 legacy、F 回测数字不可复核、
+且 F 把用户确认的 ER+ATR 组合降维成单指标。故默认改回 legacy，
+让代码默认值与实际生产执行一致；F 保留为显式可选备份，待复盘再议。
+
+  - 'legacy'（默认）：走原四级 gate_check 判定（与缓存链一致）
+  - 'f'：走方案F判定（patrol_f 同源逻辑），需显式传 mode 或 GATE_MODE
 """
 import sys
 from pathlib import Path
@@ -28,23 +30,28 @@ def _frame(closes, hi_pct=1.01, lo_pct=0.99):
 
 
 class GateModeSwitchTests(unittest.TestCase):
-    """方案切换：F 为默认，legacy 为备份。"""
+    """方案切换：legacy 为默认，F 为显式可选备份（2026-11-06 回退）。"""
 
-    def test_default_mode_is_f(self):
-        """默认模式必须是 F 方案（用户 2026-10-30 指令：执行策略切换成方案F）。"""
-        self.assertEqual(runtime.GATE_MODE_DEFAULT, 'f')
+    def test_default_mode_is_legacy(self):
+        """默认必须是 legacy——与生产缓存链实际执行一致（Master 2026-11-06 拍板）。"""
+        self.assertEqual(runtime.GATE_MODE_DEFAULT, 'legacy')
         gate = runtime.RegimeGate({}, mode=None)
+        self.assertEqual(gate.mode, 'legacy')
+
+    def test_f_mode_still_available_explicitly(self):
+        """F 模块保留为备份：显式 mode='f' 仍可选用，不删除。"""
+        gate = runtime.RegimeGate({}, mode='f')
         self.assertEqual(gate.mode, 'f')
 
     def test_legacy_mode_still_available(self):
-        """备份模式可显式选择（mode='legacy' 或 GATE_MODE=legacy）。"""
+        """legacy 可显式选择（mode='legacy' 或 GATE_MODE=legacy）。"""
         gate = runtime.RegimeGate({}, mode='legacy')
         self.assertEqual(gate.mode, 'legacy')
 
-    def test_invalid_mode_falls_back_to_f(self):
-        """未知 mode 值：回落到 F，不 crash（宁可跑 F 也不静默无门控）。"""
+    def test_invalid_mode_falls_back_to_legacy(self):
+        """未知 mode 值：回落到默认 legacy，不 crash、不静默启用未验证的 F。"""
         gate = runtime.RegimeGate({}, mode='bogus')
-        self.assertEqual(gate.mode, 'f')
+        self.assertEqual(gate.mode, 'legacy')
 
     def test_f_mode_blocks_on_five_break(self):
         """F 模式：五线全破拦截（与原方案共有的行为）。"""

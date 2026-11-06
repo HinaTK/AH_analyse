@@ -105,5 +105,69 @@ class TencentKlineUrlTests(unittest.TestCase):
         self.assertEqual(rows[0]['date'], '2026-11-04')
 
 
+class TencentKlineEndpointFallbackTests(unittest.TestCase):
+    """2026-11-06：web.ifzq.gtimg.cn/appstock/app/fqkline/get 返回 HTTP 501，
+    21 只标的全部取数失败（16:05 波动扩张观察只推了「有限样本」告警）。
+    主链 confirmed_runtime.py:177-180 早已改用 proxy.finance.qq.com 的
+    newfqkline/get；本函数必须跟上一端点列表并在首个端点失败时自动切换。
+    """
+
+    @staticmethod
+    def _response():
+        import json
+
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    'data': {'sh589720': {'day': [
+                        ['2026-11-06', '0.800', '0.815', '0.820', '0.795', '123456'],
+                    ]}}
+                }, ensure_ascii=False).encode('utf-8')
+
+        return _Resp()
+
+    def test_first_endpoint_501_falls_back_to_newfqkline(self):
+        """首个端点 501 → 自动切备用端点，返回数据、不抛异常。"""
+        import urllib.error
+        import io
+        urls = []
+
+        def fake_urlopen(req, timeout=None):
+            urls.append(getattr(req, 'full_url', None) or req.get_full_url())
+            if len(urls) == 1:
+                raise urllib.error.HTTPError(urls[0], 501, 'Not Implemented', {}, io.BytesIO())
+            return self._response()
+
+        with patch.object(mp.urllib.request, 'urlopen', side_effect=fake_urlopen):
+            rows = mp.fetch_tencent_kline('1.589720', lmt=40)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['close'], 0.815)
+        self.assertGreaterEqual(len(urls), 2, '首端点失败后必须尝试备用端点')
+        self.assertTrue(any('newfqkline/get' in u for u in urls),
+                        f'备用端点必须是 newfqkline/get，实际={urls}')
+        for u in urls:
+            self.assertNotIn('2030', u, '所有端点 end 必须留空')
+
+    def test_all_endpoints_fail_raises(self):
+        """所有端点都失败时仍抛异常，不得静默返回空列表。"""
+        import urllib.error
+        import io
+
+        def fake_urlopen(req, timeout=None):
+            url = getattr(req, 'full_url', None) or req.get_full_url()
+            raise urllib.error.HTTPError(url, 501, 'Not Implemented', {}, io.BytesIO())
+
+        with patch.object(mp.urllib.request, 'urlopen', side_effect=fake_urlopen):
+            with self.assertRaises(Exception):
+                mp.fetch_tencent_kline('1.589720', lmt=40)
+
+
 if __name__ == '__main__':
     unittest.main()

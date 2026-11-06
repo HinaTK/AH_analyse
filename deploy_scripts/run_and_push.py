@@ -35,6 +35,11 @@ from pathlib import Path
 
 CST = timezone(timedelta(hours=8))
 
+# 2026-11-06 Master 授权：计划任务本身用 pythonw.exe（无控制台），但子进程若用
+# python.exe / tasklist / netstat 且不带 CREATE_NO_WINDOW，Windows 会闪一个黑框。
+# 所有 subprocess 调用统一带此标志；非 Windows 平台取 0（不生效）。
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0) if os.name == 'nt' else 0
+
 SYSTEM_PY = Path(r'C:\Users\Administrator\AppData\Local\Programs\Python\Python312\python.exe')
 REPO = Path(r'D:\Code\AH_analyse')
 # 2026-11-05 用户定：DSH 链只跑 AH_analyse 里的脚本，不调用 hermes-home/scripts 的部署副本。
@@ -77,6 +82,10 @@ JOBS: dict[str, dict[str, object]] = {
     'rate_1540':      {'name': '利率1540点火',      'script': f'{DEPLOY}/rate_ignition_monitor_wrapper.py', 'cwd': None,  'push': 'on'},
     'watchtower_1550':{'name': '观察哨1550',        'script': f'{DEPLOY}/watchtower_wrapper.py',            'cwd': None,  'push': 'on'},
     'overseas':       {'name': '海外盘中触发',      'script': f'{DEPLOY}/overseas_trigger_monitor.py',      'cwd': None,  'push': 'on'},
+    'volatility_watch':{'name': '波动扩张观察',    'script': f'{DEPLOY}/volatility_expansion_watch.py',   'cwd': None, 'push': 'on', 'timeout': 600},
+    # 2026-11-06 Master 授权：工作日 16:15 只读轻量快照，先静默落盘不推送（push=off）。
+    # 唯一写入 cache/grid-research/daily-snapshots/；不碰账本/周报/既有 JOBS。
+    'daily_snapshot': {'name': '网格每日轻量快照',  'script': f'{DEPLOY}/grid_daily_snapshot.py',          'cwd': None, 'push': 'off', 'timeout': 600},
     'midnight_0001':  {'name': '网格0001可卖同步',  'script': f'{LAUNCHERS}/grid_midnight_rollover.py',     'cwd': None,  'push': 'off'},
     'git_2300':       {'name': '运维2300git推送',   'script': f'{DEPLOY}/git_daily_push.py',                'cwd': str(REPO), 'push': 'off'},
     'openviking':     {'name': '运维OpenViking守卫','script': f'{DEPLOY}/openviking_auto_heal.py',          'cwd': None,  'push': 'on'},
@@ -202,6 +211,7 @@ def _harness_ports() -> list[int]:
         listing = subprocess.run(
             ['tasklist', '/FI', 'IMAGENAME eq DeepSeek Harness.exe', '/FO', 'CSV', '/NH'],
             capture_output=True, text=True, timeout=20,
+            creationflags=NO_WINDOW,
         ).stdout
     except OSError:
         return []
@@ -213,7 +223,11 @@ def _harness_ports() -> list[int]:
     if not pids:
         return []
     try:
-        table = subprocess.run(['netstat', '-ano', '-p', 'TCP'], capture_output=True, text=True, timeout=20).stdout
+        table = subprocess.run(
+            ['netstat', '-ano', '-p', 'TCP'],
+            capture_output=True, text=True, timeout=20,
+            creationflags=NO_WINDOW,
+        ).stdout
     except OSError:
         return []
     ports = []
@@ -351,6 +365,7 @@ def _run(script: Path, args: list[str], cwd: Path, hermes_home: Path, timeout: i
         encoding='utf-8',
         errors='replace',
         timeout=timeout,
+        creationflags=NO_WINDOW,
     )
     return completed.returncode, completed.stdout or '', completed.stderr or ''
 

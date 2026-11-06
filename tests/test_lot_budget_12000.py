@@ -1,7 +1,7 @@
-"""589720 后续格子额度 8000→12000 的配置契约（2026-11-05 Master 授权，两链同步）。
+"""589720 格子参数配置契约（2026-11-05 Master 授权，两链同步）。
 
-只改 lot_budget（每格买入金额），不动 quota（总净投入上限 66227）、
-不动其余三只标的、不动任何已确认成交账本。
+lot_budget（每格买入金额）8000→12000；quota（单只净投入上限）66227→90000。
+其余三只标的、所有已确认成交账本均不动。
 """
 import hashlib
 import importlib.util
@@ -38,11 +38,11 @@ class LotBudgetContractTests(unittest.TestCase):
         spec.loader.exec_module(module)
         self.assertEqual(module.DEFAULT[CODE]['lot_budget'], '12000')
 
-    def test_quota_and_other_etfs_unchanged(self):
+    def test_quota_is_90000_and_other_etfs_unchanged(self):
         for path in (DSH, PROD):
             with self.subTest(path=str(path)):
                 h = _holdings(path)
-                self.assertEqual(h[CODE]['quota'], 66227)
+                self.assertEqual(h[CODE]['quota'], 90000)
                 self.assertEqual(h[CODE]['name'], '科创创新药ETF国泰')
                 self.assertTrue(h[CODE]['active'])
                 self.assertEqual(h['sz159363']['lot_budget'], '6000')

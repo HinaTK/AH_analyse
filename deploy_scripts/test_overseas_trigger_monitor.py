@@ -181,15 +181,18 @@ class TestPremiumGate(unittest.TestCase):
         fires, _ = self.otm.check_nikkei()
         self.assertEqual([f[0] for f in fires], ['nikkei_stop'])
 
-    def test_nikkei_prem_fetch_fail_no_silent_block(self):
-        """溢价拉不到（None）→ 闸门不放行也不硬拦：信号照常推（fail-open 提示型监控，
-        且触价≠成交，用户执行前还有当天实时 IOPV 一道人工闸）。"""
+    def test_nikkei_prem_fetch_fail_blocks_buy(self):
+        """2026-11-06 审核 M1 修复：净值源拉不到 → fail-closed，买入信号全部静默。
+
+        旧断言（数据缺失仍照常推买入、把 fail-open 写成契约）已作废；
+        止损信号不受此闸门影响，另见 TestNikkeiStop。
+        """
         self.otm._quote = lambda sym: _quote_f(1.51, 1.517, 1.505)
         self.otm._nikkei_stop_price = lambda: None
         self.otm._nikkei_prem = lambda p: None
         fires, data = self.otm.check_nikkei()
-        self.assertEqual([f[0] for f in fires], ['nikkei_t2'])
-        self.assertIsNone(data.get('prem'))
+        self.assertEqual(fires, [])
+        self.assertEqual(data.get('溢价状态'), '数据不可用')
 
 
 class TestNikkeiStop(unittest.TestCase):

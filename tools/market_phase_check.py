@@ -68,14 +68,31 @@ def fetch_tencent_kline(secid, lmt=300, klt="101"):
     code = tencent_symbol(secid)
     period = "week" if klt == "102" else "day"
     count = min(lmt, 120) if klt == "102" else min(lmt, 300)
-    # end 必须留空：历史版本写死 end=2030-12-31，实测会让部分标的（159363）
-    # 丢掉当天已完成的日K（实时收 0.873，日K只回到昨日 0.810），导致 regime
-    # 门控与市况信号都停在昨天。空 end 才能取到当天这根（2026-11-04 修复）。
-    url = (f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?"
-           f"param={code},{period},,,{count},qfq")
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        data = json.loads(r.read().decode("utf-8"))
+    # 2026-11-06：web.ifzq.gtimg.cn 的 fqkline/get 端点返回 HTTP 501（16:05
+    # 波动扩张观察 21 只标的全部取数失败）。主链 confirmed_runtime.py 早已改用
+    # proxy.finance.qq.com 的 newfqkline/get（实测 200），这里跟进同一套端点列表：
+    # 依次尝试，端点级失败自动切换；end 一律留空（2026-11-04 修复口径）。
+    # 腾讯返回键：qfqday/day（日K）、qfqweek/week（周K），取第一个存在的。
+    urls = [
+        f"https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?"
+        f"param={code},{period},,,{count},qfq",
+        f"https://web.ifzq.gtimg.cn/appstock/app/newfqkline/get?"
+        f"param={code},{period},,,{count},qfq",
+        f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?"
+        f"param={code},{period},,,{count},qfq",
+    ]
+    data = None
+    last_error = None
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = json.loads(r.read().decode("utf-8"))
+            break
+        except (OSError, ValueError) as exc:
+            last_error = exc  # 端点故障/限流/解析失败：继续尝试下一个
+    if data is None:
+        raise ValueError(f"腾讯K线全部端点取数失败：{type(last_error).__name__}: {last_error}")
     d = data.get("data")
     if not isinstance(d, dict):
         raise ValueError(f"腾讯K线返回结构异常: {type(d).__name__}")

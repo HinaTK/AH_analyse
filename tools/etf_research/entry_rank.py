@@ -10,9 +10,73 @@ import pandas as pd
 
 from .entry_timing import judge_entry
 from .research import HOLDINGS
+from .rotation_top2 import major_theme
 
 ADMITTED = {'full': '可以整仓', 'probe_only': '仅试错仓'}
 MIN_RECENT20_CYCLES = 2
+PER_THEME_LIMIT = 5  # 2026-11-06 Master：排行榜不去重，但每个大题材最多 5 只
+
+
+def theme_key(row):
+    """展示用题材键：名称粗分；未识别的按代码独立成组，不互相挤占。
+
+    名称粗分只用于「限额展示」，不是官方分类，不写入账本、不改 rankings。
+    """
+    return major_theme(row.get('name') or '') or 'unknown:' + str(row.get('code') or '')
+
+
+def cap_per_theme(rows, limit=PER_THEME_LIMIT):
+    """每题材最多 limit 只，保持原顺序与原 rank（表格数字逐格来自 rows）。
+
+    limit<=0 表示不限额。题材未识别的按代码独立成组，因此合成候选名
+    （票0/候选1 之类）不会被误当成同一题材而互相挤掉。
+    """
+    if limit is None or limit <= 0:
+        return {'rows': list(rows), 'dropped': 0, 'themes': 0, 'limit': 0}
+    kept, seen = [], {}
+    for row in rows:
+        key = theme_key(row)
+        if seen.get(key, 0) >= limit:
+            continue
+        seen[key] = seen.get(key, 0) + 1
+        kept.append(row)
+    return {'rows': kept, 'dropped': len(rows) - len(kept),
+            'themes': len(seen), 'limit': limit}
+
+
+def omitted_summary(pool, shown, limit=PER_THEME_LIMIT, width=120):
+    """括号概括「展示名次区间内被题材限额跳过的标的」（2026-11-06 Master）。
+
+    只概括 rank <= 展示最大名次 的被跳过行——这些正是名次跳号处被省略的
+    标的；排名更靠后的属于正常截断，不列入。按题材分组，逐格取自 rows，
+    每行 ≤width 且不以 '|' 开头（否则会被当成表格数据行）。
+    """
+    if not shown or not limit or limit <= 0:
+        return []
+    max_rank = max(r['rank'] for r in shown)
+    shown_codes = {r['code'] for r in shown}
+    skipped = [r for r in pool if r['rank'] <= max_rank and r['code'] not in shown_codes]
+    if not skipped:
+        return []
+    groups = {}
+    for row in skipped:
+        key = theme_key(row).split(':', 1)[-1]
+        groups.setdefault(key, []).append(row)
+    lines = [f"（省略{len(skipped)}只｜因每题材最多{limit}只｜以下为全池原名次）"]
+    for theme, items in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        header = f"（{theme} {len(items)}只："
+        current, chunk = header, []
+        for row in items:
+            piece = f"{row['rank']} {row['code']} {row['name']}"
+            candidate = current + ('、' if chunk else '') + piece
+            if len(candidate) + 1 > width and chunk:
+                lines.append(current + '）')
+                current, chunk = '（续：' + piece, [row]
+            else:
+                current, chunk = candidate, chunk + [row]
+        lines.append(current + '）')
+    # 超宽行只可能是极长名称导致，仍需保留内容：按宽度硬切，不静默丢弃。
+    return [x if len(x) <= width else x[:width - 1] + '）' for x in lines]
 
 
 def daily_bars(path):
@@ -155,23 +219,30 @@ def window_matrix_label(row, r20_threshold):
     return '❌死水'
 
 
-def render_markdown(report, top_n=10):
+def render_markdown(report, top_n=10, per_theme=PER_THEME_LIMIT):
     """把 rank_entries 的 report 渲染成 markdown 表格。
 
     铁律：每个单元格的值只能取自 report['rows'] 里对应行的字段，
     禁止引入 rows 之外的任何数字。聊天层交付排名时必须粘贴本函数
     的输出，不允许手写表格（2026-10-23 手写 recent20 列编造数字的
     回归教训）。
+
+    per_theme（2026-11-06 Master）：排行榜不去重，但每个大题材最多
+    limit 只；限额只影响展示，rows 本身与 entry-ranking.csv 不变，
+    名次保留全池原值。近20日中位线仍基于完整入选池计算。
     """
-    rows = report['rows'][:top_n]
-    threshold = median_r20_threshold(report['rows'])  # 线基于完整入选池，不是只看前N
+    pool = report['rows']
+    cap = cap_per_theme(pool, per_theme)
+    rows = cap['rows'][:top_n]
+    threshold = median_r20_threshold(pool)  # 线基于完整入选池，不是只看前N
     lines = [
-        f"asof {report['asof']} 入选 {len(report['rows'])} 只 排除 {report['excluded']}",
+        f"asof {report['asof']} 入选 {len(pool)} 只 排除 {report['excluded']}",
         f"近20日高/低线={threshold:g}（当期入选池中位）",
-        '',
-        HEADER,
-        HEADER_SEP,
     ]
+    if cap['limit']:
+        lines.append(f"题材限额：每题材最多{cap['limit']}只（名称粗分，非官方分类）"
+                     f"｜跳过{cap['dropped']}只｜名次为全池原值")
+    lines += ['', HEADER, HEADER_SEP]
     for row in rows:
         lines.append('| {} | {} | {} | {} | {} | {:g} | {:,.2f} | {:g} | {} | {:.2f} |'.format(
             row['rank'],
@@ -185,6 +256,9 @@ def render_markdown(report, top_n=10):
             row.get('regime20') or '',
             row['full_cycle_net_per_avg_cost_pct'] or 0.0,
         ))
+    if cap['limit'] and rows:
+        lines.append('')
+        lines.extend(omitted_summary(pool, rows, cap['limit']))
     return '\n'.join(lines)
 
 

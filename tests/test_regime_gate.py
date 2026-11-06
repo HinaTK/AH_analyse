@@ -78,7 +78,7 @@ class UnifiedGateTests(unittest.TestCase):
     def test_all_mas_broken_blocks_buy_even_with_weak_adx(self):
         """五线全破（ADX 弱）：也必须拦——历史打架场景的修复。
 
-        2026-10-30 切换方案F：文案改为 F方案·暂停买入(五线全破)。
+        2026-11-06 默认回退 legacy：文案回到「暂停买入(五线全破)」。
         """
         closes = [10.0] * 75 + [8.5, 8.3, 8.1, 7.9, 7.7, 7.5]
         gate = runtime.RegimeGate({'sh589720': self._regime_with_lines(17.3, closes)})
@@ -92,12 +92,18 @@ class UnifiedGateTests(unittest.TestCase):
         self.assertTrue(gate.blocks_buy('sh589720'))
 
     def test_probe_with_weak_adx_keeps_buy(self):
-        """2026-10-30 方案F：该场景振幅 2% 触发 ATR 扩张 → F 方案拦截
-        （这正是 F 比 legacy 多拦的场景，legacy 模式对此放行）。
-        备份模式的放行行为由 test_gate_mode_switch 覆盖。"""
+        """2026-11-06 默认回退 legacy：该场景（振幅2%、ADX弱）放行。
+
+        显式 mode='f' 时 ATR 扩张仍拦截（备份行为保留，可对账）；
+        两方案差异由 test_gate_mode_switch 另行覆盖。
+        """
         closes = [10 + 0.02 * i for i in range(90)] + [11.0, 10.8, 10.6, 10.5, 10.9]
-        gate = runtime.RegimeGate({'sh589720': self._regime_with_lines(12.1, closes)})
-        self.assertTrue(gate.blocks_buy('sh589720'), 'F方案默认：ATR扩张场景拦截')
+        regime = {'sh589720': self._regime_with_lines(12.1, closes)}
+        legacy_gate = runtime.RegimeGate(regime)
+        self.assertEqual(legacy_gate.mode, 'legacy')
+        self.assertFalse(legacy_gate.blocks_buy('sh589720'), '默认 legacy：此场景放行')
+        f_gate = runtime.RegimeGate(regime, mode='f')
+        self.assertTrue(f_gate.blocks_buy('sh589720'), '显式 F：ATR扩张仍拦截')
 
     def test_regime_without_bars_falls_back_to_adx_only(self):
         """无 bars 的旧格式 regime（向后兼容）：退回纯 ADX 判定。"""
