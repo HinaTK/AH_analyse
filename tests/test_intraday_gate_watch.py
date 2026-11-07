@@ -261,11 +261,13 @@ class ObserverTests(unittest.TestCase):
                 self.assertEqual(result['kind'], kind)
                 self.assertNotIn('provisional', result)
 
-    def test_explicit_f_scheme_cache_is_method_mismatch(self):
+    def test_non_legacy_official_gate_is_method_mismatch(self):
+        """正式门控若不是 legacy 口径 → 拒绝比较（F 移除后的通用防御）。"""
         self.assertEqual(self.result()['provisional_method'], 'legacy_daily_gate')
         cache = json.loads((self.root / 'regime-cache.json').read_text(encoding='utf-8'))
-        for metadata in [dict(reason='F方案·暂停买入(五线全破)'),
-                         dict(reason_tag='atr_expand'), dict(mode='f')]:
+        for metadata in [dict(reason_tag='five_break'),
+                         dict(reason_tag='atr_expand'), dict(mode='f'),
+                         dict(method='unknown_gate')]:
             with self.subTest(metadata=metadata):
                 entry = dict(cache[CODE], **metadata)
                 write_json(self.root / 'regime-cache.json', {CODE: entry})

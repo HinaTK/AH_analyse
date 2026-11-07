@@ -6,16 +6,14 @@ from pathlib import Path
 from decimal import Decimal as D, ROUND_HALF_UP
 
 import holdings as H
+import upside_guard
 
-# 门控方案（2026-11-06 Master 拍板：F 方案先放弃，默认回退 legacy）。
-#   'legacy' = 原四级门控（五线全破>强动能跌势>试错仓>正常）——默认，
-#              与 15:30 缓存链、09:20 门控实际执行口径一致。
-#   'f'      = 方案F：五线全破 OR ATR5/ATR20>1.15（回测数字仅为注释声称、
-#              无脚本/数据可复核；且把用户确认的 ER+ATR 组合降维成单指标）。
-#              2026-10-30 曾设为默认，11-06 批判性检查后回退，保留为显式可选备份。
-# 环境变量 GATE_MODE 可覆盖默认；RegimeGate 读取一次。
-GATE_MODE_DEFAULT = os.environ.get('GATE_MODE', 'legacy')
-ATR_EXPAND_TH = 1.15          # 方案F波动扩张阈值（仅 F 模式使用，回测口径待补）
+# 门控口径（2026-11-07 Master 拍板「F方案不接入了」）：
+#   生产门控只有 legacy 一条路径（四级 gate_check，与 15:30 缓存链一致）。
+#   F 方案（五线全破 OR ATR5/ATR20>1.15）经 2026-11-07 全池可复跑对照判定
+#   「证据不足以支持切换」，已从生产代码整体移除；其判据仅在 .cache 研究脚本中
+#   内联保留用于复算，不 import、不参与任何生产判定。
+
 
 def _held_codes_dynamic():
     try:
@@ -28,59 +26,34 @@ GAP = D('0.015')
 
 
 class RegimeGate:
-    """统一门控（2026-11-06 起默认 legacy；F 为显式可选备份）。
+    """统一门控（2026-11-07 起只有 legacy 一条路径）。
 
-    mode='f'（备份，需显式 mode='f' 或 GATE_MODE=f）：
-        暂停新格买入 = 五线全破（收盘 < ma5/10/20/30/60 全部）
-                    OR  ATR扩张（ATR5/ATR20 > 1.15）
-        11-06 批判性检查后回退为备份：+317.1k 等回测数字仅为注释声称、
-        仓库内无脚本/数据可复核；F 把用户确认的 ER+ATR 组合判向降维成
-        单 ATR 指标；生产缓存链从未执行 F。补回测与统一链路前不得设为默认。
+    legacy 四级：五线全破 > 强动能跌势（ADX>=20 且 -DI>+DI 且收盘<60日线）
+    > 试错仓 > 正常。与 15:30 缓存链 / 09:20 门控实际执行口径一致。
+    regime 无 bars 时退回纯 ADX 判定（向后兼容）；行情缺失 fail-open；卖出永不拦截。
 
-    mode='legacy'（默认，与 15:30 缓存链 / 09:20 门控实际执行口径一致）：
-        原四级：五线全破 > 强动能跌势（ADX>=20 且 -DI>+DI 且收盘<60日线）
-        > 试错仓 > 正常。卖出永不拦截。
-
-    regime 无 bars 时退回纯 ADX 判定（向后兼容）；行情缺失 fail-open。
-    卖出永不拦截。
+    历史：F 方案（五线全破 OR ATR 扩张）曾作为显式 mode='f' 备份，
+    2026-11-07 经全池对照判定不接入并整体移除；误传 mode 不再改变行为。
     """
 
     def __init__(self, regimes, mode=None):
         self._regimes = regimes or {}
-        mode = (mode or GATE_MODE_DEFAULT or 'legacy').lower()
-        self.mode = mode if mode in ('f', 'legacy') else 'legacy'
+        self.mode = 'legacy'
 
     @staticmethod
     def _adonly_blocks(regime):
         return regime['adx'] >= 25 and regime.get('mdi', 0) > regime.get('pdi', 0)
 
     def _unified(self, code):
-        """按 mode 分派判定；返回 (blocks_buy, reason) 或 None。"""
+        """生产唯一门控路径；返回 (blocks_buy, reason) 或 None。"""
         r = self._regimes.get(code) or {}
         bars = r.get('bars')
         if bars is None:
             return None
-        if self.mode == 'f':
-            return self._patrol_f(code, r, bars)
         return self._legacy_gate(code, r, bars)
 
-    def _patrol_f(self, code, r, bars):
-        """方案F：五线全破 OR ATR扩张>1.15（与 patrol_f.py 同口径）。"""
-        try:
-            import pandas as pd
-            frame = bars if isinstance(bars, pd.DataFrame) else pd.DataFrame(bars)
-            from tools.patrol_f import patrol
-            verdict = patrol(frame)
-        except Exception:
-            return None  # 判定失败退回纯 ADX，不放大拦截范围
-        blocks = verdict['blocks_buy']
-        level_names = {'five_break': 'F方案·暂停买入(五线全破)',
-                       'atr_expand': 'F方案·暂停买入(波动扩张)'}
-        head = level_names.get(verdict['reason_tag'], 'F方案')
-        return blocks, f"{code} {head}：{verdict['reason']}"
-
     def _legacy_gate(self, code, r, bars):
-        """备份：原四级 gate_check 判定（2026-10-26 版本，行为不变）。"""
+        """原四级 gate_check 判定（行为不变）。"""
         try:
             from tools.etf_research.gate_check import gate
             verdict = gate(bars, regime=r)
@@ -452,8 +425,18 @@ def plan(root, regime_gate=None, spot=None, gate_lifted=None):
     actions = []
     regime_blocks = []
     reanchors = []
+    core_protected = []
+    upside_reviews = []
     for code, state in states.items():
         active = H.is_active(code, holdings)
+        name = names.get(code, '')
+        # 上涨侧持仓管理（2026-11-07）：参与底仓保护 + 低库存上移基准人工复核。
+        # 只读层：不写账本、不改买价、不自动上移基准、不生成买卖建议。
+        if active:
+            rv = upside_guard.review(state, code, name, holdings,
+                                     spot=(spot or {}).get(code) if spot else None)
+            if rv is not None:
+                upside_reviews.append(rv)
         top = state['open_grid_positions'][-1] if state['open_grid_positions'] else None
         depth = len(state['open_grid_positions'])
         if state['max_grid'] != (chr(64 + depth) if depth else None):
@@ -463,7 +446,11 @@ def plan(root, regime_gate=None, spot=None, gate_lifted=None):
             if active or available is not None:
                 raise ValueError('保存的可卖库存无效')
         if active and top and type(available) is int and available >= top['qty'] and state['qty'] - top['qty'] >= (4600 if code == 'sz159363' else 0):
-            actions.append(dict(code=code, side='sell', price=price(D(top['price']) * (1 + GAP)), qty=top['qty'], lot=state['max_grid'], buy_id=top['id']))
+            if upside_guard.sell_blocked_by_grid_floor(state, holdings, code):
+                core_protected.append(
+                    upside_guard.grid_floor_text(code, name, state, holdings))
+            else:
+                actions.append(dict(code=code, side='sell', price=price(D(top['price']) * (1 + GAP)), qty=top['qty'], lot=state['max_grid'], buy_id=top['id']))
         entry_px = state.get('entry_price')
         if (active and depth < 26 and budgets.get(code) is not None
                 and (state['trades'] or entry_px is not None)):
@@ -503,6 +490,10 @@ def plan(root, regime_gate=None, spot=None, gate_lifted=None):
     ticket = dict(actions=actions, executable=False, cash=None, warning=WARNING, states=states, names=names)
     if regime_gate is not None:
         ticket['regime_blocks'] = regime_blocks
+    if core_protected:
+        ticket['core_protected'] = core_protected
+    if upside_reviews:
+        ticket['upside_reviews'] = upside_reviews
     if reanchors:
         ticket['reanchor'] = reanchors
     return ticket
@@ -768,7 +759,15 @@ def confirm_main(argv=None):
 
 def eod_report(root, now, quotes, bars):
     import hashlib
-    ticket = plan(root)
+    # 上涨侧提醒需要已核实的当日收盘价；quotes 已由调用方交叉核验，直接传给 plan。
+    # 取不到时降级为「已核实收盘价未取得，偏离不报」，不编造现价。
+    eod_spot = {}
+    for code, quote in (quotes or {}).items():
+        try:
+            eod_spot[code] = D(str(quote['last']))
+        except (KeyError, TypeError, ArithmeticError, ValueError):
+            pass
+    ticket = plan(root, spot=eod_spot or None)
     decisions = {}
     for code, state in ticket['states'].items():
         stamp = str(quotes[code]['time'])
@@ -778,7 +777,7 @@ def eod_report(root, now, quotes, bars):
         close = D(str(rows[-1]['close']))
         if rows[-1]['date'] != now.date().isoformat() or not close.is_finite() or close <= 0 or abs(close - D(quotes[code]['last'])) > max(D('0.002'), close * D('0.005')):
             raise ValueError('日线与当日收盘快照不一致')
-        decisions[code] = dict(close=str(close), qty=state['qty'], sellable_qty=state['sellable_qty'], max_grid=state['max_grid'], net_invested=state['net_invested'], net_unit_cost=state['net_unit_cost'], t_net=state['t_net'], completed_cycles=len(state['t_records']), reason='上移基准评估未验证，保持不改参数；历史日期不补造，未知日期周期不推导20日效率，禁止自动上移/换仓')
+        decisions[code] = dict(close=str(close), qty=state['qty'], sellable_qty=state['sellable_qty'], max_grid=state['max_grid'], net_invested=state['net_invested'], net_unit_cost=state['net_unit_cost'], t_net=state['t_net'], completed_cycles=len(state['t_records']), reason='上移基准评估未验证，保持不改参数；历史日期不补造，未知日期周期不推导20日效率，禁止自动上移/换仓', upside_review=upside_guard.eod_review_text(next((r for r in ticket.get('upside_reviews') or [] if r['code'] == code), None)))
     summary = None
     try:
         from grid_summary import summarize_account
@@ -793,11 +792,17 @@ def render_eod(report):
 
     表格化输出（2026-10-26 用户要求）：持仓概览表 + 累计做T表 + 当日做T表，
     全部数据来自 report['summary']（grid_summary 模块产出），不手拼数字。
+
+    2026-11-07 增加：上涨侧低库存的「上移基准人工复核」只读提醒（不生成买卖建议）。
     """
     lines = ['【收盘效率与轮换检查 ' + report.get('asof', '') + '】']
     warning = report.get('warning', '')
     if warning:
         lines.append('⚠️ ' + warning)
+    eod_reviews = [d.get('upside_review') for d in (report.get('decisions') or {}).values()
+                   if d.get('upside_review')]
+    for text in eod_reviews:
+        lines.append('📌 ' + text)
     names = report.get('names') or {}
     asof = report.get('asof', '')
 
@@ -906,6 +911,10 @@ def render(ticket):
         lines.append(f"{code} {names.get(code,'')} {tag} 持有={state['qty']} 保存可卖={state['sellable_qty']} 最大格={state['max_grid']} 净投入={state['net_invested']} 已完成T净收益={state['t_net']}")
     for block in ticket.get('regime_blocks') or []:
         lines.append(f"⛔ {block}")
+    for note in ticket.get('core_protected') or []:
+        lines.append(f"🛡️ {note}")
+    for line in upside_guard.render_lines(ticket.get('upside_reviews')):
+        lines.append(line)
     for r in ticket.get('reanchor') or []:
         lines.append(f"📍 {r['code']} 门控恢复日重锚：{r['lot']}格买价 {r['old_price']} → {r['new_price']}"
                      f"（恢复时收盘 {r['spot']}，旧格价偏离箱体超一档；旧格卖单保持原价等解套）")

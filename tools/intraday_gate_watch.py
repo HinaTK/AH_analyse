@@ -175,10 +175,11 @@ def _official(cache, code, previous):
     if not isinstance(entry, dict):
         raise WatchError('official_invalid', '正式门控缓存条目无效')
     metadata = ' '.join(str(entry.get(key, '')) for key in ('reason', 'tag', 'reason_tag'))
-    if ('F方案' in metadata or re.search(r'\b(?:atr_expand|five_break)\b', metadata)
-            or str(entry.get('mode', '')).lower() == 'f'
-            or str(entry.get('method', '')).lower() in ('f', 'patrol_f')):
-        raise WatchError('official_method_mismatch', '正式门控为F方案，与盘中均线/DMI规则口径不一致，不能比较解除')
+    # 正式门控必须与盘中预估的 legacy 口径一致；任何其它方法标记都拒绝比较。
+    if (str(entry.get('mode', '')).lower() not in ('', 'legacy', 'legacy_daily_gate')
+            or str(entry.get('method', '')).lower() not in ('', 'legacy', 'legacy_daily_gate')
+            or re.search(r'\b(?:atr_expand|five_break)\b', metadata)):
+        raise WatchError('official_method_mismatch', '正式门控不是 legacy 口径，与盘中均线/DMI规则不一致，不能比较解除')
     if (not isinstance(entry.get('level'), str) or entry['level'] not in LEVELS
             or type(entry.get('blocks_buy')) is not bool
             or LEVELS[entry['level']] != entry['blocks_buy']):

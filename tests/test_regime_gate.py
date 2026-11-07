@@ -92,18 +92,18 @@ class UnifiedGateTests(unittest.TestCase):
         self.assertTrue(gate.blocks_buy('sh589720'))
 
     def test_probe_with_weak_adx_keeps_buy(self):
-        """2026-11-06 默认回退 legacy：该场景（振幅2%、ADX弱）放行。
+        """2026-11-07 起只有 legacy：该场景（振幅2%、ADX弱）放行。
 
-        显式 mode='f' 时 ATR 扩张仍拦截（备份行为保留，可对账）；
-        两方案差异由 test_gate_mode_switch 另行覆盖。
+        F 方案已移除，误传 mode='f' 也必须走 legacy、不得再拦。
         """
         closes = [10 + 0.02 * i for i in range(90)] + [11.0, 10.8, 10.6, 10.5, 10.9]
         regime = {'sh589720': self._regime_with_lines(12.1, closes)}
         legacy_gate = runtime.RegimeGate(regime)
         self.assertEqual(legacy_gate.mode, 'legacy')
-        self.assertFalse(legacy_gate.blocks_buy('sh589720'), '默认 legacy：此场景放行')
-        f_gate = runtime.RegimeGate(regime, mode='f')
-        self.assertTrue(f_gate.blocks_buy('sh589720'), '显式 F：ATR扩张仍拦截')
+        self.assertFalse(legacy_gate.blocks_buy('sh589720'), 'legacy：此场景放行')
+        mislabeled = runtime.RegimeGate(regime, mode='f')
+        self.assertEqual(mislabeled.mode, 'legacy', 'F 已移除，误传 mode 不得生效')
+        self.assertFalse(mislabeled.blocks_buy('sh589720'))
 
     def test_regime_without_bars_falls_back_to_adx_only(self):
         """无 bars 的旧格式 regime（向后兼容）：退回纯 ADX 判定。"""

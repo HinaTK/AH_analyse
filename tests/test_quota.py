@@ -42,10 +42,12 @@ class QuotaTests(unittest.TestCase):
         import tempfile, json
         with tempfile.TemporaryDirectory() as td:
             from confirmed_589720 import build
-            trades = [('buy', 10000, '0.797')]
+            # 2026-11-07 起「保留两格」是新规则：夹具需 ≥3 格才能验证卖出不受额度限制。
+            # 三格净投入约 23,553；quota 8,000 → 下一格买入必超，仍测「额度用尽」。
+            trades = [('buy', 10000, '0.797'), ('buy', 10000, '0.785'),
+                      ('buy', 10000, '0.773')]
             state = build(trades, code='sh589720', name='x')
             state['sellable_qty'] = state['qty']
-            # 净投入 ≈ 7,970+1佣金 ≈ 7,971；quota 设 8,000 → 下一格买入 8,000×0.985 ≈ 7,880 会超
             state['quota'] = '8000'
             Path(td, 'confirmed-589720.json').write_text(json.dumps(state), encoding='utf-8')
             for code in ('159363', '159992', '512980'):

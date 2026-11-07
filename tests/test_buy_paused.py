@@ -33,10 +33,14 @@ GRID_ACCOUNT = Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-acco
 
 
 def _setup_root(td, buy_paused=None, holdings_quota=None, state_quota=None):
-    """临时目录：589720 一格持仓可卖；其余三只拷生产文件；holdings 定向覆盖。"""
+    """临时目录：589720 三格持仓可卖；其余三只拷生产文件；holdings 定向覆盖。
+
+    2026-11-07 起「保留两格」是新规则，夹具必须 ≥3 格才能让卖出用例成立。
+    """
     import tempfile, json
     from confirmed_589720 import build
-    trades = [('buy', 10000, '0.797')]
+    trades = [('buy', 10000, '0.797'), ('buy', 10000, '0.785'),
+              ('buy', 10000, '0.773')]
     state = build(trades, code='sh589720', name='x')
     state['sellable_qty'] = state['qty']
     if state_quota is not None:
