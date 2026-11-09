@@ -10,10 +10,12 @@ import sys
 import unittest
 from decimal import Decimal as D
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import confirmed_runtime as rt
+import holdings as H
 
 
 def _no_gate():
@@ -26,13 +28,20 @@ def _no_gate():
     return G()
 
 
-def _write_holdings(td):
-    """把生产 holdings 拷进临时根并清掉 buy_paused：测试不得继承用户当前暂停状态。"""
+def _write_holdings(td, include_512980=False):
+    """把生产 holdings 拷进临时根并清掉 buy_paused：测试不得继承用户当前暂停状态。
+
+    2026-11-09：512980 已按 Master 指示从两链枚举移除；首格测试需显式注册该
+    夹具标的，才能让「空仓注册标的」用例与真实配置解耦（测试隔离要求）。
+    """
     import json
     src = Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account/holdings.json')
     data = json.loads(src.read_text(encoding='utf-8'))
     for entry in data['holdings'].values():
         entry.pop('buy_paused', None)
+    if include_512980:
+        data['holdings'].setdefault('sh512980', dict(
+            name='传媒ETF广发', lot_budget='8000', active=True, quota=30000))
     Path(td, 'holdings.json').write_text(json.dumps(data), encoding='utf-8')
 
 
@@ -119,9 +128,11 @@ class FirstGridTests(unittest.TestCase):
             for code in ('589720', '159363', '159992'):
                 src = Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account') / f'confirmed-{code}.json'
                 Path(td, f'confirmed-{code}.json').write_text(src.read_text(encoding='utf-8'), encoding='utf-8')
-            _write_holdings(td)
-
-            ticket = rt.plan(td, regime_gate=_no_gate())
+            _write_holdings(td, include_512980=True)
+            codes = ('sh589720', 'sz159363',
+                     'sz159992', 'sh512980')
+            with patch.object(H, 'held_codes', return_value=codes):
+                ticket = rt.plan(td, regime_gate=_no_gate())
             buys = [a for a in ticket['actions'] if a['side'] == 'buy' and a['code'] == 'sh512980']
             self.assertEqual(len(buys), 1, '空仓+entry_price 必须生成首格买入')
             self.assertEqual(buys[0]['lot'], 'A')
@@ -140,8 +151,10 @@ class FirstGridTests(unittest.TestCase):
             for code in ('589720', '159363', '159992'):
                 src = Path('D:/Hermes Agent CN Desktop/data/hermes-home/cache/grid-account') / f'confirmed-{code}.json'
                 Path(td, f'confirmed-{code}.json').write_text(src.read_text(encoding='utf-8'), encoding='utf-8')
-            _write_holdings(td)
-
-            ticket = rt.plan(td, regime_gate=_no_gate())
+            _write_holdings(td, include_512980=True)
+            codes = ('sh589720', 'sz159363',
+                     'sz159992', 'sh512980')
+            with patch.object(H, 'held_codes', return_value=codes):
+                ticket = rt.plan(td, regime_gate=_no_gate())
             buys = [a for a in ticket['actions'] if a['side'] == 'buy' and a['code'] == 'sh512980']
             self.assertEqual(buys, [])

@@ -41,7 +41,7 @@ class FakeDate:
         return cls.current
 
 
-QT = '20261106103000'
+QT = '20261106153000'  # 2026-11-09 起口径：盘中不推买入，旧契约测试改在收盘后观察窗口跑
 
 
 def _quote(price, low):

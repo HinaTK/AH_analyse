@@ -42,7 +42,7 @@ class FakeDate:
         return cls.current
 
 
-_QT = '20261030143000'  # 当日 14:30 快照时间戳（时间门控放行）
+_QT = '20261030153000'  # 当日 15:30 收盘后快照（2026-11-09 拍板：盘中不推买入，收盘后才给观察提示）
 
 
 def _quote_f(price, high, low):
@@ -124,6 +124,7 @@ class TestPremiumGate(unittest.TestCase):
     def setUp(self):
         self.otm = _load()
         self.otm.date = FakeDate
+        self.otm._clock_hhmm = lambda: '1530'  # 收盘后观察窗口（2026-11-09 口径）
         # 净值序列：峰值 2.2 → 现值 2.0 = 回撤 -9.1%（≥8% 加仓线）
         self.otm._nav_series = lambda code, n=250: [('2026-01-01', 2.2), ('2026-11-03', 2.0)]
 

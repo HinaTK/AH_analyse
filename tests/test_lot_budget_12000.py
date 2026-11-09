@@ -47,7 +47,9 @@ class LotBudgetContractTests(unittest.TestCase):
                 self.assertTrue(h[CODE]['active'])
                 self.assertEqual(h['sz159363']['lot_budget'], '6000')
                 self.assertIsNone(h['sz159992']['lot_budget'])
-                self.assertEqual(h['sh512980']['lot_budget'], '8000')
+                # 2026-11-09 Master 指示「512980 先不开，去掉」：两链枚举均不再含该标的；
+                # 空账本与配置备份保留以便日后恢复。
+                self.assertNotIn('sh512980', h)
 
     def test_no_buy_paused_anywhere(self):
         for path in (DSH, PROD):

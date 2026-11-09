@@ -24,6 +24,14 @@ PROVISIONAL_METHOD = 'legacy_daily_gate'
 HEADER = '【盘中门控观察：仅预估，不切换正式门控】'
 FOOTER = '未收盘确认，正式门控未切换；不构成可执行买单。'
 LEVELS = {'normal': False, 'probe_only': False, 'pause_buy': True, 'no_entry': True}
+# 展示口径（Master 2026-11-09）：推送正文一律「中文加粗 + emoji」，不出现裸英文级别名。
+# 只作用于渲染层；LEVELS、判据、快照与去重签名仍用内部英文键，避免影响变更检测。
+LEVEL_LABELS = {
+    'normal': '**✅ 正常可买**',
+    'probe_only': '**🟡 试错仓**',
+    'pause_buy': '**⏸️ 暂停买入**',
+    'no_entry': '**⛔ 禁止建仓**',
+}
 
 
 class WatchError(ValueError):
@@ -304,6 +312,28 @@ def _signature(verdict):
     return [verdict['level'], verdict['blocks_buy']]
 
 
+def _alert_reason(prior, provisional, official_state, official):
+    """去重判据（Master 2026-11-09 授权降噪）：只在拦买结论翻转或正式门控变化时推。
+
+    prior / official_state 为上一拍签名 [级别, 是否拦买]，首拍为 None。
+    两档都拦买（暂停买入 ↔ 禁止建仓）或都放行之间的级别跳档不推——
+    价格贴均线反复穿越会制造无信息量推送，实际能不能买并未改变。
+    """
+    if prior is None:
+        if provisional[1] != official[1]:
+            return dict(kind='first', **{'from': None}, to=provisional[0],
+                        official_changed=False, official_from=None, official_to=None)
+        return None
+    block_flip = prior[1] != provisional[1]
+    official_changed = official_state != official
+    if not (block_flip or official_changed):
+        return None
+    return dict(kind='change', **{'from': prior[0]}, to=provisional[0],
+                official_changed=official_changed,
+                official_from=(official_state or [None])[0],
+                official_to=official[0])
+
+
 def _render(alerts):
     if not alerts:
         return ''
@@ -316,12 +346,24 @@ def _render(alerts):
             official, provisional, quote = result['official'], result['provisional'], result['quote']
             lines.extend([
                 f"{identity} 现价 {quote['last']:.3f}｜行情时间 {quote['timestamp']}",
-                f"正式 {'⛔' if official['blocks_buy'] else '✅'} {official['level']}（{official['asof']}）"
-                f" → 盘中预估（均线/DMI口径） {'⛔' if provisional['blocks_buy'] else '✅'} {provisional['level']}",
+                f"正式 {LEVEL_LABELS[official['level']]}（{official['asof']}）"
+                f" ｜ 盘中预估（均线/DMI口径） {LEVEL_LABELS[provisional['level']]}",
                 f"ADX={result['adx']:.2f} / +DI={result['pdi']:.2f} / -DI={result['mdi']:.2f}",
                 '正式原因：' + str(official.get('reason') or '缓存未提供原因'),
                 '盘中预估原因：' + provisional['reason'],
             ])
+            change = result.get('change')
+            if change:
+                if change['kind'] == 'first':
+                    lines.append('本次变化：本交易日首拍，正式门控与盘中预估的拦买结论不一致')
+                else:
+                    tail = ('；正式门控由 %s → %s' % (
+                        LEVEL_LABELS.get(change['official_from'], '**🟡 门控待确认**'),
+                        LEVEL_LABELS[change['official_to']])
+                        if change['official_changed'] else '（正式门控未变）')
+                    lines.append('本次变化：盘中预估 由 %s → %s%s' % (
+                        LEVEL_LABELS.get(change['from'], '**🟡 门控待确认**'),
+                        LEVEL_LABELS[change['to']], tail))
         if result.get('buy_paused'):
             lines.append('⚠️用户暂停买入 buy_paused=true 独立生效；本观察仅描述市场预估，不改变用户开关。')
     return '\n'.join(lines + [FOOTER])
@@ -370,8 +412,9 @@ def run(root=None, *, now=None, history_fn=None, quote_fn=None):
                 continue
             provisional, official = _signature(result['provisional']), _signature(result['official'])
             prior = state.get('provisional_state')
-            if ((prior is None and provisional != official)
-                    or (prior is not None and (prior != provisional or state.get('official_state') != official))):
+            change = _alert_reason(prior, provisional, state.get('official_state'), official)
+            if change is not None:
+                result['change'] = change
                 alerts.append(result)
             state.update(last_success=result, provisional_state=provisional,
                          official_state=official, error_kind=None)

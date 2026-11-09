@@ -339,8 +339,10 @@ class ObserverTests(unittest.TestCase):
     def test_first_diff_alert_then_unchanged_price_metrics_silent_snapshots_each_run(self):
         output = self.run_watch()
         self.assertTrue(output.startswith('【盘中门控观察：仅预估，不切换正式门控】'))
-        for text in ('589720', '测试ETF', '现价', '10:15', '正式 ⛔ pause_buy',
-                     '盘中预估（均线/DMI口径） ✅ normal', 'ADX', '+DI', '-DI',
+        for text in ('589720', '测试ETF', '现价', '10:15',
+                     '正式 ' + watch.LEVEL_LABELS['pause_buy'],
+                     '盘中预估（均线/DMI口径） ' + watch.LEVEL_LABELS['normal'],
+                     'ADX', '+DI', '-DI',
                      '未收盘确认，正式门控未切换；不构成可执行买单。'):
             self.assertIn(text, output)
         for i in (1, 2):
@@ -355,12 +357,12 @@ class ObserverTests(unittest.TestCase):
         self.set_official('normal', False)
         self.assertEqual(self.run_watch(), '')
         self.quote = quote_for(self.rows, price=0.8)
-        self.assertIn('no_entry', self.run_watch())
+        self.assertIn(watch.LEVEL_LABELS['no_entry'], self.run_watch())
         self.assertEqual(self.run_watch(), '')
         self.quote = quote_for(self.rows)
-        self.assertIn('盘中预估（均线/DMI口径） ✅ normal', self.run_watch())
+        self.assertIn('盘中预估（均线/DMI口径） ' + watch.LEVEL_LABELS['normal'], self.run_watch())
         self.set_official('pause_buy', True)
-        self.assertIn('正式 ⛔ pause_buy', self.run_watch())
+        self.assertIn('正式 ' + watch.LEVEL_LABELS['pause_buy'], self.run_watch())
 
     def test_trade_day_scoped_next_day_compares_official_again(self):
         self.assertTrue(self.run_watch())

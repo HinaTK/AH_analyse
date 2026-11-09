@@ -30,6 +30,7 @@ import os
 import re
 import sys
 import time
+import datetime as _dt
 import urllib.request
 from datetime import date
 from pathlib import Path
@@ -41,7 +42,11 @@ if __name__ == '__main__' and not IS_312:
     sys.exit(subprocess.call([r'C:\Users\Administrator\AppData\Local\Programs\Python\Python312\python.exe',
                               os.path.abspath(__file__)] + sys.argv[1:]))
 
-STATE = Path('D:/Code/AH_analyse/.cache/grid-home/cache/grid-account/overseas-triggers.json')
+STATE = Path('D:/Code/AH_analyse/.cache/grid-home/cache/grid-account/overseas-triggers-dsh.json')
+# 2026-11-09 恢复路径第 2 步：副本链状态文件独立，避免被另一写入者覆盖回旧结构。
+# 旧 overseas-triggers.json 仅作首次迁移的去重状态来源，不再写入；按 STATE 所在目录推导。
+def _legacy_state_path():
+    return STATE.parent / 'overseas-triggers.json'
 # 2026-11-04 用户拍板 STATE 迁移：活体状态从 hermes cache 迁到 AH .cache/grid-home
 #（run_and_push.py L44 指定的账本根），复制不剪切、hermes 侧留冻结备份；
 # 迁移操作记录见 cache/confirmed-runtime-deploy/20261104-* 目录。
@@ -66,8 +71,75 @@ def _load_rules():
 
 
 RULES = _load_rules()
-# 溢价口径留痕（M1）：净值日期/同源性/数据源，供事后审计，不参与判定。
+# 溢价口径留痕（M1）：净值日期/同源性/数据源/净值序列，供事后审计与市况门控，不参与价格判定。
 _LAST_PREMIUM_META = {}
+
+
+def _rule(name, default=None):
+    """读唯一真源；配置缺失返回默认值（调用方据此 fail-closed）。"""
+    return RULES.get(name, default) if RULES is not None else default
+
+
+def _hhmm(qt):
+    """从行情时间戳取 HHMM；无有效时间戳返回空串（时段判定按盘中处理）。"""
+    return qt[8:12] if len(qt) == 14 else ''
+
+
+def _clock_hhmm():
+    """当前 HHMM（纳指侧无行情时间戳时用；测试可注入覆盖，不触网）。"""
+    return _dt.datetime.now().strftime('%H%M')
+
+
+def _buy_window_ok(hhmm):
+    """数据口径降级方案：盘中一律不推买入，收盘后才允许观察提示。"""
+    start = _rule('买入观察起始时间', '1500')
+    return bool(hhmm) and hhmm >= start
+
+
+def _stale_days(nav_date):
+    """净值滞后自然日数（含周末，只作口径标注，不参与判定）。"""
+    try:
+        return max(0, (_dt.date.fromisoformat(date.today().isoformat())
+                       - _dt.date.fromisoformat(nav_date)).days)
+    except Exception:
+        return None
+
+
+def _market_blocked():
+    """最简市况门控：已发布净值连续 N 日下行 → 不开新档（单边下跌不靠下移基准加仓）。
+
+    净值序列不足 N+1 条时不拦（数据不足不冒充看多，也不误杀）。
+    """
+    if not _rule('市况门控启用', False):
+        return False, '未启用'
+    n = int(_rule('市况门控连跌天数', 5))
+    series = (_LAST_PREMIUM_META or {}).get('净值序列') or []
+    vals = [v for _, v in series][-(n + 1):]
+    if len(vals) < n + 1:
+        return False, '净值序列不足，门控未判定'
+    down = all(vals[i + 1] < vals[i] for i in range(n))
+    return (True, '单边下跌（净值连续%d日下行），不开新档' % n) if down else (False, '市况未触发连跌')
+
+
+def _budget_gate(tranche):
+    """预算硬上限：按资金口径给剩余预算可买份额，超额则静默买入。
+
+    只读账本不下单；份额为参考值，按 100 份取整。
+    """
+    if not _rule('预算硬拦截', False):
+        return False, '未启用', None
+    try:
+        pos = json.loads(POSITIONS.read_text(encoding='utf-8'))['sz159866']
+        spent = float(pos['total_cost'])
+        budget = float(pos.get('budget', _rule('预算总额', 30000)))
+        price = float(tranche['触发价'])
+        planned = float(tranche['份额']) * price
+        if spent + planned > budget:
+            return True, '超预算静默（已投%.2f+计划%.2f>预算%.2f）' % (spent, planned, budget), None
+        headroom = int((budget - spent) / price / 100) * 100
+        return False, '预算内（可用%.2f）' % (budget - spent), max(0, headroom)
+    except Exception:
+        return True, '账本不可读，fail-closed 静默', None
 
 # 2026-11-05 23:0x Master 指令：纳指/日经暂停买入，待次日复核并修复后再开。
 # 标志文件与 STATE 同目录，两条链共读一份；删除文件或置 paused=false 即恢复，无需改代码。
@@ -123,32 +195,46 @@ def check_nasdaq():
     prem = (price / nav - 1) * 100
     meta = dict(净值日期=nav_date,
                 溢价口径=('同日净值' if nav_date == date.today().isoformat() else '滞后净值'),
-                数据源='东财已发布净值')
-    data = dict(nav=nav, peak=peak, dd=dd, prem=prem, date=nav_date, **meta)
+                数据源='东财已发布净值', 净值序列=navs)
+    data = dict(nav=nav, peak=peak, dd=dd, prem=prem, date=nav_date,
+                净值滞后天数=_stale_days(nav_date), **meta)
+    data.pop('净值序列', None)  # 序列只留给门控用，不写状态文件
     if RULES is None:
         data['规则状态'] = '规则配置缺失，买入信号静默'
         return [], data
+    if not _buy_window_ok(_clock_hhmm()):
+        data['时段状态'] = '盘中不推买入（净值滞后，收盘后再给观察提示）'
+        return [], data
+    data['时段状态'] = '收盘后观察窗口'
     fires = []
     start_line = RULES['纳指启动溢价百分比']
+    stale = _stale_days(nav_date)
+    note = (f"｜观察提示（非执行指令）：净值日期 {nav_date}、滞后 {stale} 天，"
+            f"口径 {meta['溢价口径']}，非实时 IOPV，须按当日实时 IOPV 人工复核；触价≠成交")
     if prem < start_line:
-        fires.append(('nasdaq_premium', f"🟢 513300 溢价 {prem:+.1f}% 已回到 <{start_line:.0f}% 启动线内——纳指方案可启动（溢价口径：{meta['溢价口径']}，净值日期 {nav_date}，非实时 IOPV，下单前须复核）", True))
+        fires.append(('nasdaq_premium', f"👀 513300 溢价 {prem:+.1f}% 已回到 <{start_line:.0f}% 启动线内——纳指方案可观察{note}", True))
     # 溢价硬闸门：超标时加仓信号整体静默，只留启动线口径
     if dd <= RULES['纳指加仓回撤百分比'] and prem < RULES['溢价上限百分比']:
-        fires.append(('nasdaq_drawdown', f"📉 513300 净值距一年峰值回撤 {dd:+.1f}%，达 {RULES['纳指加仓回撤百分比']:.0f}% 加仓线，当前溢价 {prem:+.1f}% 已过 <{RULES['溢价上限百分比']:.0f}% 闸门（溢价口径：{meta['溢价口径']}，非实时 IOPV，下单前须复核）", True))
+        fires.append(('nasdaq_drawdown', f"👀 513300 净值距一年峰值回撤 {dd:+.1f}%，达 {RULES['纳指加仓回撤百分比']:.0f}% 加仓线、溢价 {prem:+.1f}% 已过 <{RULES['溢价上限百分比']:.0f}% 闸门——仅作观察{note}", True))
     return fires, data
 
 
 def _nikkei_stop_price():
-    """止损价 = 账本加权成本 × 止损比例（正常取唯一真源配置）。
+    """止损价 = 首档买入成本 × 止损比例（2026-11-09 拍板：锚点固定，加仓不下移）。
 
-    风控兜底：配置缺失时仍按账本 plan 既定的 0.75 计算，绝不因「规则文件丢了」
-    连止损都不判——买入可以静默，风控卖出任何时候都要响。
+    首档成本取账本 lots 中第一笔买入的「含费成本 ÷ 份额」；无逐笔明细时
+    回退 unit_cost。配置缺失仍按 0.75 兜底——买入可静默，风控卖出任何时候都要响。
     """
     ratio = RULES['止损比例'] if RULES is not None else 0.75
     try:
-        data = json.loads(POSITIONS.read_text(encoding='utf-8'))
-        unit_cost = float(data['sz159866']['unit_cost'])
-        return round(unit_cost * ratio, 4)
+        data = json.loads(POSITIONS.read_text(encoding='utf-8'))['sz159866']
+        lots = [l for l in data.get('lots', []) if l.get('side') == 'buy']
+        if lots:
+            first = min(lots, key=lambda x: x.get('tranche', 999))
+            anchor = round(float(first['total_cost']) / float(first['qty']), 4)
+        else:
+            anchor = float(data['unit_cost'])
+        return round(anchor * ratio, 4)
     except Exception:
         return None
 
@@ -167,7 +253,7 @@ def _nikkei_prem(price):
         nav_date, nav = navs[-1]
         _LAST_PREMIUM_META = dict(净值日期=nav_date,
                                   溢价口径=('同日净值' if nav_date == date.today().isoformat() else '滞后净值'),
-                                  数据源='东财已发布净值')
+                                  数据源='东财已发布净值', 净值序列=navs)
         return (price / nav - 1) * 100
     except Exception:
         _LAST_PREMIUM_META = dict(净值日期=None, 溢价口径='数据不可用', 数据源='东财已发布净值')
@@ -175,11 +261,12 @@ def _nikkei_prem(price):
 
 
 def _premium_note():
-    """买入信号统一附带的口径警示：非实时 IOPV、净值日期、下单前须复核。"""
+    """观察提示统一附带的数据口径警示（文案降级后不再写执行口吻）。"""
     meta = _LAST_PREMIUM_META or {}
     nd = meta.get('净值日期') or '未知'
-    return (f"｜溢价口径：{meta.get('溢价口径') or '未知'}，净值日期 {nd}，"
-            f"非实时 IOPV，下单前须按当日实时 IOPV 复核（2026-11-05）")
+    return (f"｜观察提示（非执行指令）：净值日期 {nd}、滞后 {_stale_days(nd)} 天，"
+            f"口径 {meta.get('溢价口径') or '未知'}，非实时 IOPV，"
+            f"须按当日实时 IOPV 人工复核；触价≠成交")
 
 
 def check_nikkei():
@@ -211,39 +298,59 @@ def check_nikkei():
             fires.append(('nikkei_stop', f"⚠️ 159866 盘中最低 {low:.3f} 已触及止损线 {stop:.4f}，现价 {price:.3f} 回升——触价≠成交，按既定规则应执行止损", False))
             return fires, dict(price=price, low=low, quote_time=qt, stop=stop, 规则状态=rule_status)
     meta = dict(_LAST_PREMIUM_META or {})
-    basis = dict(净值日期=meta.get('净值日期'), 溢价口径=meta.get('溢价口径'),
-                 数据源=meta.get('数据源'))
+    nd = meta.get('净值日期')
+    basis = dict(净值日期=nd, 溢价口径=meta.get('溢价口径'),
+                 数据源=meta.get('数据源'), 净值滞后天数=_stale_days(nd))
+    common = dict(price=price, low=low, quote_time=qt, **basis)
     if RULES is None:
-        return fires, dict(price=price, low=low, quote_time=qt,
-                           规则状态='规则配置缺失（止损用兜底比例），买入信号静默', **basis)
+        return fires, dict(common, 规则状态='规则配置缺失（止损用兜底比例），买入信号静默')
     prem = _nikkei_prem(price)
     meta = dict(_LAST_PREMIUM_META or {})
-    basis = dict(净值日期=meta.get('净值日期'), 溢价口径=meta.get('溢价口径'),
-                 数据源=meta.get('数据源'))
+    nd = meta.get('净值日期')
+    basis = dict(净值日期=nd, 溢价口径=meta.get('溢价口径'),
+                 数据源=meta.get('数据源'), 净值滞后天数=_stale_days(nd))
+    common = dict(common, prem=prem, **basis)
     # 溢价硬闸门：数据不可用也静默（fail-closed），不再「不硬拦、照常推」。
     if prem is None:
-        return fires, dict(price=price, low=low, quote_time=qt, prem=None,
-                           溢价状态='数据不可用', **basis)
+        return fires, dict(common, 溢价状态='数据不可用')
     if prem > RULES['日经禁买溢价百分比']:
-        return fires, dict(price=price, low=low, quote_time=qt, prem=prem,
-                           溢价状态='超闸门静默', **basis)
+        return fires, dict(common, 溢价状态='超闸门静默')
+    # 数据口径降级方案（2026-11-09 拍板）：QDII 净值滞后，盘中一律不推买入。
+    if not _buy_window_ok(_hhmm(qt)):
+        return fires, dict(common, 溢价状态='已通过',
+                           时段状态='盘中不推买入（净值滞后，收盘后再给观察提示）')
+    # 市况门控：净值连续下行时不开新档（不靠不断下移基准加仓）。
+    blocked, regime = _market_blocked()
+    if blocked:
+        return fires, dict(common, 溢价状态='已通过', 时段状态='收盘后观察窗口',
+                           市况状态=regime)
     # 2026-11-03 第一档已成交 → 盯二档/三档；档位来自配置而非硬编码
     for t in RULES['档位']:
         tag, level, act = t['名称'], t['触发价'], t['说明']
+        hit = price <= level or low <= level
+        if not hit:
+            continue
+        over, budget_note, shares = _budget_gate(t)
+        if over:
+            return fires, dict(common, 溢价状态='已通过', 时段状态='收盘后观察窗口',
+                               市况状态=regime, 预算状态=budget_note)
+        share_note = f"｜参考份额 {shares:,} 份（按剩余预算与触发价推算，资金口径，非下单量）"
+        note = _premium_note()
         if price <= level:
-            fires.append((tag, f"🟢 159866 现价 {price:.3f} 进入{act}{_premium_note()}", True))
-            break
-        if low <= level:
-            fires.append((tag, f"⚠️ 159866 盘中最低 {low:.3f} 触及{act.split('买入')[0]}触发线，现价 {price:.3f} 回升——触价≠成交{_premium_note()}", False))
-            break
-    return fires, dict(price=price, low=low, quote_time=qt, prem=prem,
-                       溢价状态='已通过', **basis)
+            fires.append((tag, f"👀 159866 现价 {price:.3f} 进入{act}{share_note}{note}", True))
+        else:
+            fires.append((tag, f"👀 159866 盘中最低 {low:.3f} 触及{act}触发线，现价 {price:.3f} 回升{share_note}{note}", False))
+        return fires, dict(common, 溢价状态='已通过', 时段状态='收盘后观察窗口',
+                           市况状态=regime, 预算状态=budget_note)
+    return fires, dict(common, 溢价状态='已通过', 时段状态='收盘后观察窗口',
+                       市况状态=regime)
 
 
 def _budget_check():
-    """只读预算校验（审核 M4）：三档全建是否超预算，写进 state 留痕，不拦截。
+    """三档全建的计划层预算缺口，只写进状态文件留痕（2026-11-09 拍板后口径）。
 
-    拦截属交易规则变更，待 Master 拍板后另行实现。
+    单档买入的硬拦截在 _budget_gate() 里执行；本函数回答的是另一件事：
+    「按份额口径把三档全建完，会不会超预算」，供 Master 判断方案是否需要重定份额。
     """
     if RULES is None:
         return None
@@ -255,8 +362,9 @@ def _budget_check():
         total = round(spent + extra, 2)
         return dict(已投入=spent, 二三档估算=round(extra, 2), 三档全建估算=total,
                     预算总额=budget, 三档全建超额=bool(total > budget),
-                    超额金额=round(max(0.0, total - budget), 2), 已拦截=False,
-                    口径='只读留痕；份额口径假设，是否改硬拦截待拍板')
+                    超额金额=round(max(0.0, total - budget), 2),
+                     单档硬拦截已启用=bool(_rule('预算硬拦截', False)),
+                    口径='计划层只读留痕；单档买入硬拦截见 _budget_gate()（2026-11-09 拍板已启用）')
     except Exception:
         return None
 
@@ -268,6 +376,13 @@ def main():
     if STATE.exists():
         try:
             state = json.loads(STATE.read_text(encoding='utf-8'))
+        except Exception:
+            state = {}
+    elif _legacy_state_path().exists():
+        # 首次切换到独立状态文件：只继承去重状态，避免重复推「已解除」/触价。
+        try:
+            legacy = json.loads(_legacy_state_path().read_text(encoding='utf-8'))
+            state = {k: legacy[k] for k in ('active', 'touch') if k in legacy}
         except Exception:
             state = {}
 

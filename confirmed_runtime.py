@@ -23,6 +23,14 @@ def _held_codes_dynamic():
 CODES = _held_codes_dynamic()               # 动态持仓（含迁移退出与空仓注册标的）
 BUDGETS = {'sh589720': D('8000'), 'sz159363': D('6000')}
 GAP = D('0.015')
+# 门控级别展示口径（Master 2026-11-09）：推送正文一律「中文加粗 + emoji」。
+# 与 tools/intraday_gate_watch.py 的 LEVEL_LABELS 文案一致；内部级别键不变。
+LEVEL_NAMES_CN = {
+    'normal': '**✅ 正常可买**',
+    'probe_only': '**🟡 试错仓**',
+    'pause_buy': '**⏸️ 暂停买入**',
+    'no_entry': '**⛔ 禁止建仓**',
+}
 
 
 class RegimeGate:
@@ -60,8 +68,8 @@ class RegimeGate:
         except Exception:
             return None  # 判定失败：退回纯 ADX，不放大拦截范围
         blocks = verdict['blocks_buy']
-        level_names = {'no_entry': '暂停买入(五线全破)', 'pause_buy': '暂停买入(强动能跌势)'}
-        reason = f"{code} {level_names.get(verdict['level'], verdict['level'])}：{verdict['reason']}"
+        level_names = LEVEL_NAMES_CN
+        reason = f"{code} {level_names.get(verdict['level'], '**🟡 门控待确认**')}：{verdict['reason']}"
         return blocks, reason
 
     def blocks_buy(self, code):
@@ -313,8 +321,7 @@ def _cache_to_regimes(cache):
             e = self._entries.get(code)
             if e is None:
                 return f"{code} 门控缓存未覆盖（新注册或缓存残缺），暂停买入；等门控缓存更新后自动恢复"
-            level_names = {'no_entry': '暂停买入(五线全破)', 'pause_buy': '暂停买入(强动能跌势)'}
-            head = f"{code} {level_names.get(e.get('level'), e.get('level') or '门控')}："
+            head = f"{code} {LEVEL_NAMES_CN.get(e.get('level'), '**🟡 门控待确认**')}："
             return head + (e.get('reason') or '缓存判定')
 
         def close(self, code):
