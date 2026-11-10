@@ -53,6 +53,83 @@ def build_instruments():
 INSTRUMENTS = build_instruments()
 
 
+# 门控对齐（2026-11-10 Master 指出：15:35 与 15:30 两条推送结论打架）。
+# 文案与 confirmed_runtime.LEVEL_NAMES_CN / tools.intraday_gate_watch.LEVEL_LABELS
+# 严格一致；守门测试 tests/test_market_phase_gate_alignment.py 钉死，防漂移。
+GATE_LEVEL_LABELS = {
+    "normal": "**✅ 正常可买**",
+    "probe_only": "**🟡 试错仓**",
+    "pause_buy": "**⏸️ 暂停买入**",
+    "no_entry": "**⛔ 禁止建仓**",
+}
+
+
+def load_gate_map(holdings_path=None, cache_path=None):
+    """只读门控缓存，返回 {secid: 门控条目或 None}。
+
+    键为汇总表使用的 secid（0.159363 / 1.589720 形式），只覆盖账本持仓标的；
+    指数行不在映射里，永远不受门控影响。缓存缺失、损坏或该标的无缓存时
+    返回 None（对齐层按 fail-closed 处理），不静默放行。
+    """
+    try:
+        hp = Path(holdings_path) if holdings_path else HOLDINGS_PATH
+        holdings = json.loads(hp.read_text(encoding="utf-8")).get("holdings") or {}
+    except (OSError, ValueError, TypeError):
+        holdings = {}
+    try:
+        cp = Path(cache_path) if cache_path else hp.parent / "regime-cache.json"
+        cache = json.loads(cp.read_text(encoding="utf-8"))
+        if not isinstance(cache, dict):
+            cache = None
+    except (OSError, ValueError, TypeError, UnboundLocalError):
+        cache = None
+    gates = {}
+    for code in holdings:
+        digits = code[-6:]
+        secid = ("1." if code.startswith("sh") else "0.") + digits
+        # 缓存读不到 → 该标的门控状态未知 → None，对齐层按 fail-closed 降级
+        entry = cache.get(code) if cache is not None else None
+        gates[secid] = entry if isinstance(entry, dict) else None
+    return gates
+
+
+def apply_gate_alignment(results, gates):
+    """门控拦买的持仓标的：动作列降级为「方向仓观察·0成」并写明门控状态。
+
+    只改 label / fraction / reason / gate_blocked，不改任何读数、信号亮灭、
+    三信号判据、门控判据、账本或网格建议。门控状态未核实则 fail-closed。
+    """
+    out = []
+    for m in results:
+        r = dict(m)
+        secid = r.get("secid")
+        if secid not in gates:
+            # 指数行 / 非账本标的：门控不适用，原样保留
+            out.append(r)
+            continue
+        gate = gates[secid]
+        blocked = bool(gate and gate.get("blocks_buy"))
+        unknown = not isinstance(gate, dict) or "level" not in gate
+        if blocked or unknown:
+            level = gate.get("level") if isinstance(gate, dict) else None
+            label = GATE_LEVEL_LABELS.get(level)
+            status = "网格 %s 中" % label if label else "网格门控状态未核实"
+            r["gate_blocked"] = True
+            r["label"] = "方向仓观察"
+            r["fraction"] = "0成"
+            r["reason"] = "%s，此处不生成买入动作｜右侧信号：%s" % (
+                status, r.get("reason", ""))
+        else:
+            r["gate_blocked"] = False
+        out.append(r)
+    return out
+
+
+def trigger_eligible(r):
+    """三信号齐的 🔔 买入铃铛：门控拦买标的不得响。"""
+    return bool(r.get("signals", {}).get("trigger")) and not r.get("gate_blocked")
+
+
 def tencent_symbol(secid):
     """东财 secid → 腾讯代码：1.000001→sh000001，0.159363→sz159363。"""
     market, digits = secid.split(".")
@@ -340,7 +417,9 @@ def render_header(date):
     return (
         f"📈 市况操作信号（{date}）\n"
         "右侧三信号 = ●地量(近5日均额<峰值1/3) + ●ADX从≥25降破25(单边动能死) + ●周线KDJ金叉K<50(底部金叉)；\n"
-        "三信号齐→🔔买入信号。成数指方向仓/新开仓目标，不是清仓网格；网格挂单照常由09:20任务管。"
+        "三信号齐→🔔买入信号。成数指方向仓/新开仓目标，不是清仓网格；网格挂单照常由09:20任务管。\n"
+        "网格门控拦买标的（**⏸️ 暂停买入** / **⛔ 禁止建仓**）只显示「方向仓观察·0成」，"
+        "不生成买入动作；成数仅为研究标注。"
     )
 
 
@@ -534,13 +613,16 @@ def monitor_main():
 
     if not results:
         return
+    # 门控对齐（2026-11-10）：汇总表输出前，把拦买标的的动作列降级，
+    # 避免与 15:30 门控 / 09:20 网格建议给出方向相反的措辞。
+    results = apply_gate_alignment(results, load_gate_map())
     # render_report 已含全部标的块；这里只负责给触发标的加铃铛再重组装，
     # 严禁再逐标的 append（2026-10-27 修复：旧循环把块输出两遍）
     enriched = []
     new_triggers = []
     for r in results:
         bell = ""
-        if r["signals"]["trigger"]:
+        if trigger_eligible(r):
             if should_push(state, r["secid"], r["date"]):
                 bell = " 🔔新触发"
                 new_triggers.append(r)
