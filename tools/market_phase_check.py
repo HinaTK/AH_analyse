@@ -18,7 +18,13 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import volume_dry  # 地量判据单一真源（2026-11-12 A 方案）
+
 sys.stdout.reconfigure(encoding="utf-8")
+
+# 单一阈值：1/3，与观察哨哨①共用，不再各写一份
+DRY_THRESHOLD = volume_dry.DRY_THRESHOLD
 
 # (secid, 名称) —— 东财 secid: 1=沪, 0=深。指数为固定底座；持仓从账本动态读取。
 INDEX_INSTRUMENTS = [
@@ -359,7 +365,7 @@ def evaluate_phase_signals(metrics):
       2. adx_break: ADX 从 >=25 上方降到 <25（单边动能衰竭；一直在 25 下方不算）
       3. kdj_golden: 周线 KDJ 金叉且 K<50（底部区金叉）
     """
-    dil_volume = metrics["vol_ratio"] < 1.0 / 3.0
+    dil_volume = volume_dry.is_dry(metrics["vol_ratio"])
     adx_break = metrics["adx_prev"] >= 25.0 > metrics["adx"]
     kdj_golden = bool(metrics["kdj_golden"]) and metrics["kdj_k"] < 50.0
     trigger = dil_volume and adx_break and kdj_golden
@@ -469,7 +475,7 @@ def render_instrument(m):
     lines = [
         f"【{m['name']}】收 {m['close']:.2f}（{m.get('pct', 0):+.2f}%）",
         f"  均线/回撤：MA20 {ma20_txt}｜MA60 {ma60_txt}｜距250日高点 {m['dd250']:+.1f}%｜"
-        f"量能比 {m['vol_ratio']:.2f}（<0.33地量）",
+        f"量能比 {m['vol_ratio']:.2f}（<1/3地量）",
         f"  动能：ADX {m['adx']:.1f}（前日 {m['adx_prev']:.1f}）｜+DI {m['pdi']:.1f} / -DI {m['mdi']:.1f}"
         f" → {'单边' if m['adx'] >= 25 else '震荡'}市，{'多头' if m['trend'] == 'up' else '空头'}方向",
         f"  右侧信号：{on('dilVolume', '地量')} {on('adx_break', 'ADX降破25')} {on('kdj_golden', '周线金叉')}{kdj_txt}",
@@ -575,8 +581,10 @@ def monitor_main():
                 continue
             closes = [r["close"] for r in daily]
             amounts = [r["amount"] for r in daily]
-            win = min(120, len(amounts))
-            vol_ratio = (sum(amounts[-5:]) / 5) / max(amounts[-win:])
+            dry = volume_dry.calculate(amounts)
+            if dry is None:
+                continue
+            vol_ratio = dry['ratio_raw']
             adx_raw = wilder_adx(daily)
             adx_prev_raw = wilder_adx(daily[:-1])
             if adx_raw is None or adx_prev_raw is None:

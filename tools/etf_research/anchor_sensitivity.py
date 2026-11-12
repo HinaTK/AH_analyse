@@ -12,8 +12,9 @@
 from statistics import median, pstdev
 
 from . import grid_model as model
+from .research import DEFAULT_GAP
 
-GAP = 0.02
+GAP = DEFAULT_GAP
 SLIP = 0.0005
 LOT_BUDGET = 5000
 
@@ -37,7 +38,7 @@ def disclosure_lines(prev, curr, prev_asof, curr_asof):
     line = (f"⚠️ 锚价位移披露：{prev_asof} 完整窗口首根开 {prev['first_open']:.3f} → "
             f"{curr_asof} 首根开 {curr['first_open']:.3f}；初始买入价 "
             f"{s['prev_initial']:.3f} → {s['curr_initial']:.3f}（{s['pct']:+.1f}%），"
-            f"相当于 {s['grids']:.1f} 个 {GAP * 100:.0f}% 格距；网格线整体平移，"
+            f"相当于 {s['grids']:.1f} 个 {GAP * 100:g}% 格距；网格线整体平移，"
             f"本期排名对窗口起点敏感，仅披露不改口径，请结合稳健性诊断解读。")
     return [line]
 
@@ -91,7 +92,7 @@ def render(disclosure, diagnosis, code, name, prev_asof, curr_asof):
              '', '## 一、本期锚价位移披露']
     lines.extend(disclosure)
     lines += ['', '## 二、多起点稳健性诊断',
-              '判据：窗口长度恒为固定交易日数，仅把起点平移；各自独立跑一次同参数网格模拟。',
+              '判据：窗口长度恒为固定交易日数，仅把起点平移；各自独立跑一次同参数网格模拟。格距与生产 GAP 一致（1.5%）。',
               '',
               '| 起点平移(交易日) | 窗口起 | 窗口止 | 首根开盘价 | 63日往返次数 | 净差价元 | 备注 |',
               '| --- | --- | --- | --- | --- | --- | --- |']

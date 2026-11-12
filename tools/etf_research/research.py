@@ -42,6 +42,9 @@ def get_model():
     return grid_model
 
 VERSION = 'rolling-m5-min1-v1'
+# 研究引擎默认格距与生产 confirmed_runtime.GAP 对齐（2026-11-12 Master 授权）。
+# 历史榜单若用 2% 口径，须在结果里显式标注，不得与本期直接比名次。
+DEFAULT_GAP = 0.015
 BASE = ['sh589720', 'sz159363']
 HOLDINGS = BASE + ['sz159992']
 
@@ -62,7 +65,7 @@ def run_research(**kwargs):
 def main(argv=None):
     import argparse,json
     from .engine import DEFAULT_INPUT,dump
-    parser=argparse.ArgumentParser(description='滚动全资格池5分钟研究（历史资格快照）')
+    parser=argparse.ArgumentParser(description='滚动全资格池5分钟研究（历史资格快照；含63日与近20日双窗口多锚点中位）')
     parser.add_argument('--input-path',default=str(DEFAULT_INPUT))
     parser.add_argument('--bars-dir')
     parser.add_argument('--output-path')
@@ -72,7 +75,7 @@ def main(argv=None):
     parser.add_argument('--limit',type=int)
     parser.add_argument('--workers',type=int,default=8)
     parser.add_argument('--lot_budget',type=int,default=5000)
-    parser.add_argument('--gap',type=float,default=0.02)
+    parser.add_argument('--gap',type=float,default=DEFAULT_GAP)
     result=run_research(**vars(parser.parse_args(argv)))
     print(dump(result['summary']))
     return result

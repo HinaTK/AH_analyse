@@ -5,7 +5,34 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 import pandas as pd
-from .research import BASE,HOLDINGS,VERSION,load_universe,select_window,latest_session,get_model
+from .research import BASE,HOLDINGS,VERSION,DEFAULT_GAP,load_universe,select_window,latest_session,get_model
+from statistics import median
+from . import dual_window_rank
+# 双窗口榜单为默认产物（Master 2026-11-12「不要等我问题」）
+DUAL_WINDOW_REPORT = True
+DUAL_WINDOW_FILENAME = 'dual-window-ranking.md'
+# 多锚点：5 个起点窗口（平移 0/-1/-2/-3/-4 交易日）取中位往返次数。
+ANCHOR_SHIFTS = (0, -1, -2, -3, -4)
+LONG_SESSIONS = 63
+RECENT_SESSIONS = 20
+ROTATION_SORT_KEY = 'median_full_cycles'
+RECENT_SORT_KEY = 'recent_median_cycles'
+QUALIFICATION_CYCLE_KEY = 'median_full_cycles'
+
+
+def recent_state(long_median, recent_median):
+    """近期状态：按日均往返密度比，窗口长度不同绝对次数不可比。
+
+    与 multi_anchor_rank.recent_state 同一口径：>1.3 升温、<0.7 降温。
+    """
+    if long_median is None or recent_median is None or long_median <= 0:
+        return '近期数据不足'
+    ratio = (recent_median / RECENT_SESSIONS) / (long_median / LONG_SESSIONS)
+    if ratio > 1.3:
+        return '近期升温'
+    if ratio < 0.7:
+        return '近期降温'
+    return '近期平稳'
 CACHE_ROOT = Path(os.environ.get('HERMES_HOME', 'D:/Hermes Agent CN Desktop/data/hermes-home')) / 'cache'
 DEFAULT_INPUT = CACHE_ROOT / 'grid-broad-20260923'
 DEFAULT_OUTPUT = CACHE_ROOT / 'grid-research'
@@ -37,7 +64,7 @@ def fetch_bars(code):
             return validate(pd.DataFrame(rows).rename(columns={'day':'time'}))
         except Exception as exc:last=exc
     raise ValueError(f'Sina refresh failed: {last}')
-def metrics(pool,runs,traces,returns):
+def metrics(pool,runs,traces,returns,anchor_cycles=None,recent_anchor_cycles=None):
     daily=pd.DataFrame(returns);base_days={e['time'][:10] for b in BASE for e in traces.get(b,[]) if e['side']=='sell'};rows=[]
     for row in pool.itertuples():
         c=row.code;x=dict(code=c,name=row.name,holding=c in HOLDINGS,has_all_four_windows=all((c,w) in runs for w in WINDOWS))
@@ -58,7 +85,19 @@ def metrics(pool,runs,traces,returns):
         x['max_corr_to_base']=max(corrs) if all(math.isfinite(v) for v in corrs) else np.nan
         x['max_down_corr_to_base']=max(downs) if all(math.isfinite(v) for v in downs) else np.nan
         x['worst_half_efficiency_pct']=min(x.get('early_cycle_net_per_avg_cost_pct',np.nan),x.get('late_cycle_net_per_avg_cost_pct',np.nan))
-        x['qualification']=bool(x['has_all_four_windows'] and c not in HOLDINGS and x.get('full_cycles',0)>=10 and all(x.get(f'{w}_cycles',0)>=2 for w in WINDOWS[1:]) and x['idle_cycle_days']>=3 and x['max_corr_to_base']<.8 and x['max_down_corr_to_base']<.8)
+        a=(anchor_cycles or {}).get(c, {})
+        x['median_full_cycles']=a.get('median')
+        x['anchor_spread']=a.get('spread')
+        x['anchor_windows_ok']=a.get('ok', 0)
+        ra=(recent_anchor_cycles or {}).get(c, {})
+        x['recent_median_cycles']=ra.get('median')
+        x['recent_anchor_spread']=ra.get('spread')
+        x['recent_anchor_windows_ok']=ra.get('ok', 0)
+        x['recent_state']=recent_state(x['median_full_cycles'], x['recent_median_cycles'])
+        # 中位不可用时退回单锚点，并在 anchor_windows_ok=0 显式留痕
+        cycle_key = x['median_full_cycles'] if x['median_full_cycles'] is not None else x.get('full_cycles', 0)
+        x['qualification_cycle_value'] = cycle_key
+        x['qualification']=bool(x['has_all_four_windows'] and c not in HOLDINGS and cycle_key>=10 and all(x.get(f'{w}_cycles',0)>=2 for w in WINDOWS[1:]) and x['idle_cycle_days']>=3 and x['max_corr_to_base']<.8 and x['max_down_corr_to_base']<.8)
         rows.append(x)
     rank=pd.DataFrame(rows)
     for col in WEIGHTS:
@@ -67,7 +106,7 @@ def metrics(pool,runs,traces,returns):
     rank['score']=np.nan;rank.loc[valid,'score']=0.
     for col,w in WEIGHTS.items():rank.loc[valid,'score']+=abs(w)*rank.loc[valid,col].rank(pct=True,ascending=w>0)
     return rank.sort_values(['qualification','score','code'],ascending=[False,False,True],na_position='last').reset_index(drop=True)
-def run_research(input_path=DEFAULT_INPUT,output_path=None,asof=None,sessions=63,offline=False,limit=None,workers=8,bars_dir=None,lot_budget=5000,gap=0.02,regime_gate=False):
+def run_research(input_path=DEFAULT_INPUT,output_path=None,asof=None,sessions=63,offline=False,limit=None,workers=8,bars_dir=None,lot_budget=5000,gap=DEFAULT_GAP,regime_gate=False):
     if sessions<20:raise ValueError('sessions must be >=20')
     asof=asof or latest_session();inp=Path(input_path);pool=load_universe(inp/'eligibility.csv');universe=len(pool)
     import hashlib
@@ -136,19 +175,71 @@ def run_research(input_path=DEFAULT_INPUT,output_path=None,asof=None,sessions=63
                 if abs(result['identity_error'])>1e-6:raise ValueError('identity error')
                 result['cycle_net_per_avg_cost_pct']=result['cycle_net']/result['avg_cost']*100;runs[(c,w)]=result;progress(dict(stage='simulate',code=c,window=w,result=result))
             except Exception as exc:errors.append(dict(code=c,window=w,stage='simulate',error=str(exc)));progress(errors[-1]);save_errors()
+    # 多锚点诊断：复用已抓取的 bars，不额外联网；失败窗口记 error 不静默丢弃
+    anchor_cycles={}
+    recent_anchor_cycles={}
+    for c,frame in data.items():
+        days=sorted(set(str(x)[:10] for x in frame['time']))
+        base_end=len(days)-1
+        vals=[]
+        for sh in ANCHOR_SHIFTS:
+            end=base_end+sh;start=end-sessions+1
+            if start<0:continue
+            win=days[start:end+1]
+            sub=frame[frame['time'].astype(str).str[:10].isin(win)].reset_index(drop=True)
+            try:
+                rr=model.simulate(sub,gap=gap,t0=False,slip=.0005,trace=False,lot_budget=lot_budget,gate_days=None)
+                vals.append(rr['cycles'])
+            except Exception:
+                pass
+        anchor_cycles[c]=dict(median=median(vals) if vals else None,
+                             spread=(max(vals)-min(vals)) if vals else None,
+                             ok=len(vals))
+        rvals=[]
+        for sh in ANCHOR_SHIFTS:
+            end=base_end+sh;start=end-RECENT_SESSIONS+1
+            if start<0:continue
+            win=days[start:end+1]
+            sub=frame[frame['time'].astype(str).str[:10].isin(win)].reset_index(drop=True)
+            try:
+                rr=model.simulate(sub,gap=gap,t0=False,slip=.0005,trace=False,lot_budget=lot_budget,gate_days=None)
+                rvals.append(rr['cycles'])
+            except Exception:
+                pass
+        recent_anchor_cycles[c]=dict(median=median(rvals) if rvals else None,
+                                    spread=(max(rvals)-min(rvals)) if rvals else None,
+                                    ok=len(rvals))
     save_errors();failed=sum(e['stage']=='simulate' for e in errors)
     if len(runs)+failed!=len(pool)*4:raise RuntimeError('simulation coverage mismatch')
     if any((b,w) not in runs for b in BASE for w in WINDOWS):raise ValueError('baseline simulation failure; inspect errors.json')
-    rank=metrics(pool,runs,traces,returns);rank.to_csv(out/'ranking.csv',index=False)
+    rank=metrics(pool,runs,traces,returns,anchor_cycles=anchor_cycles,recent_anchor_cycles=recent_anchor_cycles);rank.to_csv(out/'ranking.csv',index=False)
     pd.DataFrame([dict(code=c,window=w,**v) for (c,w),v in runs.items()]).to_csv(out/'runs.csv',index=False)
     pd.DataFrame(returns).to_csv(out/'daily-returns.csv')
-    rotation=rank[rank.has_all_four_windows & ~rank.holding & (rank.full_cycles>runs[(BASE[0],'full')]['cycles'])].sort_values(['full_cycles','full_cycle_net','full_cycle_net_per_avg_cost_pct','code'],ascending=[False,False,False,True])
+    base_cycles=runs[(BASE[0],'full')]['cycles']
+    if ROTATION_SORT_KEY in rank.columns and rank[ROTATION_SORT_KEY].notna().any():
+        sort_key=rank[ROTATION_SORT_KEY].fillna(rank['full_cycles'])
+    else:
+        sort_key=rank['full_cycles']
+    rank['_sort_cycles']=sort_key
+    rotation=rank[rank.has_all_four_windows & ~rank.holding & (rank['_sort_cycles']>base_cycles)].sort_values(['_sort_cycles','full_cycle_net','full_cycle_net_per_avg_cost_pct','code'],ascending=[False,False,False,True])
+    rank=rank.drop(columns=['_sort_cycles'],errors='ignore')
+    rotation=rotation.drop(columns=['_sort_cycles'],errors='ignore')
+    if RECENT_SORT_KEY in rank.columns and rank[RECENT_SORT_KEY].notna().any():
+        recent_rotation=rank[rank.has_all_four_windows & ~rank.holding].sort_values(
+            [RECENT_SORT_KEY,'median_full_cycles','recent20_cycle_net','code'],
+            ascending=[False,False,False,True])
+    else:
+        recent_rotation=rank.iloc[0:0]
+    dual_view=dual_window_rank.build(rank)
+    if DUAL_WINDOW_REPORT:
+        dual_window_rank.write_report(rank,out,asof)
     records=clean(rank.to_dict('records'));holdings={c:next(x for x in records if x['code']==c) for c in HOLDINGS}
     summary=dict(version=VERSION,run_at=run_id,asof=asof,window_start=dates[0],window_end=dates[-1],sessions=sessions,fee_minimum=1,universe_count=universe,attempted_assets=len(pool),rank_rows=len(rank),attempted_runs=len(pool)*4,successful_runs=len(runs),failed_runs=failed,fetch_errors=sum(e['stage']=='fetch' for e in errors),offline=offline,smoke=limit is not None,latest_claim=False,full_pool=limit is None,qualified=int(rank.qualification.sum()),eligibility_snapshot='20260923 historical eligibility; not newly discovered listed universe',scoring_weights=WEIGHTS,output_path=str(out))
     model_excluded=sum(e['stage']=='simulate' and e['error'] in ('initial orders exceed 1% first bar volume','price too high for board lot') for e in errors)
     summary.update(data_failed_runs=failed-model_excluded,model_excluded_runs=model_excluded)
     summary.update(production_pool=production_pool,production_scope=production_scope,latest_claim=production_scope and summary['data_failed_runs']==0 and summary['fetch_errors']==0)
+    summary.update(dual_window_report=DUAL_WINDOW_FILENAME,dual_window_rows=len(dual_view))
     summary.update(rankable_rows=int(rank.has_all_four_windows.sum()),successful_assets=int(rank.has_all_four_windows.sum()),failed_assets=int((~rank.has_all_four_windows).sum()))
-    result=clean(dict(summary=summary,ranking=records,rotation_ranking=rotation.to_dict('records'),rotation_top10=rotation.head(10).to_dict('records'),leader=None if rotation.empty else rotation.iloc[0].to_dict(),holdings=holdings,errors=errors))
+    result=clean(dict(summary=summary,ranking=records,rotation_ranking=rotation.to_dict('records'),rotation_top10=rotation.head(10).to_dict('records'),recent_rotation_top10=recent_rotation.head(10).to_dict('records'),dual_window_top=dual_view.to_dict('records'),dual_window_report=DUAL_WINDOW_FILENAME,leader=None if rotation.empty else rotation.iloc[0].to_dict(),holdings=holdings,errors=errors))
     (out/'summary.json').write_text(dump(summary),encoding='utf-8');(out/'result.json').write_text(dump(result),encoding='utf-8');progress(dict(stage='complete',summary=summary))
     return result

@@ -31,14 +31,14 @@ class AnchorInfoTests(unittest.TestCase):
         self.assertAlmostEqual(info['first_open'], 1.250)
         # 与 grid_model.price(1.250, True, 0.0005) 一致：向上取整到 0.001
         self.assertAlmostEqual(info['initial_buy'], 1.251, places=3)
-        self.assertAlmostEqual(info['first_sell'], 1.251 * 1.02, places=3)
+        self.assertAlmostEqual(info['first_sell'], 1.251 * (1 + a.GAP), places=3)
 
     def test_shift_summary_percent_and_grid_count(self):
         prev = a.anchor_of_first_open(1.250, 'A')
         curr = a.anchor_of_first_open(1.289, 'B')
         s = a.shift_summary(prev, curr)
         self.assertGreater(s['pct'], 3.0)     # 1.251 → 1.290，约 +3.1%
-        self.assertGreater(s['grids'], 1.0)    # 超过一个 2% 格距
+        self.assertGreater(s['grids'], 1.0)    # 超过一个生产格距（1.5%）
         self.assertLess(s['pct'], 3.3)
 
     def test_disclosure_lines_are_chinese_and_include_shift(self):

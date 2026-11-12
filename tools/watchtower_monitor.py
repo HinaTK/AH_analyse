@@ -8,7 +8,7 @@
 哨④ 924级政策: 政策事件型——脚本无法自动判定, 显示"人工盯守"状态 + 备忘清单(SFISF扩容/央行直连工具/化债级财政)
 
 数据源:
-  量能: westock kline sh000001 (amount)
+  量能: 公共真源 volume_dry（东财/腾讯 1.000001，与 15:35 市况同源）
   两融: 东财 RPTA_RZRQ_LSHJ (全市场历史序列, 实测可用)
 输出: watchdog 模式——有触发/状态翻转才输出, 全部正常静默
 """
@@ -21,11 +21,14 @@ import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import volume_dry  # 地量判据单一真源（2026-11-12 A 方案）
+
 WESTOCK = r"C:/Users/Administrator/.local/bin/westock.exe"
 STATE_PATH = Path("D:/Code/AH_analyse/tools/watchtower_state.json")
 
 # 阈值（研究档案口径）
-TH_VOLRATIO = 0.33      # 地量线
+TH_VOLRATIO = volume_dry.DRY_THRESHOLD   # 地量线：单一真源 1/3（原 0.33 已废止）
 TH_MARGIN_CLEAR = 22000.0  # 两融出清线(亿)
 TH_MARGIN_ACCEL = 500.0    # 10日净偿还加速线(亿)
 EARNINGS_WINDOW = ("2027-01-01", "2027-02-01")  # Q4业绩预告强制披露窗口(1月底前)
@@ -37,24 +40,12 @@ def westock(*args):
 
 
 def volume_ratio():
-    """上证: 5日均额/120日峰值。"""
-    out = westock("kline", "sh000001", "--period", "day", "--limit", "130")
-    lines = [l for l in out.splitlines() if l.startswith("|")]
-    if len(lines) < 10:
-        return None
-    hdr = [c.strip() for c in lines[0].strip("|").split("|")]
-    rows = [[c.strip() for c in l.strip("|").split("|")] for l in lines[2:]]
-    try:
-        ai = hdr.index("amount")
-        amounts = [float(r[ai]) for r in rows]
-    except (ValueError, KeyError, IndexError):
-        return None
-    if len(amounts) < 120:
-        return None
-    avg5 = sum(amounts[:5]) / 5
-    peak = max(amounts[:120])
-    return {"ratio": round(avg5 / peak, 3), "avg5_yi": round(avg5 / 1e8, 0),
-            "peak_yi": round(peak / 1e8, 0), "date": rows[0][0]}
+    """上证: 5日均额/120日峰值（2026-11-12 A 方案：改走公共真源）。
+
+    原实现用 westock 第二套数据源与 0.33 阈值，与 15:35 市况可能给出
+    相反结论且无裁决层；现与市况共用同一取数链路、同一公式、同一阈值。
+    """
+    return volume_dry.shanghai_volume_ratio()
 
 
 def margin_data():
@@ -286,13 +277,13 @@ def check_sentries():
     # 哨① 地量
     v = volume_ratio()
     if v:
-        if v["ratio"] < TH_VOLRATIO:
-            st, note = "✅地量达成", f"量能比{v['ratio']} < {TH_VOLRATIO}，卖压枯竭信号"
+        if volume_dry.is_dry(v["ratio"]):
+            st, note = "✅地量达成", f"量能比{v['ratio']} < {volume_dry.DRY_LABEL}，卖压枯竭信号"
         elif v["ratio"] < 0.40:
-            st, note = "接近", f"量能比{v['ratio']}（线{TH_VOLRATIO}），趋近地量"
+            st, note = "接近", f"量能比{v['ratio']}（线{volume_dry.DRY_LABEL}），趋近地量"
         else:
-            st, note = "未到", f"量能比{v['ratio']}（线{TH_VOLRATIO}）"
-        sigs.append(("vol_dry", "哨①量能地量(<0.33)", st, note, v["date"]))
+            st, note = "未到", f"量能比{v['ratio']}（线{volume_dry.DRY_LABEL}）"
+        sigs.append(("vol_dry", f"哨①量能地量(<{volume_dry.DRY_LABEL})", st, note, v["date"]))
     else:
         sigs.append(("vol_dry", "哨①量能地量", "数据缺失", "K线拉取失败", ""))
 
