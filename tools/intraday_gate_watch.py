@@ -334,38 +334,87 @@ def _alert_reason(prior, provisional, official_state, official):
                 official_to=official[0])
 
 
+def _tidy_number(text):
+    """消除 0.8019999999999999 这类未格式化浮点噪音（统一三位小数）。"""
+    return re.sub(r'(?<!\d)(\d+\.\d{5,})',
+                  lambda m: '%.3f' % float(m.group(1)), str(text))
+
+
+def _tidy_timestamp(value):
+    """ISO 8601 → YYYY-MM-DD HH:MM:SS（去掉 T 与时区尾巴）。"""
+    s = str(value)
+    return s[:19].replace('T', ' ') if len(s) >= 19 else s
+
+
+def _reason_lines(text):
+    """把单条长原因折成多行：均线明细独立成行、恢复条件独立成行、分号处折行。"""
+    s = _tidy_number(text or '缓存未提供原因')
+    ma_detail = ''
+    m = re.search(r'（(5/10/20/30/60日线：[^）]+)）', s)
+    if m:
+        detail = m.group(1)
+        if '日线：' in detail:
+            label, values = detail.split('日线：', 1)
+            ma_detail = label + ' 日线：' + values.replace('/', ' / ')
+        else:
+            ma_detail = detail.replace('日线：', ' 日线：')
+        s = s[:m.start()] + s[m.end():]
+    s = s.replace('。等收盘先站回', '\n恢复条件：收盘先站回')
+    parts = [p.strip() for p in s.replace('；', '\n').split('\n') if p.strip()]
+    if ma_detail:
+        # 均线数值明细紧跟在「低于均线」那句之后，恢复条件之前
+        pos = next((i for i, p in enumerate(parts) if p.startswith('恢复条件：')), len(parts))
+        parts.insert(pos, ma_detail)
+    return parts
+
+
 def _render(alerts):
     if not alerts:
         return ''
     lines = [HEADER]
     for result in alerts:
         identity = f"{result['code']} {result['name']}"
+        lines.append('')
         if result['status'] == 'error':
             lines.append(f"⚠️取数/状态未验证 {identity}：{result['message']}（{result['kind']}）")
-        else:
-            official, provisional, quote = result['official'], result['provisional'], result['quote']
-            lines.extend([
-                f"{identity} 现价 {quote['last']:.3f}｜行情时间 {quote['timestamp']}",
-                f"正式 {LEVEL_LABELS[official['level']]}（{official['asof']}）"
-                f" ｜ 盘中预估（均线/DMI口径） {LEVEL_LABELS[provisional['level']]}",
-                f"ADX={result['adx']:.2f} / +DI={result['pdi']:.2f} / -DI={result['mdi']:.2f}",
-                '正式原因：' + str(official.get('reason') or '缓存未提供原因'),
-                '盘中预估原因：' + provisional['reason'],
-            ])
-            change = result.get('change')
-            if change:
-                if change['kind'] == 'first':
-                    lines.append('本次变化：本交易日首拍，正式门控与盘中预估的拦买结论不一致')
-                else:
-                    tail = ('；正式门控由 %s → %s' % (
-                        LEVEL_LABELS.get(change['official_from'], '**🟡 门控待确认**'),
-                        LEVEL_LABELS[change['official_to']])
-                        if change['official_changed'] else '（正式门控未变）')
-                    lines.append('本次变化：盘中预估 由 %s → %s%s' % (
-                        LEVEL_LABELS.get(change['from'], '**🟡 门控待确认**'),
-                        LEVEL_LABELS[change['to']], tail))
+            continue
+        official, provisional, quote = result['official'], result['provisional'], result['quote']
+        lines.append(f"### {identity}")
+        lines.append('')
+        lines.append(f"正式 {LEVEL_LABELS[official['level']]}（{official['asof']}）"
+                     f" ｜ 盘中预估（均线/DMI口径） {LEVEL_LABELS[provisional['level']]}")
+        lines.append('')
+        lines.extend([
+            '| 项 | 读数 |',
+            '| --- | --- |',
+            f"| 现价 | {quote['last']:.3f} |",
+            f"| 行情时间 | {_tidy_timestamp(quote['timestamp'])} |",
+            f"| ADX | {result['adx']:.2f} |",
+            f"| +DI | {result['pdi']:.2f} |",
+            f"| -DI | {result['mdi']:.2f} |",
+        ])
+        lines.append('')
+        for label, reason in (('正式原因：', official.get('reason')),
+                              ('盘中预估原因：', provisional['reason'])):
+            parts = _reason_lines(reason)
+            lines.append(label + parts[0])
+            lines.extend('　　' + p for p in parts[1:])
+        change = result.get('change')
+        if change:
+            lines.append('')
+            if change['kind'] == 'first':
+                lines.append('本次变化：本交易日首拍，正式门控与盘中预估的拦买结论不一致')
+            else:
+                tail = ('；正式门控由 %s → %s' % (
+                    LEVEL_LABELS.get(change['official_from'], '**🟡 门控待确认**'),
+                    LEVEL_LABELS[change['official_to']])
+                    if change['official_changed'] else '（正式门控未变）')
+                lines.append('本次变化：盘中预估 由 %s → %s%s' % (
+                    LEVEL_LABELS.get(change['from'], '**🟡 门控待确认**'),
+                    LEVEL_LABELS[change['to']], tail))
         if result.get('buy_paused'):
             lines.append('⚠️用户暂停买入 buy_paused=true 独立生效；本观察仅描述市场预估，不改变用户开关。')
+    lines.append('')
     return '\n'.join(lines + [FOOTER])
 
 

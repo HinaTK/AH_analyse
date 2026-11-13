@@ -153,8 +153,33 @@ def fetch_daily_regime(code):
     except Exception:
         pass  # ADX 失败：bars 照带，五线判定不受影响
     return dict(adx=adx, pdi=pdi, mdi=mdi, bars=frame)
-WARNING = ('条件建议，非可直接执行委托：sz159992 处于迁移退出模式（停买、停接回、只卖不买），'
-           '00:01 已同步可卖份额；账户现金、银河冻结及在途委托未对账，不自动下单，触价不等于成交。')
+WARNING = ('条件建议，非可直接执行委托：00:01 已同步可卖份额；'
+           '账户现金、银河冻结及在途委托未对账，不自动下单，触价不等于成交。')
+MIGRATION_NOTE = '{code} 处于迁移退出模式（停买、停接回、只卖不买），不生成买卖建议。'
+
+
+def warning_for(codes=(), holdings=None):
+    """按本次输出实际涉及的标的生成免责说明（2026-11-13 Master 指出）。
+
+    通用免责对所有输出恒定；迁移退出说明只对本次输出里确实出现的标的显示。
+    修复前全局 WARNING 硬编码 159992，导致只讲 589720 的盘中触价推送也带上它。
+    """
+    lines = [WARNING]
+    seen = set()
+    for code in codes:
+        if code in seen:
+            continue
+        seen.add(code)
+        if not H.is_active(code, holdings):
+            lines.append(MIGRATION_NOTE.format(code=code))
+    return '\n'.join(lines)
+
+
+def warning_for_text(text, holdings=None):
+    """从推送正文里出现的标的代码反推本次输出范围（盘中触价推送用）。"""
+    import re
+    codes = sorted({m.group(0) for m in re.finditer(r'\b(?:sh|sz)\d{6}\b', text)})
+    return warning_for(codes, holdings)
 DAILY_BAR_SOURCES = (
     'https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param={code},day,,,80,qfq',
     'https://ifzq.gtimg.cn/appstock/app/fqkline/get?param={code},day,,,80,qfq',
@@ -494,7 +519,8 @@ def plan(root, regime_gate=None, spot=None, gate_lifted=None):
                 qty = int(budgets[code] / (D(px) * 100)) * 100
                 if qty:
                     actions.append(dict(code=code, side='buy', price=px, qty=qty, lot=chr(65 + depth)))
-    ticket = dict(actions=actions, executable=False, cash=None, warning=WARNING, states=states, names=names)
+    ticket = dict(actions=actions, executable=False, cash=None,
+                  warning=warning_for(list(states), holdings), states=states, names=names)
     if regime_gate is not None:
         ticket['regime_blocks'] = regime_blocks
     if core_protected:
@@ -728,7 +754,7 @@ def intraday_main():
         message = monitor(ticket, quotes, state, now.date().isoformat())
         save(path, state)
     if message:
-        print(WARNING + '\n' + message)
+        print(warning_for_text(message) + '\n' + message)
 
 
 def confirm_main(argv=None):
@@ -791,7 +817,7 @@ def eod_report(root, now, quotes, bars):
         summary = summarize_account(root)
     except (OSError, ValueError):
         summary = None  # 汇总失败不阻断收盘报告，渲染层会标注
-    return dict(asof=now.date().isoformat(), policy_version='confirmed-grid-1.5-v1', executable=False, cash=None, warning=WARNING, decisions=decisions, actions=ticket['actions'], summary=summary, state_hashes={code:hashlib.sha256(json.dumps(state,sort_keys=True,ensure_ascii=False).encode()).hexdigest() for code,state in ticket['states'].items()}, names=ticket.get('names'), source='腾讯日线和收盘快照交叉核验；仅已确认ETF状态')
+    return dict(asof=now.date().isoformat(), policy_version='confirmed-grid-1.5-v1', executable=False, cash=None, warning=warning_for(list(decisions)), decisions=decisions, actions=ticket['actions'], summary=summary, state_hashes={code:hashlib.sha256(json.dumps(state,sort_keys=True,ensure_ascii=False).encode()).hexdigest() for code,state in ticket['states'].items()}, names=ticket.get('names'), source='腾讯日线和收盘快照交叉核验；仅已确认ETF状态')
 
 
 def render_eod(report):
@@ -911,7 +937,8 @@ def safe_entrypoint(function, *args):
 
 
 def render(ticket):
-    lines = ['【统一已确认ETF网格 1.5%】', WARNING]
+    warning = ticket.get('warning') or warning_for(list(ticket.get('states') or {}))
+    lines = ['【统一已确认ETF网格 1.5%】', warning]
     names = ticket.get('names') or {}
     for code, state in ticket['states'].items():
         tag = '（迁移退出：只读，不生成买卖建议）' if not H.is_active(code) else ''
