@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
-"""TDD：512980 传媒ETF 按 Master 2026-11-09 指示「先不开，去掉」从持仓枚举移除。
+"""TDD：512980 传媒ETF 按 Master 2026-11-09 指示「先不开，去掉」从持仓枚举移除，
+2026-11-16 进一步指示「去掉」→ 空账本归档出活跃路径（可恢复）。
 
-「去掉」= 不再枚举、不再生成任何买卖建议；「先不开」= 可逆，
-故保留空账本 confirmed-512980.json 与 holdings.json 备份，不物理删除。
+「去掉」= 不再枚举、不再生成任何买卖建议；2026-11-16 起空账本也不在活跃路径，
+归档到 grid-account/backups/ 保留（可恢复），活跃路径不再含 confirmed-512980.json。
 
 验证范围：
   1. 副本链 holdings.json 不再含该标的
   2. 运行时 plan() 不再为它生成动作、也不再载入它的账本
-  3. 空账本文件仍在（可恢复）
+  3. 空账本不在活跃路径，backups/ 中保留且可恢复（qty=0、无成交）
   4. 两链配置都不含该标的（既有字节一致契约 + 00:01 配置一致性守卫的配套）
 """
 import json
@@ -20,7 +21,9 @@ REPO = Path(r'D:\Code\AH_analyse')
 sys.path.insert(0, str(REPO))
 
 CODE = 'sh512980'
-DSH = REPO / '.cache' / 'grid-home' / 'cache' / 'grid-account' / 'holdings.json'
+GRID_ACCOUNT = REPO / '.cache' / 'grid-home' / 'cache' / 'grid-account'
+DSH = GRID_ACCOUNT / 'holdings.json'
+BACKUPS = GRID_ACCOUNT / 'backups'
 PROD = Path(r'D:\Hermes Agent CN Desktop\data\hermes-home\cache\grid-account\holdings.json')
 
 
@@ -36,13 +39,16 @@ class Remove512980Tests(unittest.TestCase):
         """两链配置必须一致，否则 00:01 配置一致性守卫会告警、Hermes 仍推首格买入。"""
         self.assertNotIn(CODE, _holdings(PROD), '生产链持仓枚举仍含 512980')
 
-    def test_empty_ledger_preserved_for_restore(self):
-        """先不开＝可逆：空账本文件必须保留，日后要开可直接恢复枚举。"""
-        p = DSH.parent / 'confirmed-512980.json'
-        self.assertTrue(p.is_file(), '空账本被误删，无法恢复')
-        st = json.loads(p.read_text(encoding='utf-8'))
-        self.assertEqual(int(st.get('qty') or 0), 0, '空账本不该有持仓')
-        self.assertEqual(len(st.get('trades') or []), 0, '空账本不该有成交')
+    def test_empty_ledger_archived_out_of_active_path(self):
+        """2026-11-16 Master 指示「去掉」：空账本不得再在活跃路径；
+        归档到 backups/ 保留（可恢复），内容仍必须是无成交的空账本。"""
+        active = GRID_ACCOUNT / 'confirmed-512980.json'
+        self.assertFalse(active.is_file(), '空账本仍在活跃路径，未按指示去掉')
+        archived = sorted(BACKUPS.glob('confirmed-512980*.json'))
+        self.assertTrue(archived, 'backups/ 中没有 512980 空账本归档，无法恢复')
+        st = json.loads(archived[-1].read_text(encoding='utf-8'))
+        self.assertEqual(int(st.get('qty') or 0), 0, '归档账本不该有持仓')
+        self.assertEqual(len(st.get('trades') or []), 0, '归档账本不该有成交')
 
     def test_plan_does_not_load_unregistered_ledger(self):
         """临时根：账本文件还在但 holdings 不枚举 → plan 不得载入、不得出动作。"""

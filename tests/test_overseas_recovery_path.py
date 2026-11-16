@@ -114,6 +114,7 @@ class TestDataBasisDowngrade(Fixture):
 
     def test_nasdaq_intraday_buy_silenced(self):
         self.otm.RULES = dict(self.otm.RULES)
+        self.otm._clock_hhmm = lambda: '1030'  # 盘中时段（与墙钟解耦）
         self.otm._nav_series = lambda code, n=250: [('2026-11-06', 2.0)]
         self.otm._spot = lambda sym: 2.01  # +0.5%，低于启动线
         fires, data = self.otm.check_nasdaq()

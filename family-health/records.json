@@ -1,0 +1,62 @@
+{
+  "children": {
+    "暖暖": {
+      "全名": "黎初语",
+      "备注": "大女儿，三岁多，此前医生诊断贫血（缺铁性贫血），待复查血常规/铁蛋白，医生询问是否有蚕豆病（G6PD缺乏症）史，未查到记录"
+    },
+    "安安": {
+      "全名": "",
+      "出生日期": "2026-05-23",
+      "备注": "二女儿，2026年5月23日出生"
+    }
+  },
+  "illness_records": [
+    {
+      "id": 1,
+      "child": "暖暖",
+      "start_date": "2026-11-14",
+      "symptoms": "咳嗽，夜间咳痰，影响睡眠",
+      "temperature_c": null,
+      "temperature_note": "未发烧；已上幼儿园，每天由老师测量体温",
+      "medications": [
+        {"name": "百蕊颗粒", "start_date": "2026-11-15"},
+        {"name": "消积止咳口服液", "start_date": "2026-11-15"}
+      ],
+      "medical_visit": {
+        "visited": true,
+        "date": "2026-11-15",
+        "diagnosis": "",
+        "notes": "医生开方百蕊颗粒、消积止咳口服液"
+      },
+      "progress": [
+        {"date": "2026-11-16", "note": "服药第二天，仍有咳嗽"}
+      ],
+      "status": "治疗中",
+      "recovered_date": null
+    },
+    {
+      "id": 2,
+      "child": "安安",
+      "start_date": "2026-10-31",
+      "start_date_note": "推算：11-14日告知已咳嗽两周",
+      "symptoms": "咳嗽已持续两周，早上明显，其他时段很少咳",
+      "temperature_c": null,
+      "temperature_note": "",
+      "medications": [
+        {"name": "百蕊颗粒", "start_date": "2026-11-14"},
+        {"name": "盐酸克林霉素（棕榈酸酯）颗粒", "start_date": "2026-11-14", "类别": "抗生素"}
+      ],
+      "medical_visit": {
+        "visited": true,
+        "date": "2026-11-14",
+        "diagnosis": "",
+        "notes": "医生开方百蕊颗粒 + 盐酸克林霉素（棕榈酸酯）颗粒（抗生素）"
+      },
+      "progress": [
+        {"date": "2026-11-16", "note": "服药第三天，用药已核实为百蕊颗粒+抗生素组合"}
+      ],
+      "status": "治疗中",
+      "recovered_date": null
+    }
+  ]
+}
