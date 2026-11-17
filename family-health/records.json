@@ -44,16 +44,43 @@
       "temperature_note": "",
       "medications": [
         {"name": "百蕊颗粒", "start_date": "2026-11-14"},
-        {"name": "盐酸克林霉素（棕榈酸酯）颗粒", "start_date": "2026-11-14", "类别": "抗生素"}
+        {"name": "盐酸克林霉素分散片", "brand": "凯莱克林", "specification": "75毫克/片，18片/盒", "start_date": "2026-11-14", "类别": "抗生素", "label_directions": "口服，每日两次，每次半片", "verification_note": "2026-11-17据家长上传药盒照片及更正要求核实药名、剂型、规格；用法为药房标签转录，不代表已核实婴儿适宜剂量；实际服法、体重、疗程待确认", "previous_record_correction": "此前口述记录为盐酸克林霉素（棕榈酸酯）颗粒，已由药盒照片更正"}
       ],
       "medical_visit": {
         "visited": true,
         "date": "2026-11-14",
         "diagnosis": "",
-        "notes": "医生开方百蕊颗粒 + 盐酸克林霉素（棕榈酸酯）颗粒（抗生素）"
+        "notes": "家长报告医生开药；2026-11-17药盒照片核实为百蕊颗粒 + 盐酸克林霉素分散片（凯莱克林，75毫克/片），此前颗粒剂记录有误。具体诊断未提供"
       },
+      "follow_up_visits": [
+        {
+          "date": "2026-11-17",
+          "hospital": "广州市妇女儿童医疗中心（珠）",
+          "source": "家长上传两页门诊病历照片",
+          "diagnoses": ["急性支气管炎", "急性鼻咽炎（感冒）"],
+          "chief_complaint": "咳嗽1月余",
+          "duration_note": "病历记载咳嗽1月余，与此前家长口述两周不同；保留两个来源，不据此改写精确起病日",
+          "weight_kg": 6.5,
+          "temperature_c": 36.5,
+          "findings": "病历记载痰少、鼻塞、无流涕、无发热、无呕吐，精神可、胃纳可、大小便正常；呼吸平顺，RR28次/分，双肺呼吸音粗，未及啰音，HR100次/分",
+          "g6pd_note": "病历写否认G6PD缺乏症史，仅为问诊记录，不代表已完成检测或排除",
+          "ordered_test": "支原体培养及药敏（肺炎）；未提供检测结果",
+          "prescriptions_transcribed": [
+            {"name": "氨溴特罗口服液", "brand": "易坦静", "dose": "2.5毫升", "route": "口服", "frequency": "每隔12小时1次", "duration_days": 4},
+            {"name": "盐酸西替利嗪口服溶液", "concentration": "10毫升:10毫克", "dose": "2.5毫升", "route": "口服", "frequency": "每日1次", "duration_days": 4},
+            {"name": "吸入用布地奈德混悬液", "concentration": "2毫升:1毫克", "dose": "1毫克", "route": "雾化", "frequency": "每日1次", "duration_days": 4},
+            {"name": "0.9%氯化钠注射液", "dose": "2毫升", "route": "雾化", "frequency": "每日1次", "duration_days": 4},
+            {"name": "吸入用异丙托溴铵溶液", "concentration": "2毫升:0.5毫克", "dose": "1毫升", "route": "雾化", "frequency": "每日1次", "duration_days": 4},
+            {"name": "头孢克洛干混悬剂", "brand": "希刻劳", "specification": "0.125克/袋", "dose": "0.0625克", "route": "口服", "frequency": "每日3次", "duration_days": 4}
+          ],
+          "medication_note": "以上仅转录照片处方，尚未确认新药实际开始服用时间；2026-11-17家长确认旧药百蕊颗粒及盐酸克林霉素分散片不再服用，停止具体时点未提供；婴儿月龄适用及剂量需医生或药师核对",
+          "old_medications_status": "家长确认不再服用百蕊颗粒、盐酸克林霉素分散片",
+          "test_result_status": "待家长提供检查结果后补录，不推定结果"
+        }
+      ],
       "progress": [
-        {"date": "2026-11-16", "note": "服药第三天，用药已核实为百蕊颗粒+抗生素组合"}
+        {"date": "2026-11-16", "note": "服药第三天，用药已核实为百蕊颗粒+抗生素组合"},
+        {"date": "2026-11-17", "note": "提供当日复诊病历，诊断急性支气管炎、急性鼻咽炎；新增处方单独记录，未视为实际已服药"}
       ],
       "status": "治疗中",
       "recovered_date": null

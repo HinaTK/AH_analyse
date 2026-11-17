@@ -146,8 +146,10 @@ class ObserverTests(unittest.TestCase):
             (NOW - timedelta(seconds=181), NOW, 'quote_stale'),
             (NOW + timedelta(seconds=1), NOW, 'quote_future'),
             (NOW - timedelta(days=1), NOW, 'quote_wrong_day'),
-            (NOW.replace(hour=12, minute=59), NOW.replace(hour=13, minute=0), 'quote_session'),
-            (NOW.replace(hour=9, minute=30), NOW.replace(hour=9, minute=31), 'quote_session'),
+            # 开盘宽限期内的边界滞后已改为静默（见 test_gate_watch_opening_grace.py）；
+            # 这里保留「宽限期外的跨时段旧快照仍按 quote_session 拒绝」的覆盖。
+            (NOW.replace(hour=12, minute=59, second=30), NOW.replace(hour=13, minute=2), 'quote_session'),
+            (NOW.replace(hour=9, minute=30, second=30), NOW.replace(hour=9, minute=33, second=10), 'quote_session'),
         ]:
             with self.subTest(stamp=stamp):
                 self.quote['timestamp'] = stamp.isoformat()

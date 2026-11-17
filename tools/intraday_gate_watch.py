@@ -64,6 +64,23 @@ def _same_session(start, current):
     return current.date() == start.date() and _session_part(current) == _session_part(start)
 
 
+# 连续交易时段的开盘时刻（分钟数），新时段开始后行情源可能仍报上一时段/午休尾盘时间戳。
+SESSION_STARTS = (9 * 60 + 31, 13 * 60)
+OPENING_GRACE_SECONDS = 120
+
+
+def _in_opening_grace(stamp):
+    """当前时刻是否落在某个连续交易时段开盘后的宽限窗口内。
+
+    2026-11-17 修：13:00 定时任务首拍时腾讯快照时间戳常仍为 12:59
+    （_session_part=None），与 afternoon 不等，旧逻辑按 quote_session 推
+    「取数/状态未验证」，每个交易日固定一条噪音。宽限窗口内静默跳过。
+    """
+    seconds = (stamp.hour * 60 + stamp.minute) * 60 + stamp.second
+    return any(0 <= seconds - start * 60 < OPENING_GRACE_SECONDS
+               for start in SESSION_STARTS)
+
+
 def previous_session(day):
     previous = day - timedelta(days=1)
     while not is_session(previous):
@@ -146,6 +163,9 @@ def _validated_quote(quote, now):
     if age > 180:
         raise WatchError('quote_stale', f'行情已过期（{age:.0f}秒）')
     if _session_part(stamp) != _session_part(now):
+        if _in_opening_grace(now) and stamp <= now:
+            raise WatchError('quote_opening_lag',
+                             '新交易时段开盘首拍，行情尚未刷新到当前连续交易时段')
         raise WatchError('quote_session', '行情不是当前连续交易时段快照')
     return dict(values, prev=prev, timestamp=stamp.isoformat())
 
@@ -304,6 +324,10 @@ def evaluate(root=None, *, now=None, history_fn=None, quote_fn=None):
                 adx=adx, pdi=pdi, mdi=mdi, completed_bars=completed,
                 checked_at=checked_at.isoformat(), buy_paused=paused)
         except WatchError as exc:
+            if exc.kind == 'quote_opening_lag':
+                # 开盘宽限期内的正常行情滞后：整拍静默，不写观察器状态、不推送。
+                report.update(status='closed', results={})
+                return report
             report['results'][code] = _error(code, name, exc.kind, exc, paused)
     return report
 
