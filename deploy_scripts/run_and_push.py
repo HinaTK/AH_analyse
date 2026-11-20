@@ -63,6 +63,10 @@ MAX_PUSH_CHARS = 8000
 # （路由未变，仅 id 改名），脚本同步改成新 id。
 IM_BOT_ID = 'bot_33dda378bac343d695e4e63180c53d11'
 IM_TARGET_ID = 'tgt_0697a00b9868ffbd'
+# 2026-11-20 Master 拍板：定时推送统一用 DSH-IM 卡片（白底样式，图2），_push 优先级倒转。
+# 客户端等待须长于插件转发飞书的 15 秒（feishu-runtime.mjs DEFAULT_REQUEST_TIMEOUT_MS），
+# 否则超时误判后落到下一通道重发，造成同一内容两条（同 reminders 链 11-20 事故）。
+IM_REQUEST_TIMEOUT = 20
 
 # 任务注册表：id -> 显示名 / 脚本 / 工作目录 / 是否推送
 # 迁移任务对应 Hermes 的脚本任务（gateway_keeper 属 Hermes 自身守护，不迁移）。
@@ -274,7 +278,7 @@ def _push_im(text: str) -> bool:
             method='POST',
         )
         try:
-            with urllib.request.urlopen(request, timeout=15) as response:
+            with urllib.request.urlopen(request, timeout=IM_REQUEST_TIMEOUT) as response:
                 raw = response.read().decode('utf-8', 'replace')
         except urllib.error.HTTPError as exc:
             raw = exc.read().decode('utf-8', 'replace') if exc.fp else ''
@@ -341,10 +345,10 @@ def _push_feishu_post(text: str) -> bool:
 
 
 def _push(text: str) -> bool:
-    """优先 Hermes 同款 post 富文本，失败再走 DSH-IM 卡片，最后 webhook。"""
-    if _push_feishu_post(text):
-        return True
+    """2026-11-20 Master 拍板：优先 DSH-IM 卡片（白底样式），失败再退 post 富文本、webhook。"""
     if _push_im(text):
+        return True
+    if _push_feishu_post(text):
         return True
     return _push_webhook(text)
 

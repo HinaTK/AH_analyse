@@ -10,6 +10,53 @@
       "备注": "二女儿，2026年5月23日出生"
     }
   },
+  "child_health_visits": [
+    {
+      "child": "安安",
+      "date": "2026-11-19",
+      "hospital": "广州市妇女儿童医疗中心（珠江新城院区）",
+      "department": "儿童早期发展门诊",
+      "doctor": "叶青青",
+      "reported_age": "5月26天（儿保报告原载）",
+      "source": "家长上传的儿童早期发展指导报告单（含生长曲线）、导诊单和检验报告单照片",
+      "measurements": {
+        "weight_kg": 6.7,
+        "length_cm": 61,
+        "head_circumference_cm": 43,
+        "anterior_fontanelle": "未闭，2×2厘米",
+        "report_assessment": {"体重/年龄": "中下", "身高/年龄": "下", "头围/年龄": "中+", "体重/身高": "中+", "体重生长速度": "正常", "身高生长速度": "加速"}
+      },
+      "history_as_reported": {
+        "feeding": "报告记载纯母乳喂养，近2个月吃奶少，80–90毫升/次；未提供全天奶量",
+        "stool": "现病史写大便稀；健康情况栏写大便正常、糊状，按原单分别保留",
+        "prior_hemoglobin_g_per_l": 106,
+        "hemoglobin_note": "报告引用外院既往血红蛋白，并非本次化验结果，原检测日期未提供",
+        "vitamin_ad": "病史记录维生素AD每日1粒"
+      },
+      "doctor_documented_diagnosis": "生长发育迟缓（儿保报告原载，报告注明为初步检查）",
+      "nutrition_assessment": "生长迟缓",
+      "doctor_advice": "补充铁剂；查大便常规、潜血及乳糖不耐受；下个月复诊。铁剂用量和实际开始日期未确认",
+      "prescriptions_from_medication_photo": [
+        {"name": "右旋糖酐铁口服溶液", "dose_status": "照片未见可辨认的个体用药标签，用量、频次待确认"},
+        {"name": "小儿碳酸钙D3颗粒", "label_directions": "口服，一日1次，每次0.375克（半袋）；每袋0.75克，指颗粒重量"},
+        {"name": "赖氨葡锌颗粒（无糖）", "label_directions": "口服，一日1次，每次半袋"},
+        {"name": "双歧杆菌四联活菌片", "dose_status": "药盒在画面边缘，个体用药标签未见，用量、频次待确认"}
+      ],
+      "medication_photo_note": "2026-11-20家长提供药盒照片并说明为本次儿保医生所开；处方标签转录不代表已服用，开始日期、疗程未提供。" ,
+      "medications_reported_by_parent": [
+        {"name_as_reported": "康丽赋", "directions_as_reported": "每次喝奶时给8滴", "purpose_as_reported": "针对乳糖不耐受问题", "note": "家长转述医生医嘱；产品全名、成分、具体喂法、实际开始日期及疗程未核实"}
+      ],
+      "next_routine_checkup_date": "2027-01-25",
+      "follow_up_note": "医师意见另写下个月复诊（2026年12月，具体日期未注明）；2027-01-25是报告的下次体检日期，尚未确认预约",
+      "stool_lab": {
+        "sample_collected_at": "2026-11-19T15:10:00+08:00",
+        "received_at": "2026-11-20T11:31:00+08:00",
+        "reported_at": "2026-11-20T11:54:00+08:00",
+        "results_transcribed": {"颜色": "黄色", "性状": "糊状", "黏液": "少许", "红细胞": "阴性", "白细胞": "+", "脂肪球": "阴性", "寄生虫卵": "未发现", "真菌": "阴性", "隐血试验": "阴性", "粪便乳糖不耐受测定": "弱阳（±）"},
+        "note": "粪便乳糖不耐受测定弱阳为检验结果，不单独登记为确诊；与11月17日呼吸道就诊开具的支原体培养及药敏不是同一个检查"
+      }
+    }
+  ],
   "illness_records": [
     {
       "id": 1,
@@ -49,7 +96,10 @@
       "medical_visit": {
         "visited": true,
         "date": "2026-11-14",
+        "hospital": "暨南大学附属医院东圃院区（家长提供名称）",
+        "future_visit_preference": "家长表示安安下次就诊不考虑该院区。",
         "diagnosis": "",
+        "treatment_response_reported_by_parent": "2026-11-20家长反馈：此次使用百蕊颗粒和盐酸克林霉素分散片后，咳嗽改善不明显。",
         "notes": "家长报告医生开药；2026-11-17药盒照片核实为百蕊颗粒 + 盐酸克林霉素分散片（凯莱克林，75毫克/片），此前颗粒剂记录有误。具体诊断未提供"
       },
       "follow_up_visits": [
@@ -64,7 +114,7 @@
           "temperature_c": 36.5,
           "findings": "病历记载痰少、鼻塞、无流涕、无发热、无呕吐，精神可、胃纳可、大小便正常；呼吸平顺，RR28次/分，双肺呼吸音粗，未及啰音，HR100次/分",
           "g6pd_note": "病历写否认G6PD缺乏症史，仅为问诊记录，不代表已完成检测或排除",
-          "ordered_test": "支原体培养及药敏（肺炎）；未提供检测结果",
+          "ordered_test": "支原体培养及药敏（肺炎）",
           "prescriptions_transcribed": [
             {"name": "氨溴特罗口服液", "brand": "易坦静", "dose": "2.5毫升", "route": "口服", "frequency": "每隔12小时1次", "duration_days": 4},
             {"name": "盐酸西替利嗪口服溶液", "concentration": "10毫升:10毫克", "dose": "2.5毫升", "route": "口服", "frequency": "每日1次", "duration_days": 4},
@@ -75,14 +125,16 @@
           ],
           "medication_note": "以上仅转录照片处方，尚未确认新药实际开始服用时间；2026-11-17家长确认旧药百蕊颗粒及盐酸克林霉素分散片不再服用，停止具体时点未提供；婴儿月龄适用及剂量需医生或药师核对",
           "old_medications_status": "家长确认不再服用百蕊颗粒、盐酸克林霉素分散片",
-          "test_result_status": "待家长提供检查结果后补录，不推定结果"
+          "test_result_status": "家长反馈检查结果已出，未见原始报告",
+          "test_result_reported_by_parent": "家长反馈：没有肺炎；支原体培养及药敏的具体结果未核实，不记为阴性"
         }
       ],
       "progress": [
         {"date": "2026-11-16", "note": "服药第三天，用药已核实为百蕊颗粒+抗生素组合"},
-        {"date": "2026-11-17", "note": "提供当日复诊病历，诊断急性支气管炎、急性鼻咽炎；新增处方单独记录，未视为实际已服药"}
+        {"date": "2026-11-17", "note": "提供当日复诊病历，诊断急性支气管炎、急性鼻咽炎；新增处方单独记录，未视为实际已服药"},
+        {"date": "2026-11-20", "note": "家长反馈上次咳嗽已好得差不多；未确认完全恢复日期"}
       ],
-      "status": "治疗中",
+      "status": "咳嗽明显好转（家长反馈）",
       "recovered_date": null
     }
   ]

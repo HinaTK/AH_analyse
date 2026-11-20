@@ -63,7 +63,11 @@ class FeishuPostTests(unittest.TestCase):
         self.assertIn('| A | B |', inner['zh_cn']['content'][0][0]['text'])
         self.assertNotIn('s3cr3t-value', json.dumps(sent))
 
-    def test_run_and_push_prefers_post_and_falls_back_safely(self):
+    def test_run_and_push_prefers_im_card_and_falls_back_safely(self):
+        """2026-11-20 Master 拍板：定时推送统一用 DSH-IM 卡片（白底样式）。
+
+        顺序改为 im → post（灰底富文本，降级通道）→ webhook。
+        """
         wrapper = Path(__file__).resolve().parent.parent / 'deploy_scripts' / 'run_and_push.py'
         spec = importlib.util.spec_from_file_location('run_and_push_under_test', wrapper)
         push = importlib.util.module_from_spec(spec)
@@ -73,11 +77,25 @@ class FeishuPostTests(unittest.TestCase):
         push._push_im = lambda text: seen.append('im') or True
         push._push_webhook = lambda text: seen.append('webhook') or True
         self.assertTrue(push._push('正文'))
-        self.assertEqual(seen, ['post'])
+        self.assertEqual(seen, ['im'])
+        seen.clear()
+        push._push_im = lambda text: seen.append('im') or False
+        self.assertTrue(push._push('正文'))
+        self.assertEqual(seen, ['im', 'post'])
         seen.clear()
         push._push_feishu_post = lambda text: seen.append('post') or False
         self.assertTrue(push._push('正文'))
-        self.assertEqual(seen, ['post', 'im'])
+        self.assertEqual(seen, ['im', 'post', 'webhook'])
+
+    def test_im_request_timeout_exceeds_plugin_feishu_wait(self):
+        """客户端等待须长于插件转发飞书的 15 秒，否则超时误判后会换通道重发造成两条。"""
+        wrapper = Path(__file__).resolve().parent.parent / 'deploy_scripts' / 'run_and_push.py'
+        spec = importlib.util.spec_from_file_location('run_and_push_under_test', wrapper)
+        push = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(push)
+        self.assertIsInstance(push.IM_REQUEST_TIMEOUT, int)
+        self.assertGreater(push.IM_REQUEST_TIMEOUT, 15)
+
 
     def _write(self, name, value):
         import tempfile
