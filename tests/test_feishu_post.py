@@ -31,7 +31,11 @@ class FeishuPostTests(unittest.TestCase):
         self.assertEqual([row[0]['tag'] for row in rows], ['md', 'md', 'md'])
         self.assertEqual(rows[1][0]['text'], '```text\n代码块\n```')
 
-    def test_send_post_uses_post_message_type_and_md_content(self):
+    def test_send_post_uses_interactive_card_and_markdown(self):
+        """2026-11-23 Master 再次收到灰底 post：IM 卡片超时后回退到 post 通道。
+
+        回退通道也必须发白底卡片（schema 2.0 + markdown），否则样式会打回原形。
+        """
         calls = []
 
         def opener(request, timeout=0):
@@ -55,12 +59,13 @@ class FeishuPostTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(len(calls), 2)
         sent = json.loads(calls[1].data)
-        self.assertEqual(sent['msg_type'], 'post')
+        self.assertEqual(sent['msg_type'], 'interactive')
         self.assertEqual(sent['receive_id'], 'ou_fake')
         self.assertIn('open_id', calls[1].full_url)
-        inner = json.loads(sent['content'])
-        self.assertEqual(inner['zh_cn']['content'][0][0]['tag'], 'md')
-        self.assertIn('| A | B |', inner['zh_cn']['content'][0][0]['text'])
+        card = json.loads(sent['content'])
+        self.assertEqual(card['schema'], '2.0')
+        self.assertEqual(card['body']['elements'][0]['tag'], 'markdown')
+        self.assertIn('| A | B |', card['body']['elements'][0]['content'])
         self.assertNotIn('s3cr3t-value', json.dumps(sent))
 
     def test_run_and_push_prefers_im_card_and_falls_back_safely(self):

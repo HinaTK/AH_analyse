@@ -76,11 +76,24 @@ def _open_id(bot_id: str, target_id: str, workspaces_path: Path) -> str:
     return str(targets[target_id]['route']['openId'])
 
 
+def build_card_content(text: str) -> dict:
+    """白底卡片（schema 2.0 + 原生 markdown 元素），与 DSH-IM 主动投递同款。
+
+    2026-11-23：IM 卡片通道超时后回退到本模块，旧实现发 msg_type=post（灰底），
+    样式被打回原形。回退通道也发卡片，保证两条链视觉一致。
+    """
+    return {'schema': '2.0',
+            'body': {'elements': [{'tag': 'markdown', 'content': text or ''}]}}
+
+
 def send_post(text: str, *, bot_id: str, target_id: str, opener=None,
               config_path: Path | None = None,
               credentials_path: Path | None = None,
               workspaces_path: Path | None = None) -> bool:
-    """Send one post message; return True only when Feishu confirms a message id."""
+    """Send one interactive card (2026-11-23 改)；仅飞书确认 message_id 才返回 True。
+
+    函数名沿用 send_post 以保持调用方不变，实际发的是 interactive 卡片。
+    """
     config_path = Path(config_path or DEFAULT_CONFIG)
     credentials_path = Path(credentials_path or DEFAULT_CREDENTIALS)
     workspaces_path = Path(workspaces_path or DEFAULT_WORKSPACES)
@@ -104,8 +117,8 @@ def send_post(text: str, *, bot_id: str, target_id: str, opener=None,
 
     message_body = json.dumps({
         'receive_id': receive_id,
-        'msg_type': 'post',
-        'content': json.dumps(build_post_content(text), ensure_ascii=False),
+        'msg_type': 'interactive',
+        'content': json.dumps(build_card_content(text), ensure_ascii=False),
     }, ensure_ascii=False).encode('utf-8')
     message_request = urllib.request.Request(
         MESSAGES_URL, data=message_body,

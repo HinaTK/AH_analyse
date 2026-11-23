@@ -423,7 +423,12 @@ def main():
     for key, msg, persistent in all_fires:
         if persistent and key not in prev_active:
             messages.append(msg)
+    # 买入类信号只是观察提示，不设「解除」状态机：时段/溢价/市况/预算任一闸门
+    # 把它静默时，prev_active - now_active 会误判成触发消失并推「ℹ️ 触发已解除」噪音
+    # （2026-11-23 09:00 事故）。风控类（如 nikkei_stop）仍需解除通知。
     for key in prev_active - now_active - touch_keys:
+        if key in BUY_SIGNAL_KEYS:
+            continue
         def _fmt(v):
             return f"{v:+.1f}" if isinstance(v, (int, float)) else str(v)
         messages.append(f"ℹ️ 触发已解除：{key}（当前纳指溢价{_fmt(n_data.get('prem', '?'))}%、回撤{_fmt(n_data.get('dd', '?'))}%；日经 {k_data.get('price', '?')}）")

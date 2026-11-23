@@ -113,5 +113,43 @@ class GateAlignmentTests(unittest.TestCase):
             self.assertTrue(gates['0.159363']['blocks_buy'])
 
 
+class MigrationExitAlignmentTests(unittest.TestCase):
+    """2026-11-23 Master 发现：159992 已在迁移退出（active=false，只卖不买），
+    市况信号表却给「网格波段·5成·震荡市网格主场」——与 11-09 退出拍板冲突。
+
+    契约：迁移退出标的的动作列降级为「迁移退出·0成」，理由写明
+    「迁移退出中，只卖不买」并保留原市况读数；🔔 铃铛不得响。
+    """
+
+    def test_migration_exit_holding_downgraded(self):
+        out = mp.apply_gate_alignment(
+            [_row(secid='0.159992', label='网格波段', fraction='5成',
+                  reason='震荡市 ADX=17，网格主场')],
+            {'0.159992': {'migration_exit': True}})[0]
+        self.assertEqual(out['label'], '迁移退出')
+        self.assertEqual(out['fraction'], '0成')
+        self.assertIn('迁移退出中，只卖不买', out['reason'])
+        self.assertNotIn('网格主场', out['reason'].split('市况读数：')[0])
+        self.assertIn('震荡市', out['reason'])  # 原市况读数保留
+        self.assertTrue(out.get('gate_blocked'))
+
+    def test_migration_exit_bell_suppressed(self):
+        row = _row(secid='0.159992', trigger=True)
+        row = mp.apply_gate_alignment([row], {'0.159992': {'migration_exit': True}})[0]
+        self.assertFalse(mp.trigger_eligible(row))
+
+    def test_migration_exit_wins_over_gate_entry(self):
+        """迁移退出优先于门控条目：即使缓存里也有该标的，仍按退出降级。"""
+        out = mp.apply_gate_alignment(
+            [_row(secid='0.159992', label='网格波段', fraction='5成')],
+            {'0.159992': {'migration_exit': True}})[0]
+        self.assertEqual(out['label'], '迁移退出')
+        self.assertNotIn('禁止建仓', out['reason'])
+
+    def test_header_covers_migration_exit(self):
+        text = mp.render_header('2026-11-23')
+        self.assertIn('迁移退出', text)
+
+
 if __name__ == '__main__':
     unittest.main()

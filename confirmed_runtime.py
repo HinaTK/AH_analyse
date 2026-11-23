@@ -726,8 +726,8 @@ def ops_main(argv=None):
     ticket = plan(root_from_home(), regime_gate=gate, spot=spot or None,
                   gate_lifted=gate_lifted or None)
     if args.phase == 'grid':
-        print('【09:20 盘前网格条件建议：按已确认账本计算，不依赖实时行情】')
-        print(render(ticket))
+        print('【09:20 盘前网格条件建议 · 1.5% 网格 · 按已确认账本，不依赖实时行情】')
+        print(render_grid_brief(ticket))
         return
     quotes = fetch_quotes()
     live = quotes_are_live(quotes, now)
@@ -956,4 +956,95 @@ def render(ticket):
         direction = '买' if action['side'] == 'buy' else '卖'
         name = names.get(action['code'], '')
         lines.append(f"- ✅ {action['code']} {name} 条件{direction} {action['lot']}格 **{action['qty']:,}份** @ **{action['price']}**")
+    return '\n'.join(lines)
+
+
+def _fmt_amount(value):
+    """金额千分位 + 两位小数；取不到时原样返回（不编造）。"""
+    try:
+        return '{:,.2f}'.format(float(value))
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _compact_gate_line(block):
+    """把长篇门控理由压成一行短句；解析不到关键字段时原样返回。
+
+    只读取 block 里已有的数字（收盘价 / 5日线 / 破线计数 / ADX），
+    不改写门控级别、不改账本口径；非五线全破场景原样保留。
+    """
+    import re
+    code_match = re.match(r'^(?:sh|sz)\d{6}', block)
+    code = code_match.group(0) if code_match else ''
+    level_match = re.search(r'\*\*(.+?)\*\*', block)
+    level = level_match.group(1).strip() if level_match else ''
+    close = re.search(r'收盘(\d+\.\d+)', block)
+    ma5 = re.search(r'5日线(\d+\.\d+)', block)
+    below = re.search(r'破线计数(\d+)', block)
+    adx = re.search(r'ADX=([\d.]+)', block)
+    if level:
+        parts = level.split(' ', 1)
+        if code and len(parts) == 2:
+            head = f"**{parts[0]} {code} {parts[1]}**"
+        elif code:
+            head = f"**{level} {code}**"
+        else:
+            head = f"**{level}**"
+    else:
+        head = f"**{code} 门控拦截**" if code else '**门控拦截**'
+    # 分支一：五线全破
+    if close and ma5 and below:
+        detail = f"五线全破（收盘 {close.group(1)} / 5日线 {ma5.group(1)}）"
+        if adx:
+            detail += f" · ADX {adx.group(1)}"
+        return f"{head}：{detail}"
+    # 分支二：强动能跌势（ADX>=20 且 -DI>+DI 且收盘在 60 日线下方）
+    adx_fall = re.search(r'收盘\s*(\d+\.\d+)\s*在\s*60日线\s*(\d+\.\d+)\s*下方，强动能跌势', block)
+    if adx_fall:
+        detail = f"强动能跌势（收盘 {adx_fall.group(1)} / 60日线 {adx_fall.group(2)}）"
+        if adx:
+            detail += f" · ADX {adx.group(1)}"
+        return f"{head}：{detail}"
+    return block
+
+
+def render_grid_brief(ticket):
+    """09:20 盘前条件建议紧凑渲染（2026-11-23 Master 指出排版乱、文字多）。
+
+    只做展示层整形：持仓表格化、门控理由压缩、免责移到末尾、标题由调用方给。
+    数字、门控级别、账本口径全部取自 ticket，不重算、不改写。
+    """
+    names = ticket.get('names') or {}
+    states = ticket.get('states') or {}
+    lines = ['| 标的 | 持有 | 可卖 | 最大格 | 净投入 | 做T净 |',
+             '| --- | --- | --- | --- | --- | --- |']
+    for code, state in states.items():
+        tag = '（只读）' if not H.is_active(code) else ''
+        lines.append('| {} {}{} | {:,} | {:,} | {} | {} | {} |'.format(
+            code, names.get(code, ''), tag, state['qty'], state['sellable_qty'],
+            state['max_grid'], _fmt_amount(state['net_invested']),
+            _fmt_amount(state['t_net'])))
+    blocks = ticket.get('regime_blocks') or []
+    if blocks:
+        lines.append('')
+        lines.append('**门控**')
+        for block in blocks:
+            lines.append('- ' + _compact_gate_line(block))
+    for note in ticket.get('core_protected') or []:
+        lines.append('- 🛡️ ' + note)
+    for line in upside_guard.render_lines(ticket.get('upside_reviews')):
+        lines.append('- ' + line)
+    for r in ticket.get('reanchor') or []:
+        lines.append('- 📍 {} 门控恢复日重锚：{}格买价 {} → {}（恢复时收盘 {}，'
+                     '旧格价偏离箱体超一档；旧格卖单保持原价等解套）'.format(
+                         r['code'], r['lot'], r['old_price'], r['new_price'], r['spot']))
+    for action in ticket['actions']:
+        direction = '买' if action['side'] == 'buy' else '卖'
+        name = names.get(action['code'], '')
+        lines.append('- ✅ {} {} 条件{} {}格 **{:,}份** @ **{}**'.format(
+            action['code'], name, direction, action['lot'], action['qty'], action['price']))
+    warning = ticket.get('warning') or warning_for(list(states))
+    if warning:
+        lines.append('')
+        lines.append('⚠️ ' + warning)
     return '\n'.join(lines)

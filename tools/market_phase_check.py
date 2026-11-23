@@ -76,6 +76,9 @@ def load_gate_map(holdings_path=None, cache_path=None):
     键为汇总表使用的 secid（0.159363 / 1.589720 形式），只覆盖账本持仓标的；
     指数行不在映射里，永远不受门控影响。缓存缺失、损坏或该标的无缓存时
     返回 None（对齐层按 fail-closed 处理），不静默放行。
+
+    2026-11-23：迁移退出标的（holdings active=false）以 {'migration_exit': True}
+    进入映射——它按退出状态降级，与 regime 缓存无关。
     """
     try:
         hp = Path(holdings_path) if holdings_path else HOLDINGS_PATH
@@ -90,9 +93,12 @@ def load_gate_map(holdings_path=None, cache_path=None):
     except (OSError, ValueError, TypeError, UnboundLocalError):
         cache = None
     gates = {}
-    for code in holdings:
+    for code, meta in holdings.items():
         digits = code[-6:]
         secid = ("1." if code.startswith("sh") else "0.") + digits
+        if isinstance(meta, dict) and meta.get("active") is False:
+            gates[secid] = {"migration_exit": True}
+            continue
         # 缓存读不到 → 该标的门控状态未知 → None，对齐层按 fail-closed 降级
         entry = cache.get(code) if cache is not None else None
         gates[secid] = entry if isinstance(entry, dict) else None
@@ -114,6 +120,16 @@ def apply_gate_alignment(results, gates):
             out.append(r)
             continue
         gate = gates[secid]
+        if isinstance(gate, dict) and gate.get("migration_exit"):
+            # 2026-11-23 Master 指出：迁移退出标的（如 159992）不得给
+            # 「网格波段·5成」这类市况成数建议——与 11-09 退出拍板冲突。
+            # 降级为「迁移退出·0成」，保留原市况读数。
+            r["gate_blocked"] = True
+            r["label"] = "迁移退出"
+            r["fraction"] = "0成"
+            r["reason"] = "迁移退出中，只卖不买｜市况读数：%s" % r.get("reason", "")
+            out.append(r)
+            continue
         blocked = bool(gate and gate.get("blocks_buy"))
         unknown = not isinstance(gate, dict) or "level" not in gate
         if blocked or unknown:
@@ -425,7 +441,7 @@ def render_header(date):
         "右侧三信号 = ●地量(近5日均额<峰值1/3) + ●ADX从≥25降破25(单边动能死) + ●周线KDJ金叉K<50(底部金叉)；\n"
         "三信号齐→🔔买入信号。成数指方向仓/新开仓目标，不是清仓网格；网格挂单照常由09:20任务管。\n"
         "网格门控拦买标的（**⏸️ 暂停买入** / **⛔ 禁止建仓**）只显示「方向仓观察·0成」，"
-        "不生成买入动作；成数仅为研究标注。"
+        "不生成买入动作；迁移退出标的显示「迁移退出·0成」（只卖不买）；成数仅为研究标注。"
     )
 
 
