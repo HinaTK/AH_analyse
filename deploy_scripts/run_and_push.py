@@ -87,6 +87,7 @@ JOBS: dict[str, dict[str, object]] = {
     'watchtower_1550':{'name': '观察哨1550',        'script': f'{DEPLOY}/watchtower_wrapper.py',            'cwd': None,  'push': 'on'},
     'overseas':       {'name': '海外盘中触发',      'script': f'{DEPLOY}/overseas_trigger_monitor.py',      'cwd': None,  'push': 'on'},
     'volatility_watch':{'name': '波动扩张观察',    'script': f'{DEPLOY}/volatility_expansion_watch.py',   'cwd': None, 'push': 'on', 'timeout': 600},
+    'post_market_summary': {'name': '盘后只读参考汇总', 'script': f'{DEPLOY}/post_market_summary.py',    'cwd': None, 'push': 'on', 'timeout': 600},
     # 2026-11-06 Master 授权：工作日 16:15 只读轻量快照，先静默落盘不推送（push=off）。
     # 唯一写入 cache/grid-research/daily-snapshots/；不碰账本/周报/既有 JOBS。
     'daily_snapshot': {'name': '网格每日轻量快照',  'script': f'{DEPLOY}/grid_daily_snapshot.py',          'cwd': None, 'push': 'off', 'timeout': 600},

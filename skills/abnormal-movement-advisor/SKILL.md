@@ -47,7 +47,7 @@ Rules:
 - Perform full live research.
 - Save a Markdown report.
 - Update the ledger and stats before adding new predictions.
-- Provide full attribution, scenario analysis, ETF ideas, and stock ideas.
+- Provide full attribution, scenario analysis, and ETF/sector observation ideas; only include individual stock ideas when explicitly requested under the Boundary rules above.
 - Keep the chat response concise, but the underlying workflow is always complete.
 
 Only downgrade to a shorter answer when the user explicitly asks for `简版`, `只说结论`, `不要生成报告`, or equivalent wording.
@@ -121,8 +121,13 @@ Search-provider priority:
 1. Use `multi-search-engine` first for broad abnormal-event discovery and cross-engine verification across Chinese and global sources.
 2. Use `firecrawl-search` second for key-source time filtering, news-focused searches, and full-page extraction when snippets are not enough to build evidence cards.
 3. Use other available `google_search`, `websearch`, `webfetch`, browser, or equivalent tools as fallback when the first two routes are unavailable or incomplete.
-4. Use official and market-data sources for final confirmation. Search results can identify leads, but they do not replace exchange / regulator / company / macro official releases, ETF or index price confirmation, turnover, breadth, or fund-flow evidence.
-5. X/Twitter early radar is disabled by default. Do not call X MCP, X search tools, or browser timeline checks unless the user explicitly asks to use X/Twitter evidence. Normal search skills and official/mainstream sources remain sufficient for standard runs.
+4. Use official and local market-data sources for final confirmation. Prefer repository quote scripts (`python tools/fetch_market_snapshot.py` and `deploy_scripts/post_market_summary.py`'s `fetch_global_snapshot()` / `tools/market_phase_check.py`) alongside exchange / regulator / company / macro official releases to verify prices, turnover, breadth, and trend regime (`ADX` / right-side signals). Never treat search snippets as a substitute for verified close data.
+5. **Anomaly & Material-Event Deep-Dive Checklist** (mandatory before attribution):
+   - **Broad-ETF & capital-flow anomaly**: check whether broad-index ETFs (e.g., 沪深300/上证50/创业板/科创50 ETFs) had late-session volume spikes (`>= 1.8x` prior day) or multi-day inflows, or whether short-term bond/cash ETFs surged—this directly determines whether selling is unopposed or met by institutional support.
+   - **High-tier domestic political / regulatory / personnel releases**: check official Xinhua / CCDI / State Council / PBOC / CSRC / MOFCOM / NHC-CDC releases; any tier-1 shock must appear either in `当前世界事件全景` or in the exclusion audit (never silently omit it).
+   - **Cross-market & commodity corroboration**: verify US overnight tech/semi (`SOX`/`IXIC`/`SPX`), Asia-Pacific peers (`KOSPI`/`Nikkei 225`/`HSI`/`HSTECH`), industrial metals (`LME copper/tin`), gold, and USD/CNH; distinguish underlying overseas index moves from domestic QDII premium expansion/compression.
+   - **Intraday durability check**: for limit-up theme clusters (e.g., retail, flu-pharma), verify whether strength held into the close or faded in the afternoon, and whether liquid sector ETFs actually confirmed the move.
+6. X/Twitter early radar is disabled by default. Do not call X MCP, X search tools, or browser timeline checks unless the user explicitly asks to use X/Twitter evidence. Normal search skills and official/mainstream sources remain sufficient for standard runs.
 
 If all search providers fail or only stale results are available, do not produce a normal high-conviction report. Provide a limited-evidence update, explain confidence limits, and ask whether to proceed with stale-background-only analysis.
 
@@ -219,12 +224,14 @@ Each prediction must be stored as one JSON object per line with these fields whe
 
 Never omit these fields: `id`, `thesis_key`, `created_at`, `event`, `source_category`, `upstream_reason_tag`, `industry`, `instrument`, `instrument_type`, `direction`, `benchmark`, `benchmark_instrument`, `horizon`, `confidence`, `entry_rule`, `evaluation_rule`, `due_date`, `status`.
 
-Instrument rules:
+Instrument rules (Fit & Liquidity Gate):
 
 - Every prediction must map to a single verifiable `instrument`.
 - Prefer sector index or ETF over a loose basket description.
 - Do not write mixed labels such as `黄金/银行/海运` into `instrument`.
-- If only a broad sector idea exists, map it to the closest liquid ETF or official industry index and state the proxy in `review_note`.
+- **Constituent Fit Check**: Verify the ETF's actual index constituents match the moving sub-sector. Never use a large-cap white-horse ETF (e.g., 沪深300医药 `512010` or pure innovative-drug `159992`) to represent a small-cap flu/TCM rally, and never use a high-premium domestic QDII ETF as a proxy for an overseas index.
+- **Liquidity Floor**: Ledger prediction ETFs should normally have daily turnover `>= 1亿元` (`>= 5000万元` minimum with explicit proxy/liquidity note). If the only aligned ETF is illiquid (`< 5000万`) or misaligned, **do not force a ledger row**—record it as `仅事实观察（标的错配或流动性不足，不入库）`.
+- Respect local naming rules (e.g., refer to `159866` as `日经ETF工银`, never bare code).
 
 Evaluation rules:
 
@@ -234,14 +241,13 @@ Evaluation rules:
 - If the instrument is suspended, delisted, or unavailable, mark `data_missing` and explain why.
 - Use the correct market calendar for A股 and 港股.
 
-#### Default verification windows
+#### Horizon-to-Catalyst Matching & Noise Gate
 
-Create validation rows for these windows unless the user specifies otherwise:
+Do NOT blindly generate all four windows (`T+1`, `T+3`, `T+5`, `T+20`) for every idea. Select only the windows whose causal reach matches the thesis and that do not contradict your own counter-thesis:
 
-- `T+1`: next trading day, for short-term abnormal movement
-- `T+3`: three trading days, for theme diffusion
-- `T+5`: one trading week, for sector rotation
-- `T+20`: about one trading month, for policy / industry-cycle effects
+- `T+1`: **Forbidden** when the instrument already moved `>= ±4%` on the day OR broad-index ETFs saw late-session support spikes (`>= 1.8x` prior day), because next-day oversold-bounce/mean-reversion noise dominates (`review_note` must note why `T+1` was omitted). Use `T+1` only for clean, un-extended moves with direct next-day catalysts.
+- `T+3` / `T+5`: Primary validation windows for external-shock follow-through, theme diffusion, and sector rotation.
+- `T+20`: **Allowed only** for slow-variable policy, industry-cycle, or macro-rate theses (`国情国策` major fiscal/industrial policy or `经济消息` rate/cycle shifts). Forbidden for single-day news pulses, seasonal flu/retail swings, or when major macro policy meetings (e.g., FOMC / Politburo / CEWC) fall inside the window and dominate the variance.
 
 #### Thesis de-duplication
 
@@ -303,6 +309,14 @@ When the denominator is small, label the statistic:
 - fewer than 5 evaluated rows: `样本极少`
 - 5 to 19 evaluated rows: `样本偏少`
 - 20 or more evaluated rows: `可参考`
+
+#### Historical Calibration Gate (统计反向约束下注)
+
+Do not treat hit-rate statistics as passive decoration—use them to gate new ledger predictions:
+
+- Before writing new `pending` rows, check historical hit rates for the candidate `direction`, `source_category`, `industry`, and `confidence` (when sample `>= 5`).
+- **Low-Win-Rate Veto**: If a candidate bucket (`source_category` or `industry` or `direction`) has a historical hit rate `< 45%` (for example `国情国策` or `券商贝塔` in non-trending markets), OR if the thesis relies on `中低`/`低` confidence, **withhold ledger entry (`降级为仅观察，不入库`)** unless strong same-day price, turnover, and institutional flow confirm a regime break (and explain the override explicitly).
+- **Normalize `upstream_reason_tag`**: Always pick 1–2 concise canonical tags from Step 5 (separated by ` / ` if two) rather than inventing bespoke sentence-long tags each run, so `upstream_reason_tag` hit rates accumulate statistical power over time.
 
 ### 5) Use a layered causal framework
 
@@ -418,6 +432,12 @@ Use this scoring framework:
 
 Score each dimension from 1 to 5 and explain unusual scores briefly.
 
+Score action bands (avoid arbitrary rankings without decision thresholds):
+
+- `>= 1000`: **核心主线** — full causal deep dive; eligible for ledger prediction if Fit/Liquidity Gate and Historical Calibration Gate both pass.
+- `400 – 999`: **次级联动** — keep under active observation with explicit falsification levels; enter ledger only if cross-market/flow evidence is unusually clean.
+- `< 400`: **背景波动 / 短线脉冲** — summarize concisely in the table; **do not** create new ledger predictions.
+
 Adjustment factors:
 
 - valuation and crowding
@@ -468,6 +488,11 @@ Every normal report must include these sections:
 16. `投资分析判断建议`
 17. `参考来源`
 
+#### Anti-Redundancy & Regime Alignment Rules
+
+- **Incremental Writing (增量去重)**: Sections 1–5 already carry the event table, summary figures, stats, audit, and sector scores. Sections 6–11 MUST focus strictly on **causal mechanics, money-flow transmission, and incremental conclusions**—do not copy-paste the same index levels, percentages, or headlines across 5–7 sections. If a category (e.g., `国情国策`) has no material incremental driver today, state `本轮无新增增量驱动` in 1–2 lines instead of padding.
+- **Broad-Market Regime Synchronization**: In Sections 14 and 16, cross-check broad-index trend & right-side signals (`tools/market_phase_check.py` / ADX / three-signal status when available). Never frame defensive sector outperformance during a broad downtrend (`ADX >= 25` bearish) as a broad market reversal buy signal, and align position guidance with existing gate constraints (without exposing private holding sizes unless asked).
+
 #### 当前世界事件全景 - coverage rules
 
 This section must appear before the conclusion summary.
@@ -499,8 +524,8 @@ The final chat response should be concise and include:
 - top benefit industries and top pressure industries
 - most important falsification signal
 - actionable investment analysis summary
-- ETF recommendations after live validation
-- stock ideas after live validation
+- ETF / sector observation directions after live validation (and explicit note on rejected/untracked themes if any)
+- stock ideas ONLY when explicitly requested by the user under Boundary rules
 
 ### 11) Final chat response formatting rules
 
@@ -530,11 +555,11 @@ Default template:
 - **风险规避**: 1-2 sub-sectors to avoid
 - **核心观察信号**: most important falsification / confirmation signal
 
-**ETF 方向**
-- **推荐ETF**: [ETF Name] ([Code]) - rationale based on live validation
+**ETF 观察方向**
+- **观察ETF**: [ETF Name] ([Code]) - rationale based on live validation
 ```
 
-Append by default:
+Only append when the user explicitly requests individual stocks (`个股` / `标的` / `股票推荐`):
 
 ```markdown
 **个股方向**
