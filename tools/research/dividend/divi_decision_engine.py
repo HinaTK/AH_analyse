@@ -79,9 +79,12 @@ def render(rows):
 
 
 if __name__ == "__main__":
-    rows = merge(r"D:/Code/AH_analyse/tools/divi_two_axis.json",
-                 r"D:/Code/AH_analyse/tools/divi_pe_pctile.json")
+    import json
+    from pathlib import Path
+
+    here = Path(__file__).resolve().parent
+    rows = merge(here / "divi_two_axis.json",
+                 here / "divi_pe_pctile.json")
     print(render(rows))
-    with open(r"D:/Code/AH_analyse/tools/divi_decision.json", "w", encoding="utf-8") as f:
-        import json
+    with open(here / "divi_decision.json", "w", encoding="utf-8") as f:
         json.dump(rows, f, ensure_ascii=False, indent=1)

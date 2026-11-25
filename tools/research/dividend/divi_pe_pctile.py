@@ -6,6 +6,9 @@
 分位口径: 当前PE_TTM 在近5年(约1215个交易日)每日PE_TTM序列中的百分位。
 """
 import json, time, urllib.request, urllib.parse
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
 
 URL = ("https://datacenter-web.eastmoney.com/api/data/v1/get?"
        "reportName=RPT_VALUEANALYSIS_DET&columns=TRADE_DATE,PE_TTM,PB_MRQ"
@@ -48,7 +51,7 @@ def percentile(current, series):
 
 
 def main():
-    with open(r"D:/Code/AH_analyse/tools/divi_universe.json", encoding="utf-8") as f:
+    with open(HERE / "divi_universe.json", encoding="utf-8") as f:
         uni = json.load(f)
     out = []
     for r in uni["results"]:
@@ -72,7 +75,7 @@ def main():
                     "n_days": len(last5y)})
         print(f"OK {code} {name}: PE={cur:.2f} 近5年分位={pct:.1f}% ({len(last5y)}日)", flush=True)
 
-    with open(r"D:/Code/AH_analyse/tools/divi_pe_pctile.json", "w", encoding="utf-8") as f:
+    with open(HERE / "divi_pe_pctile.json", "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
 
     done = [x for x in out if x["pe_pct5y"] is not None]

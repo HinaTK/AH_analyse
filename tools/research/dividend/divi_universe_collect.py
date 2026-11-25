@@ -9,6 +9,9 @@
 """
 import subprocess, sys, re, time, json, urllib.request
 from datetime import datetime, timedelta
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
 
 WESTOCK = r"C:/Users/Administrator/.local/bin/westock.exe"
 TODAY = datetime.now().date()
@@ -172,7 +175,7 @@ def main():
             failed.append(f"{code} {name}: {e}")
             print(f"FAIL {code} {name}: {e}", flush=True)
     out = {"date": str(TODAY), "results": results, "failed": failed}
-    with open(r"D:/Code/AH_analyse/tools/divi_universe.json", "w", encoding="utf-8") as f:
+    with open(HERE / "divi_universe.json", "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
     print(f"\n完成 {len(results)}/{len(POOL)}，失败 {len(failed)}")
 

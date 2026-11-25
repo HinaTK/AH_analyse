@@ -10,9 +10,10 @@
 输出 reports/_probe_gate_full.csv + 逐只进度日志
 """
 import sys, json, time
-sys.path.insert(0, '.')
-sys.path.insert(0, 'tools')
 from pathlib import Path
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / 'tools'))
 import pandas as pd
 from tools.etf_research.entry_timing import judge_entry, prepare
 from tools.etf_research.research import load_universe

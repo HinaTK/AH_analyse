@@ -7,8 +7,10 @@
 综合 = 0.45×股息分 + 0.35×基本面分 + 0.20×技术面分
 """
 import json, math
+from pathlib import Path
 
-with open(r"D:/Code/AH_analyse/tools/divi_universe.json", encoding="utf-8") as f:
+HERE = Path(__file__).resolve().parent
+with open(HERE / "divi_universe.json", encoding="utf-8") as f:
     data = json.load(f)
 
 
@@ -91,5 +93,5 @@ for i, r in enumerate(rows, 1):
     roe = f"{float(r['roe']):.1f}%" if r.get("roe") else "—"
     print(f"{i:<4}{r['code']:<10}{r['name']:<6}{r['sector']:<5}{r['price']:>7.2f}{r['yield_ttm']:>8.2f}%{yoy:>9}{roe:>7}{r['trend']:<5}{r['total']:>7.1f}")
 
-with open(r"D:/Code/AH_analyse/tools/divi_rank.json", "w", encoding="utf-8") as f:
+with open(HERE / "divi_rank.json", "w", encoding="utf-8") as f:
     json.dump(rows, f, ensure_ascii=False, indent=1)

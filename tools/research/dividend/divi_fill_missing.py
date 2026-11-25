@@ -2,10 +2,12 @@
 # -*- coding: utf-8 -*-
 """补漏：只对 divi_two_axis.json 里缺 pct52 的票重抓K线并重渲染表格。"""
 import json, time, sys
-sys.path.insert(0, r"D:/Code/AH_analyse/tools")
+from pathlib import Path
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
 from divi_two_axis import kline_stats
 
-P = r"D:/Code/AH_analyse/tools/divi_two_axis.json"
+P = HERE / "divi_two_axis.json"
 with open(P, encoding="utf-8") as f:
     rows = json.load(f)
 

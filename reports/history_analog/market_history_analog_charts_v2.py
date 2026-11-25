@@ -14,11 +14,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from pathlib import Path
+
 plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "sans-serif"]
 plt.rcParams["axes.unicode_minus"] = False
 
 WESTOCK = r"C:/Users/Administrator/.local/bin/westock.exe"
-OUT = r"D:/Code/AH_analyse/tools/"
+OUT = str(Path(__file__).resolve().parent) + "/"
 
 
 def monthly(code):

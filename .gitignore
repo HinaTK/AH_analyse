@@ -145,3 +145,8 @@ docs/analyse/*.txt
 skills/.skills_store_lock.json
 skills/@user_*/
 skills/*/backup/
+
+# ── DSH IM inbound cache & backups ───────────────────────────────────────
+.dsh-im/
+*.bak
+*.bak-*

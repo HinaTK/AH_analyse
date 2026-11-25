@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 """决策引擎单元测试：规则门槛逐条验证。"""
 import sys
-sys.path.insert(0, r"D:/Code/AH_analyse/tools")
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from divi_decision_engine import decide
 
 FAIL = 0

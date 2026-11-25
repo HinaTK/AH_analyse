@@ -10,6 +10,9 @@
 """
 import json, subprocess, time, re, urllib.request
 from datetime import datetime
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
 
 WESTOCK = r"C:/Users/Administrator/.local/bin/westock.exe"
 
@@ -81,7 +84,7 @@ def f(x):
 
 
 def main():
-    with open(r"D:/Code/AH_analyse/tools/divi_universe.json", encoding="utf-8") as fp:
+    with open(HERE / "divi_universe.json", encoding="utf-8") as fp:
         data = json.load(fp)
 
     rows = []
@@ -157,7 +160,7 @@ def main():
     order = {"A": 0, "B": 1, "C": 2}
     rows.sort(key=lambda x: (order.get(x["grade"][0], 9), -(x["yield_t"] or 0)))
 
-    with open(r"D:/Code/AH_analyse/tools/divi_two_axis.json", "w", encoding="utf-8") as fp:
+    with open(HERE / "divi_two_axis.json", "w", encoding="utf-8") as fp:
         json.dump(rows, fp, ensure_ascii=False, indent=1)
 
     print(f"\n## 两轴重刷完成 {len(rows)}只 @ {datetime.now().date()}")
