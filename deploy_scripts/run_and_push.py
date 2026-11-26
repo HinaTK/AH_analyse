@@ -76,12 +76,8 @@ JOBS: dict[str, dict[str, object]] = {
     'morning_0920':   {'name': '网格0920盘前建议',  'script': f'{DEPLOY}/grid_weixin_execute.py',     'cwd': None,  'push': 'on'},
     'intraday':       {'name': '网格盘中触价',      'script': f'{LAUNCHERS}/grid_weixin_intraday.py', 'cwd': None,  'push': 'on'},
     'gate_watch':     {'name': '网格盘中门控观察',  'script': f'{DEPLOY}/grid_intraday_gate_watch.py', 'cwd': None, 'push': 'on'},
-    'eod_1520':       {'name': '网格1520收盘',      'script': f'{LAUNCHERS}/grid_eod_decision.py',    'cwd': None,  'push': 'on'},
+    'eod_1520':       {'name': '网格1520收盘',      'script': f'{LAUNCHERS}/grid_eod_decision.py',    'cwd': None,  'push': 'on', 'timeout': 1900},
     'weekly_fri':     {'name': '网格周五1525周报',  'script': f'{DEPLOY}/grid_weekly_rotation.py',    'cwd': None,  'push': 'on', 'timeout': 2700},
-    # 2026-11-04：grid_regime_cache.py 自设 30 分钟自限（SELF_LIMIT_SECONDS=1800，
-    # 逐轮增量落盘），但 wrapper 默认 240s 会在脚本完成前强杀（当日 15:34 超时事故）。
-    # 给 1900s，让脚本在 1800s 自限处优雅退出，而非被外部杀掉。
-    'regime_1530':    {'name': '网格1530门控缓存',  'script': f'{DEPLOY}/grid_regime_cache.py',             'cwd': None,  'push': 'off', 'timeout': 1900},
     'market_1535':    {'name': '市况1535右侧信号',  'script': f'{DEPLOY}/market_phase_monitor.py',          'cwd': None,  'push': 'on'},
     'rate_1540':      {'name': '利率1540点火',      'script': f'{DEPLOY}/rate_ignition_monitor_wrapper.py', 'cwd': None,  'push': 'on'},
     'watchtower_1550':{'name': '观察哨1550',        'script': f'{DEPLOY}/watchtower_wrapper.py',            'cwd': None,  'push': 'on'},

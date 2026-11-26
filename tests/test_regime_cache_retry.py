@@ -14,11 +14,10 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'deploy_scripts'))
 
 from datetime import datetime, timezone, timedelta
 
-import grid_regime_cache as grc
+import confirmed_runtime as grc
 
 _CN = timezone(timedelta(hours=8))
 
@@ -217,6 +216,72 @@ class CollectRegimesRetryTests(unittest.TestCase):
         cache = {'sh589720': {'level': 'no_entry', 'blocks_buy': True, 'asof': '2026-11-03'}}
         merged = grc.merge_old_entries(cache, ['sz159992'], _P('Z:/nonexistent/regime-cache.json'))
         self.assertEqual(sorted(merged), ['sh589720'])  # 文件不存在：不炸、不补
+
+
+class MergedEodAndRegimeCacheTests(unittest.TestCase):
+    def test_refresh_regime_cache_writes_cache_and_formats_cn_levels(self):
+        import json as _json
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / 'holdings.json').write_text(_json.dumps({
+                'holdings': {'sh589720': {'active': True}, 'sz159363': {'active': True}}
+            }), encoding='utf-8')
+            today = datetime.now(_CN).strftime('%Y-%m-%d')
+            fake_bars = __import__('pandas').DataFrame([{'date': today, 'close': 0.7}])
+            fake_regime = {'adx': 22.3, 'pdi': 10.0, 'mdi': 25.0, 'bars': fake_bars}
+            with mock.patch.object(grc, 'fetch_daily_regime', return_value=fake_regime), \
+                 mock.patch.object(grc, '_regimes_to_cache', return_value={
+                     'sh589720': {'level': 'no_entry', 'blocks_buy': True, 'reason': 'x', 'adx': 22.3, 'close': 0.7, 'asof': today},
+                     'sz159363': {'level': 'probe_only', 'blocks_buy': False, 'reason': 'y', 'adx': 15.0, 'close': 0.8, 'asof': today},
+                 }):
+                summary = grc.refresh_regime_cache(root=root, sleep_fn=lambda s: None)
+            self.assertTrue((root / 'regime-cache.json').is_file())
+            self.assertIn('**⛔ 禁止建仓**', summary)
+            self.assertIn('**🟡 试错仓**', summary)
+            self.assertNotIn('no_entry', summary)
+            self.assertNotIn('probe_only', summary)
+
+    def test_eod_with_cache_main_skips_cache_when_closed(self):
+        from unittest import mock
+        with mock.patch.object(grc, 'eod_main', return_value='收盘未确认或休市：不生成评估'), \
+             mock.patch.object(grc, 'refresh_regime_cache') as m_cache:
+            out = grc.eod_with_cache_main(render=True)
+        self.assertEqual(out, '收盘未确认或休市：不生成评估')
+        m_cache.assert_not_called()
+
+    def test_eod_with_cache_main_combines_eod_and_cache(self):
+        from unittest import mock
+        with mock.patch.object(grc, 'eod_main', return_value='【收盘效率与轮换检查 2026-11-26】\n正文'), \
+             mock.patch.object(grc, 'refresh_regime_cache', return_value='门控缓存：已更新 2026-11-26'):
+            out = grc.eod_with_cache_main(render=True)
+        self.assertIn('【收盘效率与轮换检查 2026-11-26】', out)
+        self.assertIn('门控缓存：已更新 2026-11-26', out)
+
+    def test_eod_with_cache_main_still_refreshes_cache_if_eod_raises(self):
+        from unittest import mock
+        with mock.patch.object(grc, 'eod_main', side_effect=OSError('quote timeout')), \
+             mock.patch.object(grc, 'refresh_regime_cache', return_value='门控缓存：已更新 2026-11-26') as m_cache:
+            out = grc.eod_with_cache_main(render=True)
+        m_cache.assert_called_once()
+        self.assertIn('quote timeout', out)
+        self.assertIn('门控缓存：已更新 2026-11-26', out)
+
+    def test_merged_script_and_job_layout(self):
+        repo = Path(__file__).resolve().parent.parent
+        self.assertFalse((repo / 'deploy_scripts' / 'grid_regime_cache.py').exists(),
+                         '旧 15:30 脚本应已合并移除')
+        launcher = repo / 'tools' / 'confirmed_grid' / 'launchers' / 'grid_eod_decision.py'
+        text = launcher.read_text(encoding='utf-8')
+        self.assertIn('eod_with_cache_main', text)
+        self.assertIn('SYSTEM_PY', text)
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('run_and_push_test', repo / 'deploy_scripts' / 'run_and_push.py')
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self.assertNotIn('regime_1530', mod.JOBS)
+        self.assertEqual(mod.JOBS['eod_1520']['timeout'], 1900)
 
 
 if __name__ == '__main__':

@@ -1,6 +1,7 @@
 """One confirmed-state runtime. Advice is conditional, never a broker order."""
 import json
 import os
+import time
 from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 from decimal import Decimal as D, ROUND_HALF_UP
@@ -325,6 +326,117 @@ def _regimes_to_cache(regimes):
                      asof=last_date or date.today().isoformat())
         out[code] = entry
     return out
+
+
+_CN_TZ = timezone(timedelta(hours=8))
+RETRY_BACKOFF_START = 120.0
+RETRY_BACKOFF_MAX = 600.0
+SELF_LIMIT_SECONDS = 1800.0
+
+
+def production_deadline(now=None):
+    """安全截止线：min(次日 09:00, now+1800s)——两个上界取小。"""
+    now = now or datetime.now(_CN_TZ)
+    dl = now.replace(hour=9, minute=0, second=0, microsecond=0)
+    if dl <= now:
+        dl += timedelta(days=1)
+    self_limit = now + timedelta(seconds=SELF_LIMIT_SECONDS)
+    return min(dl, self_limit)
+
+
+def merge_old_entries(cache, missed, old_cache_path):
+    """缺失标的保留旧缓存条目（宁可用旧判定，不可无门控）。"""
+    if not missed or not Path(old_cache_path).is_file():
+        return cache
+    try:
+        old_cache = json.loads(Path(old_cache_path).read_text(encoding='utf-8'))
+    except Exception:
+        return cache
+    for code in missed:
+        if code in old_cache and code not in cache:
+            cache[code] = old_cache[code]
+    return cache
+
+
+def collect_regimes(fetch_fn, codes, sleep_fn=time.sleep,
+                    deadline=None, clock=None, is_fresh=None,
+                    on_round=None, old_cache_path=None):
+    """逐标的拉门控行情，失败的循环重试直到全部成功或到截止线。"""
+    clock = clock or (lambda: datetime.now(_CN_TZ))
+    if deadline is None:
+        deadline = production_deadline()
+    regimes = {}
+    missed = list(codes)
+    attempts = 0
+    backoff = RETRY_BACKOFF_START
+    while missed:
+        attempts += 1
+        still = []
+        for code in missed:
+            try:
+                r = fetch_fn(code)
+            except Exception:
+                r = {'adx': None, 'bars': None}
+            empty = r.get('adx') is None and r.get('bars') is None
+            if empty or (is_fresh is not None and not is_fresh(r)):
+                still.append(code)
+            else:
+                regimes[code] = r
+        missed = still
+        if on_round is not None:
+            try:
+                on_round(attempts, regimes, missed)
+            except Exception:
+                pass
+        if not missed:
+            break
+        if clock() >= deadline:
+            break
+        sleep_fn(backoff)
+        backoff = min(backoff * 1.5, RETRY_BACKOFF_MAX)
+    return regimes, missed, attempts
+
+
+def refresh_regime_cache(root=None, sleep_fn=time.sleep, deadline=None, clock=None):
+    """收盘后预计算并原子落盘 regime-cache.json（合并自原 15:30 门控缓存任务）。"""
+    target_root = Path(root) if root is not None else root_from_home()
+    old_cache_path = _regime_cache_path(target_root)
+    codes = _holdings_codes_for_root(target_root)
+
+    def _is_fresh_after_close(r):
+        now = (clock or (lambda: datetime.now(_CN_TZ)))()
+        if now.hour < 15:
+            return True
+        bars = r.get('bars')
+        try:
+            last = str(bars.iloc[-1]['date']) if bars is not None and len(bars) else None
+        except Exception:
+            return False
+        return last == now.strftime('%Y-%m-%d')
+
+    def _on_round(round_no, got, still_missing):
+        cache_now = _regimes_to_cache(dict(got))
+        merge_old_entries(cache_now, still_missing, old_cache_path)
+        try:
+            save_regime_cache(target_root, cache_now)
+        except Exception:
+            pass
+
+    regimes, missed, attempts = collect_regimes(
+        fetch_daily_regime, codes, sleep_fn=sleep_fn,
+        deadline=deadline, clock=clock, is_fresh=_is_fresh_after_close,
+        on_round=_on_round, old_cache_path=old_cache_path)
+    cache = _regimes_to_cache(regimes)
+    merge_old_entries(cache, missed, old_cache_path)
+    save_regime_cache(target_root, cache)
+    parts = [
+        f"{code} {LEVEL_NAMES_CN.get(entry.get('level'), '**🟡 门控待确认**')}({entry.get('asof') or '未知'})"
+        for code, entry in cache.items()
+    ]
+    if missed:
+        return (f"⚠️ 门控缓存部分走旧缓存兜底（缺失 {len(missed)} 只：{','.join(missed)}，重试 {attempts} 轮）："
+                + '｜'.join(parts))
+    return f"门控缓存已更新（{attempts} 轮）：" + '｜'.join(parts)
 
 
 def _cache_to_regimes(cache):
@@ -947,6 +1059,21 @@ def eod_main(render=False):
     if render:
         return render_eod(report)
     return json.dumps(report,ensure_ascii=False,indent=2)
+
+
+def eod_with_cache_main(render=True):
+    """15:20 收盘主入口（合并原 15:30 门控缓存预计算）：收盘评估 + 门控缓存落盘。"""
+    try:
+        eod_out = eod_main(render=render)
+    except (OSError, ValueError, KeyError, IndexError, ArithmeticError) as error:
+        eod_out = f'行情或状态未验证：不生成执行建议；{error}'
+    if isinstance(eod_out, str) and eod_out.startswith('收盘未确认或休市'):
+        return eod_out
+    try:
+        cache_line = refresh_regime_cache(root=root_from_home())
+    except (OSError, ValueError, KeyError, IndexError, ArithmeticError) as error:
+        cache_line = f'⚠️ 门控缓存更新失败：{error}'
+    return f"{eod_out}\n\n{cache_line}"
 
 
 def safe_entrypoint(function, *args):

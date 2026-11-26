@@ -460,7 +460,8 @@ class JobRegistrationTests(unittest.TestCase):
         module = _wrapper()
         self.assertEqual(module.JOBS['volatility_watch']['push'], 'on')
         self.assertEqual(module.JOBS['weekly_fri']['timeout'], 2700)
-        self.assertEqual(module.JOBS['regime_1530']['timeout'], 1900)
+        self.assertNotIn('regime_1530', module.JOBS)
+        self.assertEqual(module.JOBS['eod_1520']['timeout'], 1900)
 
     def test_deploy_manifest_auto_includes_new_script(self):
         module = _load('deploy_manifest_under_test', DEPLOY_PATH)
