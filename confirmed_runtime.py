@@ -271,7 +271,7 @@ def build_gate(root, expect_asof=None, fetch=True):
                 print(f"warn: {code} 门控缓存未覆盖且补拉失败——降级为暂停买入（宁拦勿放）")
         try:
             save_regime_cache(root, merged)
-            print(f"warn: {code} 等 {len(missing)} 只新注册标的已补拉门控判定并入缓存")
+            print(f"warn: {missing[0]} 等 {len(missing)} 只新注册标的已补拉门控判定并入缓存")
         except Exception:
             pass
         return _cache_to_regimes(merged)
@@ -787,7 +787,29 @@ def confirm_main(argv=None):
                    fill_item_key=args.fill_item_key, ingestion_at=started_at)
     print(json.dumps({key:state[key] for key in ('code','qty','sellable_qty','max_grid')}, ensure_ascii=False))
     print('现在的剩余操作建议')
-    print(render(plan_with_gate(root_from_home())))
+    print(render(ticket_for_code(plan_with_gate(root_from_home()), args.code)))
+
+
+def _line_mentions_other(text, code, others):
+    return code not in text and any(other in text for other in others)
+
+
+def ticket_for_code(ticket, code):
+    """成交回执只给本次入账 ETF 的建议（2026-11-05 用户规则：哪只入账只给哪只）。"""
+    others = [c for c in (ticket.get('states') or {}) if c != code]
+    scoped = dict(ticket)
+    scoped['states'] = {c: s for c, s in (ticket.get('states') or {}).items() if c == code}
+    scoped['actions'] = [a for a in ticket.get('actions') or [] if a['code'] == code]
+    for key in ('regime_blocks', 'core_protected'):
+        if key in ticket:
+            scoped[key] = [t for t in ticket[key] if not _line_mentions_other(t, code, others)]
+    for key in ('upside_reviews', 'reanchor'):
+        if key in ticket:
+            scoped[key] = [r for r in ticket[key] if r.get('code') == code]
+    if ticket.get('warning'):
+        scoped['warning'] = '\n'.join(
+            line for line in ticket['warning'].split('\n') if not _line_mentions_other(line, code, others))
+    return scoped
 
 
 def eod_report(root, now, quotes, bars):

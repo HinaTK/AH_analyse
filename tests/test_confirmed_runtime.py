@@ -227,6 +227,11 @@ class FillTests(unittest.TestCase):
                 state = confirmed_589720.build(code=code,name=code)
                 state.update(sellable_qty=28200,sellable_updated_on='2026-10-14')
                 (root / f'confirmed-{code[-6:]}.json').write_text(json.dumps(state))
+            # 封闭门控：不随实时行情漂移（实盘五线全破会拦掉买单导致断言失效）
+            today = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+            (root / 'regime-cache.json').write_text(json.dumps(
+                {code: dict(level='normal', blocks_buy=False, reason='正常', adx=15.0, close='1.0', asof=today)
+                 for code in codes}), encoding='utf-8')
             env = dict(os.environ,HERMES_HOME=str(home),PYTHONIOENCODING='utf-8')
             launcher = Path(__file__).parent.parent / 'tools/confirmed_grid/launchers/grid_weixin_confirm.py'
             bare = subprocess.run([sys.executable,str(launcher),'成功'],env=env,capture_output=True,text=True,encoding='utf-8')
@@ -235,7 +240,8 @@ class FillTests(unittest.TestCase):
             self.assertEqual(filled.returncode,0,filled.stderr)
             self.assertIn('现在的剩余操作建议',filled.stdout)
             self.assertIn('条件买',filled.stdout)
-            self.assertIn('条件卖',filled.stdout)
+            # 卖到两格下限时卖单由底仓保护（🛡️）代替，2026-11-07 上涨侧持仓管理规则
+            self.assertTrue('条件卖' in filled.stdout or '🛡️ sh589720' in filled.stdout, filled.stdout)
 
     def test_explicit_id_is_idempotent_and_rollover_cannot_restore_sold_inventory(self):
         import grid_state

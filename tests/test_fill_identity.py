@@ -99,6 +99,12 @@ class FillIdentityTests(unittest.TestCase):
         for entry in holdings['holdings'].values():
             entry.pop('buy_paused', None)
         (root / 'holdings.json').write_text(json.dumps(holdings), encoding='utf-8')
+        # 封闭门控：不随实时行情漂移
+        from datetime import datetime, timedelta, timezone
+        today = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+        (root / 'regime-cache.json').write_text(json.dumps(
+            {code: dict(level='normal', blocks_buy=False, reason='正常', adx=15.0, close='1.0', asof=today)
+             for code in holdings['holdings']}), encoding='utf-8')
         deploy(home)
         env = dict(os.environ, HERMES_HOME=str(home), PYTHONIOENCODING='utf-8')
         command = [sys.executable, str(home / 'scripts/grid_weixin_confirm.py'), '成功',
@@ -107,7 +113,9 @@ class FillIdentityTests(unittest.TestCase):
         result = subprocess.run(command, env=env, capture_output=True, text=True, encoding='utf-8')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('现在的剩余操作建议', result.stdout)
-        self.assertIn(confirmed_runtime.render(confirmed_runtime.plan(root)), result.stdout)
+        expected = confirmed_runtime.render(confirmed_runtime.ticket_for_code(
+            confirmed_runtime.plan_with_gate(root), 'sh589720'))
+        self.assertIn(expected, result.stdout)
         path = root / 'confirmed-589720.json'
         before = path.read_bytes()
         saved = json.loads(before)
