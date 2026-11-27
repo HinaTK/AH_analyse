@@ -145,20 +145,28 @@ def test_weekly_report_tables_readable_no_machine_lines(tmp_path):
                    '模型资格排除', '数据覆盖', 'legacy reference', '口径', '数据截止'))]
     assert len(provenance) <= 2, f'开头口径行须 ≤2 行，实际 {provenance}'
     # 其余区块仍在（可建仓候选/轮换往返前10/TOP2/错误记录/底部免责）。
-    for marker in (weekly.ENTRY_BLOCK_TITLE, '【轮换往返前10·同一套5分钟模拟】',
+    for marker in (weekly.ENTRY_BLOCK_TITLE, '【轮换往返前10】',
                    'TOP2', '数据/模拟错误记录', '禁止自动买入、撤单、改账本'):
         assert marker in text, f'区块缺失：{marker}'
     # 任务4：TOP2 区块只作观察候选，不得出现替换暗示。
     assert '替换候选' not in text and '持仓→候选' not in text
-    assert '本区块不生成替换建议' in text
+    assert '本区块不生成替换建议' not in text
     # 3) 三持仓表格化。
-    assert '【当前三持仓·全部展示，不参与领先者】' in text
+    assert '【当前三持仓】' in text
     holdings_table = [x for x in lines if x.startswith('|') and 'sz159363' in x and '4,0' not in x]
     assert holdings_table, 'holdings must render as markdown table rows'
-    # 4) 往返前10表格化。
-    assert '【轮换往返前10·同一套5分钟模拟】' in text
+    # 4) 往返前10表格化，且排序键与当期窗口分开。
+    assert '【轮换往返前10】' in text
+    assert '| 代码 | 名称 | 多锚点中位往返 | 当期63日往返 | 净差价元 |' in text
+    assert f'|\n\n{weekly.ENTRY_BLOCK_TITLE}' in text, '持仓表结束后必须空行，避免飞书把下一段接进同一张表'
+    assert '\n\n【TOP2 观察候选' in text, '前10表结束后必须空行，避免飞书把下一段接进同一张表'
+    assert '\n\n对照基准' in text, 'TOP2 区块结束后必须空行，避免说明文字变成表格续行'
     rot = [x for x in lines if x.startswith('|') and 'sh510010' in x]
     assert rot, 'rotation top10 must render as markdown table rows'
+    assert any('39' in x and '30' in x for x in weekly.rotation_top10_lines([
+        dict(code='sz159530', name='机器人ETF易方达', median_full_cycles=29,
+             full_cycles=39, full_cycle_net=3716.2)],
+        lambda v: str(int(v)), lambda v: f'{v:,.2f}')), '排序中位数不得覆盖当期往返'
     # 5) 2026-11-06 Master 指令：去掉「第三ETF互补视图」区块（只报告，不再出现在周报）。
     assert '【综合研究排名·第三ETF互补视图】' not in text, 'third-ETF complement view must be removed'
     assert not [x for x in lines if x.startswith('| 代码 | 名称 | score | 资格 |')], \

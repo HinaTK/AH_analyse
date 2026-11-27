@@ -3,14 +3,47 @@ from pathlib import Path
 from datetime import date, timedelta
 import json
 from . import research, pair_review, rotation_top2
-from .entry_rank import rank_entries, render_markdown
+from .entry_rank import daily_bars, rank_entries, render_markdown
+from .entry_timing import judge_entry
 from .engine import dump
 from .pair_review import _table as _md_table
 STATE_VERSION=research.VERSION+'-rotation-streak-v1'
 DEFAULT_STATE=pair_review.ROTATION_DIR/f'{STATE_VERSION}.json'  # 跟随 HERMES_HOME，见 pair_review.ROTATION_DIR
 # 榜单区块唯一标题：周报/摘要/测试三方共用，禁止任何一方手写。
 # 2026-10-24 教训：测试手写子串与实现表头不一致，误判功能缺失。
-ENTRY_BLOCK_TITLE='【可建仓候选·双规则过滤（五线全破暂停买入+近20日往返<2出榜，持仓豁免）】'
+ENTRY_BLOCK_TITLE='【可建仓候选】'
+
+def weekly_timing_changes(pool, output, asof):
+    """只读回看本周已收盘交易日；整仓指时点判定，不重排候选。"""
+    end = date.fromisoformat(asof)
+    monday = (end - timedelta(days=end.weekday())).isoformat()
+    def weekday(day):
+        return '周' + '一二三四五六日'[date.fromisoformat(day).weekday()]
+    lines = []
+    for row in pool:
+        code = row['code']
+        if not row.get('has_all_four_windows') or code in research.HOLDINGS or row.get('holding'):
+            continue
+        try:
+            daily = daily_bars(Path(output) / 'bars' / f'{code}-m5.csv')
+            current = judge_entry(daily, asof=asof)
+            if current['verdict'] in ('full', 'insufficient'):
+                continue
+            days = [weekday(d) for d in daily['date'] if monday <= d < asof
+                    and judge_entry(daily, asof=d)['verdict'] == 'full']
+        except (OSError, ValueError, KeyError, IndexError):
+            continue  # 只披露有可核实行情的变化
+        if days:
+            reason = current['reasons'][-1].split('；')[-1]
+            label = {'wait': '等待触发', 'no_entry': '暂停买入', 'probe_only': '仅试错仓', 'reject': '不宜追高'}[current['verdict']]
+            # 试错仓 reasons 末句是未来退出条件，并非本日失效原因。
+            if current['verdict'] == 'probe_only':
+                reason = '收盘低于60日线'
+            if current['verdict'] == 'no_entry' and current.get('below_count') == 5:
+                reason = '收盘低于全部五条均线'
+            lines.append(f"{code} {row.get('name', '')}：{'、'.join(days)}满足整仓时点；{weekday(asof)}{label}（{reason}）。")
+    return lines
+
 
 def entry_rank_block(result, output, top_n=20, digest_n=3):
     """生成双规则榜单的两个渲染面：(完整周报行, 飞书精简摘要行)。
@@ -38,7 +71,7 @@ def entry_rank_block(result, output, top_n=20, digest_n=3):
         return [ENTRY_BLOCK_TITLE, head + tail], [ENTRY_BLOCK_TITLE, head + tail]
     # 完整周报：表格数字逐格来自 render_markdown，禁止任何第二渲染器
     table = render_markdown(report, top_n=top_n)
-    report_lines = [ENTRY_BLOCK_TITLE, head, '', table]
+    report_lines = [ENTRY_BLOCK_TITLE, table]
     # 飞书精简摘要：每行数字同样逐格取自 rows，且必须与表格同源——
     # 2026-11-06 起表格按题材限额，摘要必须走同一 cap_per_theme。
     from .entry_rank import cap_per_theme
@@ -87,6 +120,29 @@ def _fit_width(line, width=120):
         if part:
             final.append(part)
     return final
+
+
+def _separate_tables(lines):
+    """飞书会把表格后紧跟的标题和说明接成同一张表，表格行后必须留空行。"""
+    flat = []
+    for line in lines:
+        parts = str(line).splitlines()
+        flat.extend(parts if parts else [''])
+    out = []
+    for line in flat:
+        if out and out[-1].startswith('|') and line and not line.startswith('|'):
+            out.append('')
+        if not (out and out[-1] == '' and line == ''):
+            out.append(line)
+    return out
+
+
+def rotation_top10_lines(rows, number, money):
+    """按排序键展示轮换前10，不把另一窗口的往返次数混进排序列。"""
+    return _md_table(
+        ['代码', '名称', '多锚点中位往返', '当期63日往返', '净差价元'],
+        [[x['code'], x.get('name', ''), number(x.get('median_full_cycles')),
+          number(x.get('full_cycles')), money(x.get('full_cycle_net'))] for x in rows])
 
 
 def _anchor_disclosure_lines(result, prev_result):
@@ -198,25 +254,22 @@ def run_weekly(state_path=DEFAULT_STATE,research_runner=None,pair_state_path=Non
     # 改为一行轮换复核状态（run_pair_review 调用与连续周状态机推进逻辑保持不变）。
     lines=['【每周ETF轮换研究·只报告，不自动换仓】',
            f"数据截止{s['asof']}｜共同窗口 {s['window_start']}→{s['window_end']}｜资格池{s['attempted_assets']}只｜"
-           f"成功{s['successful_runs']}次/失败{s['failed_runs']}次｜最低佣金1元、T+1、滑点0.05%。",
-           f"模型资格排除{s.get('model_excluded_runs',0)}个窗口；"
-           + ('数据覆盖降级：连续周状态不推进、不触发复核门槛。' if degraded else '数据覆盖完整：连续周状态正常推进。')]
+           f"成功{s['successful_runs']}次/失败{s['failed_runs']}次。"]
     pair_state=((pairs or {}).get('state') or {}).get('pairs') or {}
     due=[(k,v) for k,v in pair_state.items() if v.get('review_due')]
     if due:
         first=due[0];extra=f"等{len(due)}条" if len(due)>1 else ''
         lines.append(f"轮换复核：触发（{first[0].replace('/',' ')} 候选{first[1]['candidate']} "
-                     f"连续{first[1]['consecutive_weeks']}周{extra}），仅人工复核、不授权换仓。")
+                     f"连续{first[1]['consecutive_weeks']}周{extra}）。")
     elif degraded:
-        lines.append('轮换复核：未触发（数据覆盖降级，连续周状态不推进）。')
+        lines.append('轮换复核：未触发（数据覆盖降级）。')
     else:
-        lines.append('轮换复核：未触发（无连续2周领先候选）。')
+        lines.append('轮换复核：未触发。')
     # 只读锚价位移披露：紧凑头部之后、数据区之前；无上一期时输出「略过」文案。
     lines.extend(_anchor_disclosure_lines(result, prev_result))
     def money(v):return '不可用' if v is None else f'{v:,.2f}'
     def number(v):return '不可用' if v is None else str(int(v))
-    lines.append(f"完整四窗口可排名{s.get('rankable_rows','未知')}只；其余占位失败行不算成功。")
-    lines.append('【当前三持仓·全部展示，不参与领先者】')
+    lines.append('【当前三持仓】')
     # 2026-10-30 表格化：数字逐格取自 holdings dict，不另设渲染口径。
     lines.extend(_md_table(
         ['持仓', '往返次数', '净差价元'],
@@ -227,16 +280,20 @@ def run_weekly(state_path=DEFAULT_STATE,research_runner=None,pair_state_path=Non
     # 2026-10-24 起：榜单同时进飞书精简摘要（定时任务推送的是 summarize，不带即整改未落地）。
     entry_report_lines, entry_digest = entry_rank_block(result, output)
     lines.extend(entry_report_lines)
-    lines.append('【轮换往返前10·同一套5分钟模拟】')
-    lines.append('说明：本表未按题材去重，不作 TOP2 观察候选遴选依据；不同大题材观察候选见下方 TOP2 区块。')
+    changes = weekly_timing_changes(result['ranking'], output, s['asof']) if output else []
+    if changes:
+        note = ['【周内整仓时点变化】', *changes]
+        lines.extend(['', *note, ''])
+        entry_digest.extend(note)
+    lines.append('【轮换往返前10】')
     top10=result.get('rotation_top10') or result.get('rotation_ranking',[])[:10]
-    lines.extend(_md_table(
-        ['代码', '名称', '往返次数', '净差价元'],
-        [[x['code'], x.get('name',''), number(x.get('full_cycles')), money(x.get('full_cycle_net'))] for x in top10]))
+    lines.extend(rotation_top10_lines(top10, number, money))
+    lines.append('')
     lines.extend(rotation_top2.report_lines(result['top2_rotation']))
-    lines.append(f"数据/模拟错误记录{len(result['errors'])}条；详见研究目录errors.json。")
-    if not production_scope:lines.append('仅验证：非生产范围（离线、小规模、自定义资格池、非63交易日或历史时点），不宣称最新生产全池，不读取或更新生产连续周状态，不触发生产复核门槛。')
-    lines.append('独立10万元模拟账户，不是共同资金账户；当根成交量参与限制有前视偏差，非真实成交。禁止自动买入、撤单、改账本。')
+    lines.append(f"数据/模拟错误记录{len(result['errors'])}条。")
+    if not production_scope:lines.append('仅验证：非生产范围，不更新生产连续周状态。')
+    lines.append('模拟研究，不是真实成交；禁止自动买入、撤单、改账本。')
+    lines = _separate_tables(lines)
     report='\n'.join(lines)
     output=s.get('output_path')
     if output:(Path(output)/'weekly-report.txt').write_text(report,encoding='utf-8')

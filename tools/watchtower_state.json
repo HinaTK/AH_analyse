@@ -1,19 +1,19 @@
 {
  "vol_dry": {
   "state": "未到",
-  "date": "2026-11-26"
+  "date": "2026-11-27"
  },
  "margin_clear": {
   "state": "✅出清加深",
-  "date": "2026-11-26"
+  "date": "2026-11-27"
  },
  "ai_earnings": {
   "state": "待窗口",
-  "date": "2026-11-26"
+  "date": "2026-11-27"
  },
  "policy_924": {
   "state": "🔔B级命中·仅记录，不操作",
-  "date": "2026-11-26"
+  "date": "2026-11-27"
  },
- "policy_last_seen_id": 5240275
+ "policy_last_seen_id": 5242740
 }

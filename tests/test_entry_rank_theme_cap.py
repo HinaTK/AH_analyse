@@ -74,8 +74,8 @@ class ThemeCapTests(unittest.TestCase):
     def test_header_states_cap_and_keeps_median_line(self):
         out = entry_rank.render_markdown(_report(_mixed_pool()), top_n=10)
         self.assertIn('每题材最多5只', out)
-        self.assertIn('名称粗分', out)
-        self.assertIn('近20日高/低线=', out)
+        self.assertNotIn('名称粗分', out)
+        self.assertIn('近20日线', out)
 
     def test_cap_can_be_disabled(self):
         out = entry_rank.render_markdown(_report(_mixed_pool()), top_n=10, per_theme=0)
@@ -94,14 +94,14 @@ class ThemeCapTests(unittest.TestCase):
             r['recent20_cycles'] = float(2 + i)
         full = entry_rank.median_r20_threshold(rows)
         out = entry_rank.render_markdown(_report(rows), top_n=10)
-        self.assertIn(f'近20日高/低线={full:g}', out)
+        self.assertIn(f'近20日线{full:g}', out)
 
 
 class OmittedSummaryTests(unittest.TestCase):
     def test_skipped_rows_are_summarised_in_brackets(self):
         """跳号处必须括号概括被省略的是哪些（2026-11-06 Master）。"""
         out = entry_rank.render_markdown(_report(_mixed_pool()), top_n=10)
-        self.assertIn('（省略', out)
+        self.assertIn('省略', out)
         self.assertIn('港股通创新药ETF5', out)
         self.assertIn('港股通创新药ETF6', out)
         self.assertIn('港股通创新药ETF7', out)
@@ -119,12 +119,23 @@ class OmittedSummaryTests(unittest.TestCase):
     def test_no_skips_means_no_summary(self):
         rows = [_row(i + 1, f'sz1599{i:02d}', f'票{i}') for i in range(10)]
         out = entry_rank.render_markdown(_report(rows), top_n=10)
-        self.assertNotIn('（省略', out)
+        self.assertNotIn('省略', out)
 
     def test_summary_does_not_break_table_row_count(self):
         """括注行不得以 | 开头，否则会被当成表格数据行。"""
         out = entry_rank.render_markdown(_report(_mixed_pool()), top_n=10)
         self.assertEqual(len(_data_lines(out)), 10)
+
+    def test_omitted_block_cannot_continue_feishu_table(self):
+        """飞书把半角和全角竖线都当表格分隔符，省略名单必须单独断开。"""
+        out = entry_rank.render_markdown(_report(_mixed_pool()), top_n=10)
+        self.assertIn('\n\n【题材限额省略】\n', out)
+        omitted = out.split('【题材限额省略】', 1)[1]
+        self.assertNotIn('|', omitted)
+        self.assertNotIn('｜', omitted)
+        header = next(x for x in out.splitlines() if x.startswith('每题材最多'))
+        self.assertNotIn('|', header)
+        self.assertNotIn('｜', header)
 
     def test_long_names_never_drop_detail_lines(self):
         """真实标的名称较长、同题材跳过数量多时必须换行保留明细（2026-11-06 回归）。
@@ -136,7 +147,7 @@ class OmittedSummaryTests(unittest.TestCase):
                 for i in range(11)]
         rows += [_row(12, 'sh512700', '卫星ETF永赢')]
         out = entry_rank.render_markdown(_report(rows), top_n=10)
-        self.assertGreater(out.count('（省略'), 0)
+        self.assertGreater(out.count('省略'), 0)
         for i in range(5, 11):
             self.assertIn('sz1595%02d' % i, out, f'第{i}只被省略标的必须列出')
         self.assertIn('、', out, '同一行多只标的必须用顿号分隔')

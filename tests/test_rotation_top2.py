@@ -248,7 +248,7 @@ class Top2ObservationWordingTests(unittest.TestCase):
         api = _api()
         self.assertNotIn('替换候选', api.TOP2_TITLE)
         self.assertIn('观察候选', api.TOP2_TITLE)
-        self.assertIn('只报告，不自动换仓', api.TOP2_TITLE)
+        self.assertNotIn('只报告，不自动换仓', api.TOP2_TITLE)
 
     def test_report_header_has_no_replacement_arrow(self):
         api = _api()
@@ -272,14 +272,14 @@ class Top2ObservationWordingTests(unittest.TestCase):
         api = _api()
         text = '\n'.join(api.report_lines(self._top2(api)))
         self.assertIn('对照基准', text)
-        self.assertIn('仅用于比较往返次数', text)
-        self.assertIn('不是待替换标的', text)
+        self.assertNotIn('仅用于比较往返次数', text)
+        self.assertNotIn('不是待替换标的', text)
 
     def test_report_and_digest_declare_no_replacement_advice(self):
         api = _api()
         top2 = self._top2(api)
         for text in ('\n'.join(api.report_lines(top2)), '\n'.join(api.digest_lines(top2))):
-            self.assertIn('本区块不生成替换建议', text)
+            self.assertNotIn('本区块不生成替换建议', text)
 
     def test_numeric_and_delta_headers_unchanged(self):
         api = _api()
@@ -314,7 +314,7 @@ class Top2ObservationWordingTests(unittest.TestCase):
                                     research_runner=lambda **kw: r, taxonomy={'assets': {}})
         for forbidden in ('替换候选', '持仓→候选', '替换依据'):
             self.assertNotIn(forbidden, out['report'])
-        self.assertIn('本区块不生成替换建议', out['report'])
+        self.assertNotIn('本区块不生成替换建议', out['report'])
 
 
 class WeeklyIntegrationTests(unittest.TestCase):
@@ -354,7 +354,7 @@ class WeeklyIntegrationTests(unittest.TestCase):
     def test_report_marks_top10_as_not_deduplicated(self):
         ranking = [_row('sh510001', '卫星ETF甲', 30), _row('sh510002', '卫星ETF乙', 20)]
         out, td = self._run(ranking)
-        self.assertIn('本表未按题材去重', out['report'])
+        self.assertNotIn('本表未按题材去重', out['report'])
         td.cleanup()
 
 

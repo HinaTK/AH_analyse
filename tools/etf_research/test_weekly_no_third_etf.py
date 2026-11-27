@@ -69,15 +69,15 @@ class NoThirdEtfViewTests(unittest.TestCase):
                        '模型资格排除', '数据覆盖', 'legacy reference', '口径', '数据截止'))]
         self.assertLessEqual(len(provenance), 2, f'开头口径行须 ≤2 行，实际 {provenance}')
         # 其余区块不受影响
-        for marker in ('【当前三持仓·全部展示，不参与领先者】',
-                       weekly.ENTRY_BLOCK_TITLE, '【轮换往返前10·同一套5分钟模拟】',
+        for marker in ('【当前三持仓】',
+                       weekly.ENTRY_BLOCK_TITLE, '【轮换往返前10】',
                        'TOP2', '数据/模拟错误记录', '禁止自动买入、撤单、改账本'):
             with self.subTest(marker=marker):
                 self.assertIn(marker, text)
         # 任务4：TOP2 区块只作观察候选，不得出现替换暗示。
         self.assertNotIn('替换候选', text)
         self.assertNotIn('持仓→候选', text)
-        self.assertIn('本区块不生成替换建议', text)
+        self.assertNotIn('本区块不生成替换建议', text)
 
     def test_summarize_has_no_complement_view(self):
         """飞书精简摘要同样不得出现该区块。"""

@@ -49,7 +49,7 @@ def omitted_summary(pool, shown, limit=PER_THEME_LIMIT, width=120):
 
     只概括 rank <= 展示最大名次 的被跳过行——这些正是名次跳号处被省略的
     标的；排名更靠后的属于正常截断，不列入。按题材分组，逐格取自 rows，
-    每行 ≤width 且不以 '|' 开头（否则会被当成表格数据行）。
+    每行 ≤width，且不含半角或全角竖线；飞书会把两种竖线都当表格分隔符。
     """
     if not shown or not limit or limit <= 0:
         return []
@@ -62,7 +62,7 @@ def omitted_summary(pool, shown, limit=PER_THEME_LIMIT, width=120):
     for row in skipped:
         key = theme_key(row).split(':', 1)[-1]
         groups.setdefault(key, []).append(row)
-    lines = [f"（省略{len(skipped)}只｜因每题材最多{limit}只｜以下为全池原名次）"]
+    lines = [f"省略{len(skipped)}只，以下为全池原名次："]
     for theme, items in sorted(groups.items(), key=lambda kv: -len(kv[1])):
         header = f"（{theme} {len(items)}只："
         current, chunk = header, []
@@ -235,13 +235,14 @@ def render_markdown(report, top_n=10, per_theme=PER_THEME_LIMIT):
     cap = cap_per_theme(pool, per_theme)
     rows = cap['rows'][:top_n]
     threshold = median_r20_threshold(pool)  # 线基于完整入选池，不是只看前N
+    excluded = report['excluded']
     lines = [
-        f"asof {report['asof']} 入选 {len(pool)} 只 排除 {report['excluded']}",
-        f"近20日高/低线={threshold:g}（当期入选池中位）",
+        f"入选{len(pool)}只；排除：时点{excluded.get('timing', 0)}、"
+        f"近20日{excluded.get('recent20', 0)}、四窗口{excluded.get('incomplete', 0)}；"
+        f"近20日线{threshold:g}。",
     ]
     if cap['limit']:
-        lines.append(f"题材限额：每题材最多{cap['limit']}只（名称粗分，非官方分类）"
-                     f"｜跳过{cap['dropped']}只｜名次为全池原值")
+        lines.append(f"每题材最多{cap['limit']}只；跳过{cap['dropped']}只；名次为全池原值。")
     lines += ['', HEADER, HEADER_SEP]
     for row in rows:
         lines.append('| {} | {} | {} | {} | {} | {:g} | {:,.2f} | {:g} | {} | {:.2f} |'.format(
@@ -257,8 +258,10 @@ def render_markdown(report, top_n=10, per_theme=PER_THEME_LIMIT):
             row['full_cycle_net_per_avg_cost_pct'] or 0.0,
         ))
     if cap['limit'] and rows:
-        lines.append('')
-        lines.extend(omitted_summary(pool, rows, cap['limit']))
+        omitted = omitted_summary(pool, rows, cap['limit'])
+        if omitted:
+            lines.extend(['', '【题材限额省略】'])
+            lines.extend(omitted)
     return '\n'.join(lines)
 
 

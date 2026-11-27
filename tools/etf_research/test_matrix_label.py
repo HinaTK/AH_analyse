@@ -76,7 +76,7 @@ class RenderTests(unittest.TestCase):
         rows = [_row(code='sh588001', r20=2), _row(code='sh588002', r20=6),
                 _row(code='sh588003', r20=12)]
         out = render_markdown(_report(rows), top_n=10)
-        self.assertIn('近20日高/低线=6（当期入选池中位）', out)
+        self.assertIn('近20日线6', out)
 
     def test_render_labels_use_pool_median(self):
         # 池中位=6：r20=2 标⏳，r20=12 标✅

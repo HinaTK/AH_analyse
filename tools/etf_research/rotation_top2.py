@@ -164,7 +164,7 @@ def select_top2(result, taxonomy=None, admitted=None):
                 taxonomy_rule='官方 taxonomy 优先；名称粗分标注待核，不能累计 priority')
 
 
-TOP2_TITLE = '【TOP2 观察候选·不同大题材（只报告，不自动换仓）】'
+TOP2_TITLE = '【TOP2 观察候选】'
 
 
 def report_lines(top2):
@@ -176,8 +176,7 @@ def report_lines(top2):
     # 模块顶部已按「包内导入 / 独立加载」两种方式备好 pair_review，
     # 统一复用，避免在 spec_from_file_location 独立加载时相对导入失败。
     _table = pair_review._table
-    lines = [TOP2_TITLE,
-             '约束：两个观察候选不得同题材；先剔除两个持仓已占题材；每题材只取一只代表。']
+    lines = [TOP2_TITLE]
     rows = []
     for c in top2['candidates']:
         def fmt(v):
@@ -197,16 +196,10 @@ def report_lines(top2):
         lines.append('无同时满足领先条件与建仓规则的候选（不凑数，不用落后或同题材标的替代）。')
     if top2['shortfall']:
         lines.append('可用大题材不足两个，按实际数量呈现，不用同题材标的凑数。')
+    lines.append('')
     baseline = (top2['candidates'][0]['baseline_code'] if top2['candidates']
                 else research.BASE[0])
-    lines.append(f'对照基准 {baseline} 仅用于比较往返次数，不是待替换标的。')
-    lines.append('表后说明：中期与近期差额分别看 63 日 / 近 20 日完整模拟往返；'
-                 '同窗模拟非真实成交，领先不等于可执行。')
-    lines.append(f"与保留持仓的最大相关性见综合排名；"
-                 f"已剔除持仓题材 {('、'.join(top2['holding_themes']) or '无')}。")
-    lines.append('数据覆盖降级时不推进连续周状态、不触发复核门槛；'
-                 '名称粗分待核不计入优先资格；本区块只报告，不授权换仓、不生成买卖建议。')
-    lines.append('本区块不生成替换建议，仅与对照基准比较往返次数。')
+    lines.append(f"对照基准 {baseline}；已剔除持仓题材 {('、'.join(top2['holding_themes']) or '无')}。")
     return lines
 
 
@@ -220,5 +213,5 @@ def digest_lines(top2):
     if top2['shortfall']:
         lines.append('可用大题材不足两个，不凑数。')
     # 与 report_lines 同口径：本区块不生成替换建议；合并进末行，保持精简摘要行数上限。
-    lines.append('两个观察候选不同题材；只报告不自动换仓；本区块不生成替换建议。')
+    lines.append('两个观察候选不同题材。')
     return lines
