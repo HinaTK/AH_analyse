@@ -11,6 +11,16 @@
       "全名": "",
       "出生日期": "2026-05-23",
       "备注": "二女儿，2026年5月23日出生",
+      "vaccination_history": [
+        {
+          "date": "2026-11-26",
+          "time_as_reported": "早上",
+          "reported_date": "2026-11-28",
+          "source": "家长反馈，未核对接种凭证",
+          "vaccines": ["百白破疫苗", "A群流脑疫苗"],
+          "note": "家长确认当次未口服五价轮状病毒疫苗；百白破剂次及两针的具体产品、批号未核实。"
+        }
+      ],
       "vaccination_plan": {
         "updated_at": "2026-11-26",
         "self_paid_confirmed": [
